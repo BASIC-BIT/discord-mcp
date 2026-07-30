@@ -364,18 +364,28 @@ public final class RecurrenceRule {
         }
     }
 
-    /** Reads an array field, naming it if the caller sent something that is not one. */
+    /**
+     * Reads an array field, naming it if the caller sent something that is not one.
+     *
+     * <p>The example is per-key on purpose. A single hard-coded {@code [2]} sent a caller who put
+     * an object where by_n_weekday's array belongs straight into a second failure about entry
+     * shape — two round trips from a helper whose whole job is to show the right shape first time.
+     */
     private static DataArray arrayOf(DataObject holder, String key) {
         try {
             return holder.getArray(key);
         } catch (RuntimeException e) {
             throw new IllegalArgumentException(
-                    "recurrence_rule." + key + " must be an array, for example [2]");
+                    "recurrence_rule." + key + " must be an array, for example "
+                            + (key.equals("by_n_weekday") ? "[{\"n\": 2, \"day\": 4}]" : "[2]"));
         }
     }
 
     private static boolean hasArray(DataObject rule, String key) {
-        return rule.hasKey(key) && !rule.isNull(key) && rule.getArray(key).length() > 0;
+        // arrayOf, not getArray: this is only reached after the empty-selector loop has already
+        // guarded these four keys, and relying on that ordering means adding a fifth array
+        // selector without adding it to that loop would reintroduce the bare parsing exception.
+        return rule.hasKey(key) && !rule.isNull(key) && arrayOf(rule, key).length() > 0;
     }
 
     /**

@@ -385,8 +385,9 @@ public class ScheduledEventService {
         } catch (RuntimeException e) {
             if (recurrenceRelevant) {
                 throw new IllegalArgumentException(
-                        "Could not read the event's current recurrence, which this edit depends on: "
-                                + e.getMessage() + ". Nothing was changed.");
+                        "Could not read the event's current recurrence, which this edit depends on"
+                                + (e.getMessage() == null ? "" : ": " + e.getMessage())
+                                + ". Nothing was changed.");
             }
             raw = DataObject.empty();
             recurrenceReadFailed = true;
