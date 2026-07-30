@@ -244,6 +244,27 @@ class RecurrenceRuleTest {
     }
 
     @Test
+    void namesTheFieldWhenTheJsonShapeIsWrong() {
+        // A scalar where an array or object belongs used to reach getArray/getObject and throw
+        // JDA's ParsingException, which is not an IllegalArgumentException and escaped parse().
+        assertThatThrownBy(() -> RecurrenceRule.parse("{\"frequency\": 2, \"by_weekday\": 3}", START))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("by_weekday must be an array");
+
+        assertThatThrownBy(() -> RecurrenceRule.parse("{\"frequency\": 1, \"by_n_weekday\": [3]}", START))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must be objects");
+    }
+
+    @Test
+    void describesTheAnchorInTheSameFrameAsTheWeekday() {
+        // "on Thursday (UTC), anchored at 2026-08-05T20:00-05:00" is a Wednesday anchor next to a
+        // Thursday weekday, which reads as self-contradictory to the model consuming it.
+        String described = RecurrenceRule.describe(RecurrenceRule.parse("{\"frequency\": 2}", START));
+        assertThat(described).contains("Thursday").contains("2026-08-06");
+    }
+
+    @Test
     void normalisesWholeValuedDoublesAndNumericStrings() {
         // 3.0 is a whole number, so it must be accepted -- but unnormalised it survived into the
         // payload, where the agreement check compares DataArray.toString() and read [3.0] as
@@ -386,16 +407,16 @@ class RecurrenceRuleTest {
 
     @Test
     void movingAcrossDatesMovesTheSelectorToo() {
-        // START is 2026-08-05, a Wednesday (weekday 2). Moving to the 6th, a Thursday, must carry
-        // by_weekday with it or the series contradicts its own anchor.
-        DataObject wednesday = DataObject.fromJson(
+        // START is Thursday 6 August in UTC (weekday 3). Moving to the 6th at -05:00 is Friday the
+        // 7th in UTC, so by_weekday must move with it or the series contradicts its own anchor.
+        DataObject thursdayUtc = DataObject.fromJson(
                 "{\"frequency\": 2, \"interval\": 1, \"by_weekday\": [3], \"start\": \"" + START + "\"}");
 
-        DataObject moved = RecurrenceRule.withStart(wednesday, "2026-08-06T20:00:00-05:00");
+        DataObject moved = RecurrenceRule.withStart(thursdayUtc, "2026-08-06T20:00:00-05:00");
         assertThat(moved.getArray("by_weekday").getInt(0)).isEqualTo(4);   // Friday in UTC
 
         // Same weekday, different time: the selector must NOT drift.
-        DataObject sameDay = RecurrenceRule.withStart(wednesday, "2026-08-05T21:00:00-05:00");
+        DataObject sameDay = RecurrenceRule.withStart(thursdayUtc, "2026-08-05T21:00:00-05:00");
         assertThat(sameDay.getArray("by_weekday").getInt(0)).isEqualTo(3);
     }
 
@@ -424,7 +445,8 @@ class RecurrenceRuleTest {
     void describesRulesInWordsSoRecurrenceIsVisible() {
         assertThat(RecurrenceRule.describe(
                 RecurrenceRule.parse("{\"frequency\": 2, \"by_weekday\": [3]}", START)))
-                .contains("weekly").contains("Thursday").contains(START);
+                // The anchor is shown in UTC so it agrees with the weekday beside it.
+                .contains("weekly").contains("Thursday").contains("2026-08-06T01:00Z");
 
         assertThat(RecurrenceRule.describe(
                 RecurrenceRule.parse("{\"frequency\": 2, \"interval\": 2, \"by_weekday\": [3]}", START)))

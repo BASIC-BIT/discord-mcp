@@ -59,8 +59,8 @@ public final class RecurrenceRule {
             rule = DataObject.fromJson(json);
         } catch (RuntimeException e) {
             throw new IllegalArgumentException(
-                    "recurrenceRule must be a JSON object, for example "
-                            + "{\"frequency\": 2, \"interval\": 1, \"by_weekday\": [2]} for weekly on Wednesday. "
+                    "recurrenceRule must be a JSON object. {\"frequency\": 2} is usually all you need "
+                            + "- it recurs weekly on whatever the start time falls on. "
                             + "Parse error: " + e.getMessage());
         }
 
@@ -121,7 +121,7 @@ public final class RecurrenceRule {
         // "not set", but an empty array still ships in the payload and Discord rejects it, so it
         // has to be caught here rather than skipped over.
         for (String selector : List.of("by_weekday", "by_n_weekday", "by_month", "by_month_day")) {
-            if (rule.hasKey(selector) && !rule.isNull(selector) && rule.getArray(selector).isEmpty()) {
+            if (rule.hasKey(selector) && !rule.isNull(selector) && arrayOf(rule, selector).isEmpty()) {
                 throw new IllegalArgumentException(
                         "recurrence_rule." + selector + " is empty. Give it a value or omit the field entirely.");
             }
@@ -153,12 +153,12 @@ public final class RecurrenceRule {
                                 + "not accept multi-day weekly rules; use frequency 3 (daily) with a known "
                                 + "weekday set instead.");
             }
+            // Daily rules have no later selector comparison to catch a truncated value, so a set
+            // like [0.9, 1.9, ...] would otherwise validate as weekdays and ship its fractions.
             requireWholeNumbers(rule, "by_weekday", "recurrence_rule.by_weekday");
             days = rule.getArray("by_weekday");
             java.util.TreeSet<Integer> set = new java.util.TreeSet<>();
             for (int i = 0; i < days.length(); i++) {
-                // Daily rules have no later selector comparison to catch a truncated value, so a
-                // set like [0.9, 1.9, ...] would validate as weekdays and ship its fractions.
                 int day = days.getInt(i);
                 if (day < 0 || day > 6) {
                     throw new IllegalArgumentException(
@@ -187,7 +187,14 @@ public final class RecurrenceRule {
                 throw new IllegalArgumentException(
                         "recurrence_rule.by_n_weekday must contain exactly one entry");
             }
-            DataObject nth = entries.getObject(0);
+            DataObject nth;
+            try {
+                nth = entries.getObject(0);
+            } catch (RuntimeException e) {
+                throw new IllegalArgumentException(
+                        "recurrence_rule.by_n_weekday entries must be objects, "
+                                + "for example [{\"n\": 2, \"day\": 4}]");
+            }
             requireWholeNumber(nth, "n", "recurrence_rule.by_n_weekday n");
             requireWholeNumber(nth, "day", "recurrence_rule.by_n_weekday day");
             if (!nth.hasKey("n") || !nth.hasKey("day")) {
@@ -357,6 +364,16 @@ public final class RecurrenceRule {
         }
     }
 
+    /** Reads an array field, naming it if the caller sent something that is not one. */
+    private static DataArray arrayOf(DataObject holder, String key) {
+        try {
+            return holder.getArray(key);
+        } catch (RuntimeException e) {
+            throw new IllegalArgumentException(
+                    "recurrence_rule." + key + " must be an array, for example [2]");
+        }
+    }
+
     private static boolean hasArray(DataObject rule, String key) {
         return rule.hasKey(key) && !rule.isNull(key) && rule.getArray(key).length() > 0;
     }
@@ -468,7 +485,16 @@ public final class RecurrenceRule {
         }
         String start = rule.getString("start", null);
         if (start != null && !start.isEmpty()) {
-            sb.append(", anchored at ").append(start);
+            // Normalised to UTC so the anchor agrees with the weekday above it. Left as-is, a
+            // Thursday-in-UTC series reads "on Thursday (UTC), anchored at 2026-08-05T20:00-05:00"
+            // — a Wednesday — which looks self-contradictory to the model reading it, and invites
+            // exactly the wrong-day correction the mismatch error warns against.
+            try {
+                sb.append(", anchored at ")
+                        .append(OffsetDateTime.parse(start).withOffsetSameInstant(ZoneOffset.UTC));
+            } catch (DateTimeParseException e) {
+                sb.append(", anchored at ").append(start);
+            }
         }
         return sb.toString();
     }

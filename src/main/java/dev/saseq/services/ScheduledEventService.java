@@ -32,7 +32,6 @@ public class ScheduledEventService {
                     + "not its local date, so a 22:00 US-Eastern event recurs on the FOLLOWING weekday. "
                     + "Prefer to omit the selector: for weekly, monthly and yearly it is derived from the "
                     + "start time correctly, and a supplied one must match the UTC date or it is rejected. "
-                    + "Usually you only need frequency. "
                     + "interval may exceed 1 only for weekly (every-other-week). "
                     + "by_n_weekday is monthly only; by_month with by_month_day is yearly only. "
                     + "count, end and by_year_day are set by Discord and must be omitted. "
@@ -379,7 +378,8 @@ public class ScheduledEventService {
         boolean recurrenceRelevant = movingStart
                 || (recurrenceRule != null && !recurrenceRule.isEmpty());
         DataObject raw;
-        String recurrenceUnknown = null;
+        boolean recurrenceReadFailed = false;
+        String recurrenceReadError = null;
         try {
             raw = fetchRaw(guild.getId(), event.getId());
         } catch (RuntimeException e) {
@@ -389,7 +389,8 @@ public class ScheduledEventService {
                                 + e.getMessage() + ". Nothing was changed.");
             }
             raw = DataObject.empty();
-            recurrenceUnknown = e.getMessage();
+            recurrenceReadFailed = true;
+            recurrenceReadError = e.getMessage();
         }
         DataObject existingRecurrence = recurrenceOf(raw);
 
@@ -499,13 +500,16 @@ public class ScheduledEventService {
             } else {
                 result.append("\n  • Recurrence is now: ").append(after);
             }
-        } else if (recurrenceUnknown != null) {
+        } else if (recurrenceReadFailed) {
             // listScheduledEvents refuses to let a failed read read as "nothing recurs", and this
             // path must not either: the note below is the one that stops a recurring event from
             // being edited as though it were a one-off.
-            result.append("\n  • Note: this event's recurrence could not be read (")
-                    .append(recurrenceUnknown)
-                    .append("), so it may be a recurring event that is not reported here.");
+            // Flagged by its own boolean rather than by the message being non-null: getMessage()
+            // can return null, and keying off it made this note vanish entirely, rendering as
+            // "does not recur" — the one thing the comment above says this path must never do.
+            result.append("\n  • Note: this event's recurrence could not be read")
+                    .append(recurrenceReadError == null ? "" : " (" + recurrenceReadError + ")")
+                    .append(", so it may be a recurring event that is not reported here.");
         } else if (existingRecurrence != null) {
             result.append("\n  • Note: this is a recurring event (")
                     .append(RecurrenceRule.describe(existingRecurrence))
