@@ -153,7 +153,8 @@ public final class RecurrenceRule {
                                 + "not accept multi-day weekly rules; use frequency 3 (daily) with a known "
                                 + "weekday set instead.");
             }
-            requireWholeNumbers(days, "recurrence_rule.by_weekday");
+            requireWholeNumbers(rule, "by_weekday", "recurrence_rule.by_weekday");
+            days = rule.getArray("by_weekday");
             java.util.TreeSet<Integer> set = new java.util.TreeSet<>();
             for (int i = 0; i < days.length(); i++) {
                 // Daily rules have no later selector comparison to catch a truncated value, so a
@@ -219,8 +220,8 @@ public final class RecurrenceRule {
                 throw new IllegalArgumentException(
                         "recurrence_rule.by_month and by_month_day must each contain exactly one value");
             }
-            requireWholeNumbers(rule.getArray("by_month"), "recurrence_rule.by_month");
-            requireWholeNumbers(rule.getArray("by_month_day"), "recurrence_rule.by_month_day");
+            requireWholeNumbers(rule, "by_month", "recurrence_rule.by_month");
+            requireWholeNumbers(rule, "by_month_day", "recurrence_rule.by_month_day");
             int month = rule.getArray("by_month").getInt(0);
             if (month < 1 || month > 12) {
                 throw new IllegalArgumentException(
@@ -326,10 +327,17 @@ public final class RecurrenceRule {
                     label + " must be a number, got " + (holder.isNull(key) ? "null" : "a non-numeric value"));
         }
         requireWhole(value, label);
+        // Normalised, not just checked. Otherwise a whole-valued double or the string "2.0"
+        // survives into the payload: the agreement check compares DataArray.toString(), so [3.0]
+        // reads as disagreeing with [3], and getInt on "2.0" throws NumberFormatException naming
+        // no field. interval has always been written back; everything else now is too.
+        holder.put(key, (int) value);
     }
 
-    /** Array form, for the selectors whose elements are numbers. */
-    private static void requireWholeNumbers(DataArray values, String label) {
+    /** Array form, for the selectors whose elements are numbers. Normalises in place. */
+    private static void requireWholeNumbers(DataObject holder, String key, String label) {
+        DataArray values = holder.getArray(key);
+        DataArray normalized = DataArray.empty();
         for (int i = 0; i < values.length(); i++) {
             double value;
             try {
@@ -338,7 +346,9 @@ public final class RecurrenceRule {
                 throw new IllegalArgumentException(label + " values must be numbers, got " + values);
             }
             requireWhole(value, label + " values");
+            normalized.add((int) value);
         }
+        holder.put(key, normalized);
     }
 
     private static void requireWhole(double value, String label) {

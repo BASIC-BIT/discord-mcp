@@ -244,6 +244,29 @@ class RecurrenceRuleTest {
     }
 
     @Test
+    void normalisesWholeValuedDoublesAndNumericStrings() {
+        // 3.0 is a whole number, so it must be accepted -- but unnormalised it survived into the
+        // payload, where the agreement check compares DataArray.toString() and read [3.0] as
+        // disagreeing with [3]. That told the caller their selector contradicted an anchor it
+        // matched exactly.
+        assertThat(RecurrenceRule.parse("{\"frequency\": 2, \"by_weekday\": [3.0]}", START)
+                .getArray("by_weekday").toString()).isEqualTo("[3]");
+
+        // Daily has no agreement check at all, so an unnormalised set shipped straight to Discord.
+        assertThat(RecurrenceRule.parse("{\"frequency\": 3, \"by_weekday\": [0.0,1.0,2.0,3.0,4.0]}", START)
+                .getArray("by_weekday").toString()).isEqualTo("[0,1,2,3,4]");
+
+        // "2.0" parses as a whole number but then broke getInt with a field-less
+        // NumberFormatException. Normalising on the way through fixes both.
+        assertThat(RecurrenceRule.parse("{\"frequency\": \"2.0\"}", START)
+                .getInt("frequency")).isEqualTo(RecurrenceRule.WEEKLY);
+
+        assertThat(RecurrenceRule.parse(
+                "{\"frequency\": 0, \"by_month\": [8.0], \"by_month_day\": [6.0]}", START)
+                .getArray("by_month_day").toString()).isEqualTo("[6]");
+    }
+
+    @Test
     void advisesOmittingBothYearlySelectorsTogether() {
         // "omit by_month_day" alone trips the supplied-together check, so a model following the
         // advice literally would hit a second, unrelated-looking error.
