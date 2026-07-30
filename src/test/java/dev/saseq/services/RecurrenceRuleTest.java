@@ -199,10 +199,10 @@ class RecurrenceRuleTest {
 
     @Test
     void derivesSelectorsFromTheUtcDateAsDiscordDoes() {
-        // Pinned against real data. The Faceless guild's "GoGo Dance" event is anchored at
-        // 2026-06-26T02:00:00+00:00 -- Thursday 22:00 US Eastern, Friday in UTC -- and Discord
-        // stores by_weekday [4], Friday. Deriving from the local date would give Thursday and put
-        // the series on the wrong day, which is why this is UTC and not the anchor's own offset.
+        // Pinned against a real recurring event read back from Discord. Anchored at
+        // 2026-06-26T02:00:00+00:00 -- Thursday 22:00 US Eastern, Friday in UTC -- Discord stores
+        // by_weekday [4], Friday. Deriving from the local date would give Thursday and put the
+        // series on the wrong day, which is why this is UTC and not the anchor's own offset.
         assertThat(RecurrenceRule.parse("{\"frequency\": 2}", "2026-06-25T22:00:00-04:00")
                 .getArray("by_weekday").getInt(0)).isEqualTo(4);
 
