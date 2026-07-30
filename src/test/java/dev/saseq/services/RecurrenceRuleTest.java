@@ -8,11 +8,15 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class RecurrenceRuleTest {
 
+    // 20:00 on Wednesday 5 August in -05:00 is 01:00 on THURSDAY 6 August in UTC. Discord derives
+    // selectors from the UTC date, so this anchor implies Thursday, month 8 day 6, and the first
+    // Thursday of the month. Chosen deliberately: an evening event whose local and UTC dates differ
+    // is exactly the case that used to derive the wrong day.
     private static final String START = "2026-08-05T20:00:00-05:00";
 
     @Test
     void acceptsAWeeklyRuleAndDefaultsItsAnchorToTheEventStart() {
-        DataObject rule = RecurrenceRule.parse("{\"frequency\": 2, \"by_weekday\": [2]}", START);
+        DataObject rule = RecurrenceRule.parse("{\"frequency\": 2, \"by_weekday\": [3]}", START);
 
         assertThat(rule.getInt("frequency")).isEqualTo(RecurrenceRule.WEEKLY);
         assertThat(rule.getInt("interval")).isEqualTo(1);
@@ -23,7 +27,7 @@ class RecurrenceRuleTest {
     void rejectsFieldsDiscordWillNotAcceptFromAClient() {
         for (String field : new String[]{"count", "end", "by_year_day"}) {
             assertThatThrownBy(() -> RecurrenceRule.parse(
-                    "{\"frequency\": 2, \"by_weekday\": [2], \"" + field + "\": 5}", START))
+                    "{\"frequency\": 2, \"by_weekday\": [3], \"" + field + "\": 5}", START))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining(field);
         }
@@ -50,7 +54,7 @@ class RecurrenceRuleTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("weekly");
 
-        assertThat(RecurrenceRule.parse("{\"frequency\": 2, \"interval\": 2, \"by_weekday\": [2]}", START)
+        assertThat(RecurrenceRule.parse("{\"frequency\": 2, \"interval\": 2, \"by_weekday\": [3]}", START)
                 .getInt("interval")).isEqualTo(2);
     }
 
@@ -104,7 +108,7 @@ class RecurrenceRuleTest {
         // Discord supports every week and every other week, and nothing beyond. Accepting 3 here
         // would create the event and only then have the recurrence PATCH rejected.
         assertThatThrownBy(() -> RecurrenceRule.parse(
-                "{\"frequency\": 2, \"interval\": 3, \"by_weekday\": [2]}", START))
+                "{\"frequency\": 2, \"interval\": 3, \"by_weekday\": [3]}", START))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("1 or 2");
     }
@@ -134,26 +138,26 @@ class RecurrenceRuleTest {
                 .hasMessageContaining("both n and day");
 
         assertThat(RecurrenceRule.parse(
-                "{\"frequency\": 1, \"by_n_weekday\": [{\"n\": 1, \"day\": 2}]}", START)
+                "{\"frequency\": 1, \"by_n_weekday\": [{\"n\": 1, \"day\": 3}]}", START)
                 .getArray("by_n_weekday").getObject(0).getInt("n")).isEqualTo(1);
     }
 
     @Test
     void fillsInTheSelectorEachFrequencyImpliesFromTheAnchor() {
-        // START is Wednesday 2026-08-05, the first Wednesday of August. For weekly, monthly and
-        // yearly the selector is fully determined by that, so omitting it is filled in rather than
-        // rejected -- there is exactly one correct value.
+        // START resolves to Thursday 6 August in UTC, the first Thursday of the month. For weekly,
+        // monthly and yearly the selector is fully determined by the anchor, so omitting it is
+        // filled in rather than rejected -- there is exactly one correct value.
         assertThat(RecurrenceRule.parse("{\"frequency\": 2}", START)
-                .getArray("by_weekday").getInt(0)).isEqualTo(2);
+                .getArray("by_weekday").getInt(0)).isEqualTo(3);
 
         DataObject nth = RecurrenceRule.parse("{\"frequency\": 1}", START)
                 .getArray("by_n_weekday").getObject(0);
         assertThat(nth.getInt("n")).isEqualTo(1);
-        assertThat(nth.getInt("day")).isEqualTo(2);
+        assertThat(nth.getInt("day")).isEqualTo(3);
 
         DataObject yearly = RecurrenceRule.parse("{\"frequency\": 0}", START);
         assertThat(yearly.getArray("by_month").getInt(0)).isEqualTo(8);
-        assertThat(yearly.getArray("by_month_day").getInt(0)).isEqualTo(5);
+        assertThat(yearly.getArray("by_month_day").getInt(0)).isEqualTo(6);
 
         // Daily is exempt: its weekday set is a genuine choice, not implied by the date.
         assertThat(RecurrenceRule.parse("{\"frequency\": 3}", START).hasKey("by_weekday")).isFalse();
@@ -164,8 +168,8 @@ class RecurrenceRuleTest {
         // JSON member order carries no meaning, so {"day":2,"n":1} must be accepted exactly as
         // {"n":1,"day":2} is. Comparing serialised text would have rejected it.
         assertThat(RecurrenceRule.parse(
-                "{\"frequency\": 1, \"by_n_weekday\": [{\"day\": 2, \"n\": 1}]}", START)
-                .getArray("by_n_weekday").getObject(0).getInt("day")).isEqualTo(2);
+                "{\"frequency\": 1, \"by_n_weekday\": [{\"day\": 3, \"n\": 1}]}", START)
+                .getArray("by_n_weekday").getObject(0).getInt("day")).isEqualTo(3);
     }
 
     @Test
@@ -173,12 +177,12 @@ class RecurrenceRuleTest {
         // Same truncation trap as interval: getInt turns 1.9 into 1 while the fraction stays in
         // the payload and reaches Discord.
         assertThatThrownBy(() -> RecurrenceRule.parse(
-                "{\"frequency\": 1, \"by_n_weekday\": [{\"n\": 1.9, \"day\": 2}]}", START))
+                "{\"frequency\": 1, \"by_n_weekday\": [{\"n\": 1.9, \"day\": 3}]}", START))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("whole number");
 
         assertThatThrownBy(() -> RecurrenceRule.parse(
-                "{\"frequency\": 1, \"by_n_weekday\": [{\"n\": 1, \"day\": 2.9}]}", START))
+                "{\"frequency\": 1, \"by_n_weekday\": [{\"n\": 1, \"day\": 3.9}]}", START))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("whole number");
     }
@@ -188,16 +192,30 @@ class RecurrenceRuleTest {
         // getInt would truncate 1.9 to 1 and write it back, turning an unsupported value into a
         // silently different schedule.
         assertThatThrownBy(() -> RecurrenceRule.parse(
-                "{\"frequency\": 2, \"interval\": 1.9, \"by_weekday\": [2]}", START))
+                "{\"frequency\": 2, \"interval\": 1.9, \"by_weekday\": [3]}", START))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("whole number");
+    }
+
+    @Test
+    void derivesSelectorsFromTheUtcDateAsDiscordDoes() {
+        // Pinned against real data. The Faceless guild's "GoGo Dance" event is anchored at
+        // 2026-06-26T02:00:00+00:00 -- Thursday 22:00 US Eastern, Friday in UTC -- and Discord
+        // stores by_weekday [4], Friday. Deriving from the local date would give Thursday and put
+        // the series on the wrong day, which is why this is UTC and not the anchor's own offset.
+        assertThat(RecurrenceRule.parse("{\"frequency\": 2}", "2026-06-25T22:00:00-04:00")
+                .getArray("by_weekday").getInt(0)).isEqualTo(4);
+
+        // The same instant spelled either way must produce the same schedule.
+        assertThat(RecurrenceRule.parse("{\"frequency\": 2}", "2026-06-26T02:00:00+00:00")
+                .getArray("by_weekday").getInt(0)).isEqualTo(4);
     }
 
     @Test
     void rejectsASelectorThatContradictsTheAnchor() {
         // A Wednesday anchor with a Thursday by_weekday is not a Thursday series, it is an
         // incoherent rule that Discord rejects or silently reinterprets.
-        assertThatThrownBy(() -> RecurrenceRule.parse("{\"frequency\": 2, \"by_weekday\": [3]}", START))
+        assertThatThrownBy(() -> RecurrenceRule.parse("{\"frequency\": 2, \"by_weekday\": [2]}", START))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("falls on");
     }
@@ -215,7 +233,7 @@ class RecurrenceRuleTest {
                 .hasMessageContaining("1 through 31");
 
         assertThat(RecurrenceRule.parse(
-                "{\"frequency\": 0, \"by_month\": [8], \"by_month_day\": [5]}", START)
+                "{\"frequency\": 0, \"by_month\": [8], \"by_month_day\": [6]}", START)
                 .getArray("by_month").getInt(0)).isEqualTo(8);
     }
 
@@ -224,11 +242,11 @@ class RecurrenceRuleTest {
         // The event's own start time is validated separately, so a malformed anchor inside the
         // rule would otherwise create the event and fail only on the recurrence PATCH.
         assertThatThrownBy(() -> RecurrenceRule.parse(
-                "{\"frequency\": 2, \"by_weekday\": [2], \"start\": \"not-a-timestamp\"}", START))
+                "{\"frequency\": 2, \"by_weekday\": [3], \"start\": \"not-a-timestamp\"}", START))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("ISO8601");
 
-        assertThatThrownBy(() -> RecurrenceRule.parse("{\"frequency\": 2, \"by_weekday\": [2]}", "nonsense"))
+        assertThatThrownBy(() -> RecurrenceRule.parse("{\"frequency\": 2, \"by_weekday\": [3]}", "nonsense"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("ISO8601");
     }
@@ -261,7 +279,7 @@ class RecurrenceRuleTest {
         assertThat(moved.hasKey("by_year_day")).isFalse();
         // The selectors that define the series must survive the rebuild.
         assertThat(moved.getInt("frequency")).isEqualTo(RecurrenceRule.WEEKLY);
-        assertThat(moved.getArray("by_weekday").getInt(0)).isEqualTo(2);
+        assertThat(moved.getArray("by_weekday").getInt(0)).isEqualTo(3);
     }
 
     @Test
@@ -275,7 +293,7 @@ class RecurrenceRuleTest {
                 .hasMessageContaining("by_weekdays");
 
         assertThatThrownBy(() -> RecurrenceRule.parse(
-                "{\"frequency\": 2, \"by_weekday\": [2], \"nonsense\": true}", START))
+                "{\"frequency\": 2, \"by_weekday\": [3], \"nonsense\": true}", START))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("unrecognised field");
     }
@@ -294,47 +312,49 @@ class RecurrenceRuleTest {
         // START is 2026-08-05, a Wednesday (weekday 2). Moving to the 6th, a Thursday, must carry
         // by_weekday with it or the series contradicts its own anchor.
         DataObject wednesday = DataObject.fromJson(
-                "{\"frequency\": 2, \"interval\": 1, \"by_weekday\": [2], \"start\": \"" + START + "\"}");
+                "{\"frequency\": 2, \"interval\": 1, \"by_weekday\": [3], \"start\": \"" + START + "\"}");
 
         DataObject moved = RecurrenceRule.withStart(wednesday, "2026-08-06T20:00:00-05:00");
-        assertThat(moved.getArray("by_weekday").getInt(0)).isEqualTo(3);   // Thursday
+        assertThat(moved.getArray("by_weekday").getInt(0)).isEqualTo(4);   // Friday in UTC
 
         // Same weekday, different time: the selector must NOT drift.
         DataObject sameDay = RecurrenceRule.withStart(wednesday, "2026-08-05T21:00:00-05:00");
-        assertThat(sameDay.getArray("by_weekday").getInt(0)).isEqualTo(2);
+        assertThat(sameDay.getArray("by_weekday").getInt(0)).isEqualTo(3);
     }
 
     @Test
     void movingAcrossDatesUpdatesMonthlyAndYearlySelectors() {
         DataObject monthly = DataObject.fromJson(
-                "{\"frequency\": 1, \"interval\": 1, \"by_n_weekday\": [{\"n\": 1, \"day\": 2}],"
+                "{\"frequency\": 1, \"interval\": 1, \"by_n_weekday\": [{\"n\": 1, \"day\": 3}],"
                         + " \"start\": \"" + START + "\"}");
-        // 2026-08-20 is a Thursday and the third Thursday of the month.
+        // 20:00 on Thursday 20 August at -05:00 is 01:00 on FRIDAY 21 August in UTC, and the 21st
+        // is the third Friday. Derived from the UTC date, as Discord does.
         DataObject movedMonthly = RecurrenceRule.withStart(monthly, "2026-08-20T20:00:00-05:00");
         DataObject nth = movedMonthly.getArray("by_n_weekday").getObject(0);
         assertThat(nth.getInt("n")).isEqualTo(3);
-        assertThat(nth.getInt("day")).isEqualTo(3);
+        assertThat(nth.getInt("day")).isEqualTo(4);
 
         DataObject yearly = DataObject.fromJson(
-                "{\"frequency\": 0, \"interval\": 1, \"by_month\": [8], \"by_month_day\": [5],"
+                "{\"frequency\": 0, \"interval\": 1, \"by_month\": [8], \"by_month_day\": [6],"
                         + " \"start\": \"" + START + "\"}");
+        // 20:00 on 25 December at -06:00 is 02:00 on the 26th in UTC.
         DataObject movedYearly = RecurrenceRule.withStart(yearly, "2026-12-25T20:00:00-06:00");
         assertThat(movedYearly.getArray("by_month").getInt(0)).isEqualTo(12);
-        assertThat(movedYearly.getArray("by_month_day").getInt(0)).isEqualTo(25);
+        assertThat(movedYearly.getArray("by_month_day").getInt(0)).isEqualTo(26);
     }
 
     @Test
     void describesRulesInWordsSoRecurrenceIsVisible() {
         assertThat(RecurrenceRule.describe(
-                RecurrenceRule.parse("{\"frequency\": 2, \"by_weekday\": [2]}", START)))
-                .contains("weekly").contains("Wednesday").contains(START);
+                RecurrenceRule.parse("{\"frequency\": 2, \"by_weekday\": [3]}", START)))
+                .contains("weekly").contains("Thursday").contains(START);
 
         assertThat(RecurrenceRule.describe(
-                RecurrenceRule.parse("{\"frequency\": 2, \"interval\": 2, \"by_weekday\": [2]}", START)))
-                .contains("every 2 weeks").contains("Wednesday");
+                RecurrenceRule.parse("{\"frequency\": 2, \"interval\": 2, \"by_weekday\": [3]}", START)))
+                .contains("every 2 weeks").contains("Thursday");
 
         assertThat(RecurrenceRule.describe(
-                RecurrenceRule.parse("{\"frequency\": 1, \"by_n_weekday\": [{\"n\":1,\"day\":2}]}", START)))
+                RecurrenceRule.parse("{\"frequency\": 1, \"by_n_weekday\": [{\"n\":1,\"day\":2}]}", "2026-08-05T12:00:00-05:00")))
                 .contains("occurrence 1").contains("Wednesday");
     }
 }

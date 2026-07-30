@@ -4,6 +4,7 @@ import net.dv8tion.jda.api.utils.data.DataArray;
 import net.dv8tion.jda.api.utils.data.DataObject;
 
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Set;
@@ -86,19 +87,14 @@ public final class RecurrenceRule {
             throw new IllegalArgumentException(
                     "recurrence_rule.frequency is required: 0=yearly, 1=monthly, 2=weekly, 3=daily");
         }
+        requireWholeNumber(rule, "frequency", "recurrence_rule.frequency");
         int frequency = rule.getInt("frequency");
         if (frequency < 0 || frequency > 3) {
             throw new IllegalArgumentException(
                     "recurrence_rule.frequency must be 0 (yearly), 1 (monthly), 2 (weekly), or 3 (daily)");
         }
 
-        // getInt would quietly truncate 1.9 to 1 and then write the result back, turning an
-        // unsupported interval into a silently different schedule.
-        if (rule.hasKey("interval") && rule.get("interval") instanceof Number number
-                && number.doubleValue() != Math.floor(number.doubleValue())) {
-            throw new IllegalArgumentException(
-                    "recurrence_rule.interval must be a whole number, got " + number);
-        }
+        requireWholeNumber(rule, "interval", "recurrence_rule.interval");
         int interval = rule.hasKey("interval") ? rule.getInt("interval") : 1;
         if (interval < 1) {
             throw new IllegalArgumentException("recurrence_rule.interval must be at least 1");
@@ -156,6 +152,13 @@ public final class RecurrenceRule {
             }
             java.util.TreeSet<Integer> set = new java.util.TreeSet<>();
             for (int i = 0; i < days.length(); i++) {
+                // Daily rules have no later selector comparison to catch a truncated value, so a
+                // set like [0.9, 1.9, ...] would validate as weekdays and ship its fractions.
+                double exact = days.getDouble(i);
+                if (exact != Math.floor(exact)) {
+                    throw new IllegalArgumentException(
+                            "recurrence_rule.by_weekday values must be whole numbers, got " + exact);
+                }
                 int day = days.getInt(i);
                 if (day < 0 || day > 6) {
                     throw new IllegalArgumentException(
@@ -185,15 +188,8 @@ public final class RecurrenceRule {
                         "recurrence_rule.by_n_weekday must contain exactly one entry");
             }
             DataObject nth = entries.getObject(0);
-            for (String field : List.of("n", "day")) {
-                // Same truncation trap as interval: getInt would turn 1.9 into 1 while the
-                // fraction stays in the payload and goes to Discord.
-                if (nth.hasKey(field) && nth.get(field) instanceof Number number
-                        && number.doubleValue() != Math.floor(number.doubleValue())) {
-                    throw new IllegalArgumentException(
-                            "recurrence_rule.by_n_weekday " + field + " must be a whole number, got " + number);
-                }
-            }
+            requireWholeNumber(nth, "n", "recurrence_rule.by_n_weekday n");
+            requireWholeNumber(nth, "day", "recurrence_rule.by_n_weekday day");
             if (!nth.hasKey("n") || !nth.hasKey("day")) {
                 throw new IllegalArgumentException(
                         "recurrence_rule.by_n_weekday entries need both n and day, "
@@ -297,6 +293,20 @@ public final class RecurrenceRule {
         return rule;
     }
 
+    /**
+     * Reject a JSON number that is not a whole number.
+     *
+     * <p>{@code getInt} truncates silently, so 1.9 would validate as 1 while the fraction stayed in
+     * the payload and went to Discord — an unsupported value quietly becoming a different schedule
+     * rather than an error. Shared because this has now been missed on four separate fields.
+     */
+    private static void requireWholeNumber(DataObject holder, String key, String label) {
+        if (holder.hasKey(key) && holder.get(key) instanceof Number number
+                && number.doubleValue() != Math.floor(number.doubleValue())) {
+            throw new IllegalArgumentException(label + " must be a whole number, got " + number);
+        }
+    }
+
     private static boolean hasArray(DataObject rule, String key) {
         return rule.hasKey(key) && !rule.isNull(key) && rule.getArray(key).length() > 0;
     }
@@ -345,7 +355,13 @@ public final class RecurrenceRule {
      * <p>Shared so that rebuilding a rule and validating a caller's rule cannot disagree about
      * which weekday, month day, or nth-weekday a given anchor implies.
      */
-    private static void applySelectors(DataObject target, int frequency, OffsetDateTime moment) {
+    private static void applySelectors(DataObject target, int frequency, OffsetDateTime anchor) {
+        // UTC, not the anchor's own offset. Confirmed against a live recurring event: an event at
+        // 2026-06-26T02:00:00+00:00 — Thursday 22:00 in US Eastern, Friday in UTC — is stored by
+        // Discord with by_weekday [4], Friday. Deriving from the local date would have produced
+        // Thursday and put the series on the wrong day, and it also made two spellings of the same
+        // instant yield different schedules.
+        OffsetDateTime moment = anchor.withOffsetSameInstant(ZoneOffset.UTC);
         int weekday = moment.getDayOfWeek().getValue() - 1;   // java Monday=1, Discord Monday=0
         switch (frequency) {
             case WEEKLY -> target.put("by_weekday", DataArray.empty().add(weekday));

@@ -107,7 +107,11 @@ public class ScheduledEventService {
 
     /** The event's recurrence rule, or null if it is not a recurring event. */
     private DataObject recurrenceOf(DataObject raw) {
-        return raw.isNull("recurrence_rule") ? null : raw.getObject("recurrence_rule");
+        // hasKey first: this is now also called with an empty object when a best-effort read of an
+        // unrelated edit failed.
+        return !raw.hasKey("recurrence_rule") || raw.isNull("recurrence_rule")
+                ? null
+                : raw.getObject("recurrence_rule");
     }
 
     /**
@@ -365,9 +369,25 @@ public class ScheduledEventService {
 
         // Read the live event before touching it: JDA cannot tell us whether this is a recurring
         // series, and that changes what a start-time edit means.
-        DataObject raw = fetchRaw(guild.getId(), event.getId());
-        DataObject existingRecurrence = recurrenceOf(raw);
         boolean movingStart = scheduledStartTime != null && !scheduledStartTime.isEmpty();
+        // Needed only when recurrence is actually in play: to know whether a start move is also a
+        // series move, or whether there is a rule to clear. For a plain rename it feeds nothing but
+        // a informational line, and a transient failure on this route must not stop an otherwise
+        // independent edit from being attempted at all.
+        boolean recurrenceRelevant = movingStart
+                || (recurrenceRule != null && !recurrenceRule.isEmpty());
+        DataObject raw;
+        try {
+            raw = fetchRaw(guild.getId(), event.getId());
+        } catch (RuntimeException e) {
+            if (recurrenceRelevant) {
+                throw new IllegalArgumentException(
+                        "Could not read the event's current recurrence, which this edit depends on: "
+                                + e.getMessage() + ". Nothing was changed.");
+            }
+            raw = DataObject.empty();
+        }
+        DataObject existingRecurrence = recurrenceOf(raw);
 
         // Validate the recurrence BEFORE anything is persisted. manager.complete() below is not
         // undoable, so parsing afterwards would report failure on a request that had already
