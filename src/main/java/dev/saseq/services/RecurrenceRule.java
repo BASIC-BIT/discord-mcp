@@ -83,7 +83,7 @@ public final class RecurrenceRule {
             }
         }
 
-        if (!rule.hasKey("frequency")) {
+        if (!rule.hasKey("frequency") || rule.isNull("frequency")) {
             throw new IllegalArgumentException(
                     "recurrence_rule.frequency is required: 0=yearly, 1=monthly, 2=weekly, 3=daily");
         }
@@ -94,8 +94,11 @@ public final class RecurrenceRule {
                     "recurrence_rule.frequency must be 0 (yearly), 1 (monthly), 2 (weekly), or 3 (daily)");
         }
 
-        requireWholeNumber(rule, "interval", "recurrence_rule.interval");
-        int interval = rule.hasKey("interval") ? rule.getInt("interval") : 1;
+        boolean hasInterval = rule.hasKey("interval") && !rule.isNull("interval");
+        if (hasInterval) {
+            requireWholeNumber(rule, "interval", "recurrence_rule.interval");
+        }
+        int interval = hasInterval ? rule.getInt("interval") : 1;
         if (interval < 1) {
             throw new IllegalArgumentException("recurrence_rule.interval must be at least 1");
         }
@@ -288,7 +291,9 @@ public final class RecurrenceRule {
                                 + " in UTC, which is " + want + ". "
                                 + "Discord evaluates recurrence against the UTC date, so a late-evening event "
                                 + "in a western timezone falls on the following day. The start time is almost "
-                                + "certainly right - omit " + selector + " and it is derived correctly.");
+                                + "certainly right - omit "
+                                + (selector.startsWith("by_month") ? "by_month and by_month_day" : selector)
+                                + " and it is derived correctly.");
             }
         }
         return rule;
@@ -302,16 +307,23 @@ public final class RecurrenceRule {
      * rather than an error. Shared because this has now been missed on four separate fields.
      */
     private static void requireWholeNumber(DataObject holder, String key, String label) {
-        if (!holder.hasKey(key) || holder.isNull(key)) {
+        // Deliberately no isNull check. An explicit JSON null must reach getDouble so the catch
+        // below turns it into a message naming the field, instead of the consumer's getInt raising
+        // a bare ParsingException that escapes parse() entirely. Callers for whom null means
+        // "absent" test that themselves before calling.
+        if (!holder.hasKey(key)) {
             return;
         }
         double value;
         try {
             value = holder.getDouble(key);
         } catch (RuntimeException e) {
-            // A JSON string such as "1.9" would otherwise reach getInt and surface as a bare
-            // NumberFormatException with no indication of which field was wrong.
-            throw new IllegalArgumentException(label + " must be a number, got " + holder.get(key));
+            // A JSON string such as "1.9", or an explicit null, would otherwise reach getInt and
+            // surface as a bare parsing exception with no indication of which field was wrong.
+            // The value is described via isNull rather than read back, because reading it is what
+            // just failed — an error path must not re-enter the call that threw.
+            throw new IllegalArgumentException(
+                    label + " must be a number, got " + (holder.isNull(key) ? "null" : "a non-numeric value"));
         }
         requireWhole(value, label);
     }

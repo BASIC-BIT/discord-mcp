@@ -225,6 +225,35 @@ class RecurrenceRuleTest {
     }
 
     @Test
+    void handlesExplicitJsonNullsWithoutLeakingAParsingException() {
+        // Models emit null for unset optional fields. These used to reach getInt and throw JDA's
+        // ParsingException, which is not an IllegalArgumentException and escaped parse() entirely,
+        // so the tool returned an opaque error naming no field.
+        assertThatThrownBy(() -> RecurrenceRule.parse("{\"frequency\": null}", START))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("frequency is required");
+
+        assertThatThrownBy(() -> RecurrenceRule.parse(
+                "{\"frequency\": 1, \"by_n_weekday\": [{\"n\": null, \"day\": 3}]}", START))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("n");
+
+        // interval is optional, so an explicit null reads as unset rather than an error.
+        assertThat(RecurrenceRule.parse("{\"frequency\": 2, \"interval\": null}", START)
+                .getInt("interval")).isEqualTo(1);
+    }
+
+    @Test
+    void advisesOmittingBothYearlySelectorsTogether() {
+        // "omit by_month_day" alone trips the supplied-together check, so a model following the
+        // advice literally would hit a second, unrelated-looking error.
+        assertThatThrownBy(() -> RecurrenceRule.parse(
+                "{\"frequency\": 0, \"by_month\": [8], \"by_month_day\": [5]}", START))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("omit by_month and by_month_day");
+    }
+
+    @Test
     void rejectsNonWholeNumbersOnEverySelectorAndOnStringSpellings() {
         // by_month/by_month_day were the two fields the shared helper never reached.
         assertThatThrownBy(() -> RecurrenceRule.parse(
