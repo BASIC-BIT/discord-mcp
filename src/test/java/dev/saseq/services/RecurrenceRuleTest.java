@@ -213,11 +213,36 @@ class RecurrenceRuleTest {
 
     @Test
     void rejectsASelectorThatContradictsTheAnchor() {
-        // A Wednesday anchor with a Thursday by_weekday is not a Thursday series, it is an
-        // incoherent rule that Discord rejects or silently reinterprets.
+        // START is Thursday in UTC, so [2] (Wednesday) contradicts its own anchor.
         assertThatThrownBy(() -> RecurrenceRule.parse("{\"frequency\": 2, \"by_weekday\": [2]}", START))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("falls on");
+                // The message must name the UTC date and must NOT tell the caller to move the
+                // start: for a late-evening event the start is already the date they meant, and
+                // following that advice produces an event a day early.
+                .hasMessageContaining("2026-08-06")
+                .hasMessageContaining("in UTC")
+                .hasMessageContaining("omit by_weekday");
+    }
+
+    @Test
+    void rejectsNonWholeNumbersOnEverySelectorAndOnStringSpellings() {
+        // by_month/by_month_day were the two fields the shared helper never reached.
+        assertThatThrownBy(() -> RecurrenceRule.parse(
+                "{\"frequency\": 0, \"by_month\": [8.9], \"by_month_day\": [6]}", START))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("by_month");
+
+        assertThatThrownBy(() -> RecurrenceRule.parse(
+                "{\"frequency\": 0, \"by_month\": [8], \"by_month_day\": [6.5]}", START))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("by_month_day");
+
+        // A JSON string spelling used to slip past the Number check and surface as a bare
+        // NumberFormatException naming no field.
+        assertThatThrownBy(() -> RecurrenceRule.parse(
+                "{\"frequency\": 2, \"interval\": \"1.9\"}", START))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("interval");
     }
 
     @Test

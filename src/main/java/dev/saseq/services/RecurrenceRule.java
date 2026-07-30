@@ -150,15 +150,11 @@ public final class RecurrenceRule {
                                 + "not accept multi-day weekly rules; use frequency 3 (daily) with a known "
                                 + "weekday set instead.");
             }
+            requireWholeNumbers(days, "recurrence_rule.by_weekday");
             java.util.TreeSet<Integer> set = new java.util.TreeSet<>();
             for (int i = 0; i < days.length(); i++) {
                 // Daily rules have no later selector comparison to catch a truncated value, so a
                 // set like [0.9, 1.9, ...] would validate as weekdays and ship its fractions.
-                double exact = days.getDouble(i);
-                if (exact != Math.floor(exact)) {
-                    throw new IllegalArgumentException(
-                            "recurrence_rule.by_weekday values must be whole numbers, got " + exact);
-                }
                 int day = days.getInt(i);
                 if (day < 0 || day > 6) {
                     throw new IllegalArgumentException(
@@ -220,6 +216,8 @@ public final class RecurrenceRule {
                 throw new IllegalArgumentException(
                         "recurrence_rule.by_month and by_month_day must each contain exactly one value");
             }
+            requireWholeNumbers(rule.getArray("by_month"), "recurrence_rule.by_month");
+            requireWholeNumbers(rule.getArray("by_month_day"), "recurrence_rule.by_month_day");
             int month = rule.getArray("by_month").getInt(0);
             if (month < 1 || month > 12) {
                 throw new IllegalArgumentException(
@@ -285,9 +283,12 @@ public final class RecurrenceRule {
             }
             if (!want.equals(got)) {
                 throw new IllegalArgumentException(
-                        "recurrence_rule." + selector + " is " + got + " but start (" + anchor
-                                + ") falls on " + want + ". The anchor is the first occurrence, so they must "
-                                + "agree. Move start to the date you want, and the selector follows.");
+                        "recurrence_rule." + selector + " is " + got + " but start " + anchor
+                                + " is " + moment.withOffsetSameInstant(ZoneOffset.UTC).toLocalDate()
+                                + " in UTC, which is " + want + ". "
+                                + "Discord evaluates recurrence against the UTC date, so a late-evening event "
+                                + "in a western timezone falls on the following day. The start time is almost "
+                                + "certainly right - omit " + selector + " and it is derived correctly.");
             }
         }
         return rule;
@@ -301,9 +302,36 @@ public final class RecurrenceRule {
      * rather than an error. Shared because this has now been missed on four separate fields.
      */
     private static void requireWholeNumber(DataObject holder, String key, String label) {
-        if (holder.hasKey(key) && holder.get(key) instanceof Number number
-                && number.doubleValue() != Math.floor(number.doubleValue())) {
-            throw new IllegalArgumentException(label + " must be a whole number, got " + number);
+        if (!holder.hasKey(key) || holder.isNull(key)) {
+            return;
+        }
+        double value;
+        try {
+            value = holder.getDouble(key);
+        } catch (RuntimeException e) {
+            // A JSON string such as "1.9" would otherwise reach getInt and surface as a bare
+            // NumberFormatException with no indication of which field was wrong.
+            throw new IllegalArgumentException(label + " must be a number, got " + holder.get(key));
+        }
+        requireWhole(value, label);
+    }
+
+    /** Array form, for the selectors whose elements are numbers. */
+    private static void requireWholeNumbers(DataArray values, String label) {
+        for (int i = 0; i < values.length(); i++) {
+            double value;
+            try {
+                value = values.getDouble(i);
+            } catch (RuntimeException e) {
+                throw new IllegalArgumentException(label + " values must be numbers, got " + values);
+            }
+            requireWhole(value, label + " values");
+        }
+    }
+
+    private static void requireWhole(double value, String label) {
+        if (value != Math.floor(value)) {
+            throw new IllegalArgumentException(label + " must be a whole number, got " + value);
         }
     }
 
@@ -400,19 +428,21 @@ public final class RecurrenceRule {
                 if (i > 0) names.append(", ");
                 names.append(day >= 0 && day <= 6 ? DAY_NAMES[day] : String.valueOf(day));
             }
-            sb.append(" on ").append(names);
+            sb.append(" on ").append(names).append(" (UTC)");
         }
         if (hasArray(rule, "by_month_day")) {
             sb.append(" on day ").append(rule.getArray("by_month_day").getInt(0));
             if (hasArray(rule, "by_month")) {
                 sb.append(" of month ").append(rule.getArray("by_month").getInt(0));
             }
+            sb.append(" (UTC)");
         }
         if (hasArray(rule, "by_n_weekday")) {
             DataObject nth = rule.getArray("by_n_weekday").getObject(0);
             int day = nth.getInt("day", -1);
             sb.append(" on occurrence ").append(nth.getInt("n", 0))
-                    .append(" of ").append(day >= 0 && day <= 6 ? DAY_NAMES[day] : String.valueOf(day));
+                    .append(" of ").append(day >= 0 && day <= 6 ? DAY_NAMES[day] : String.valueOf(day))
+                    .append(" (UTC)");
         }
         String start = rule.getString("start", null);
         if (start != null && !start.isEmpty()) {
