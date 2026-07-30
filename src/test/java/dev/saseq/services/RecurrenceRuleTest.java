@@ -244,6 +244,31 @@ class RecurrenceRuleTest {
     }
 
     @Test
+    void parsesNumbersExactlyRatherThanThroughDouble() {
+        // 1e-400 underflows to 0.0 as a double, which reads as whole and would normalise to 0 --
+        // silently creating a YEARLY rule out of input that should have been rejected.
+        assertThatThrownBy(() -> RecurrenceRule.parse("{\"frequency\": \"1e-400\"}", START))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("whole number");
+
+        // Beyond double precision, so it rounds to exactly 2 and passes a floor check.
+        assertThatThrownBy(() -> RecurrenceRule.parse(
+                "{\"frequency\": 2, \"interval\": \"2.0000000000000001\"}", START))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("whole number");
+
+        assertThatThrownBy(() -> RecurrenceRule.parse(
+                "{\"frequency\": 3, \"by_weekday\": [\"1e-400\", 1, 2, 3, 4]}", START))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("whole number");
+
+        // Out of int range must be named rather than silently truncated.
+        assertThatThrownBy(() -> RecurrenceRule.parse("{\"frequency\": \"99999999999999999999\"}", START))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("out of range");
+    }
+
+    @Test
     void namesTheFieldWhenTheJsonShapeIsWrong() {
         // A scalar where an array or object belongs used to reach getArray/getObject and throw
         // JDA's ParsingException, which is not an IllegalArgumentException and escaped parse().

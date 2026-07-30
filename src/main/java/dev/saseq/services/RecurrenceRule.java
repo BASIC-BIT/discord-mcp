@@ -3,6 +3,7 @@ package dev.saseq.services;
 import net.dv8tion.jda.api.utils.data.DataArray;
 import net.dv8tion.jda.api.utils.data.DataObject;
 
+import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeParseException;
@@ -315,52 +316,55 @@ public final class RecurrenceRule {
      * rather than an error. Shared because this has now been missed on four separate fields.
      */
     private static void requireWholeNumber(DataObject holder, String key, String label) {
-        // Deliberately no isNull check. An explicit JSON null must reach getDouble so the catch
-        // below turns it into a message naming the field, instead of the consumer's getInt raising
-        // a bare ParsingException that escapes parse() entirely. Callers for whom null means
-        // "absent" test that themselves before calling.
+        // An explicit JSON null is handled here rather than left to the consumer's getInt, which
+        // would raise a bare ParsingException that escapes parse() entirely. Callers for whom null
+        // means "absent" test that themselves before calling.
         if (!holder.hasKey(key)) {
             return;
         }
-        double value;
-        try {
-            value = holder.getDouble(key);
-        } catch (RuntimeException e) {
-            // A JSON string such as "1.9", or an explicit null, would otherwise reach getInt and
-            // surface as a bare parsing exception with no indication of which field was wrong.
-            // The value is described via isNull rather than read back, because reading it is what
-            // just failed — an error path must not re-enter the call that threw.
-            throw new IllegalArgumentException(
-                    label + " must be a number, got " + (holder.isNull(key) ? "null" : "a non-numeric value"));
+        if (holder.isNull(key)) {
+            throw new IllegalArgumentException(label + " must be a number, got null");
         }
-        requireWhole(value, label);
+        int value = wholeValueOf(holder.getString(key, ""), label);
         // Normalised, not just checked. Otherwise a whole-valued double or the string "2.0"
         // survives into the payload: the agreement check compares DataArray.toString(), so [3.0]
         // reads as disagreeing with [3], and getInt on "2.0" throws NumberFormatException naming
         // no field. interval has always been written back; everything else now is too.
-        holder.put(key, (int) value);
+        holder.put(key, value);
     }
 
     /** Array form, for the selectors whose elements are numbers. Normalises in place. */
     private static void requireWholeNumbers(DataObject holder, String key, String label) {
-        DataArray values = holder.getArray(key);
+        DataArray values = arrayOf(holder, key);
         DataArray normalized = DataArray.empty();
         for (int i = 0; i < values.length(); i++) {
-            double value;
-            try {
-                value = values.getDouble(i);
-            } catch (RuntimeException e) {
-                throw new IllegalArgumentException(label + " values must be numbers, got " + values);
-            }
-            requireWhole(value, label + " values");
-            normalized.add((int) value);
+            normalized.add(wholeValueOf(values.getString(i, ""), label + " values"));
         }
         holder.put(key, normalized);
     }
 
-    private static void requireWhole(double value, String label) {
-        if (value != Math.floor(value)) {
-            throw new IllegalArgumentException(label + " must be a whole number, got " + value);
+    /**
+     * Read a number exactly, reject it unless it is whole, and return it as an int.
+     *
+     * <p>{@link BigDecimal} rather than {@code double} because double loses exactly the cases that
+     * matter: {@code "1e-400"} underflows to 0.0 and would pass as whole, silently becoming a
+     * yearly rule, and {@code "2.0000000000000001"} rounds to 2. Both are then written back as if
+     * the caller had asked for them.
+     */
+    private static int wholeValueOf(String raw, String label) {
+        BigDecimal value;
+        try {
+            value = new BigDecimal(raw.trim());
+        } catch (RuntimeException e) {
+            throw new IllegalArgumentException(label + " must be a number, got " + raw);
+        }
+        if (value.stripTrailingZeros().scale() > 0) {
+            throw new IllegalArgumentException(label + " must be a whole number, got " + raw);
+        }
+        try {
+            return value.intValueExact();
+        } catch (ArithmeticException e) {
+            throw new IllegalArgumentException(label + " is out of range, got " + raw);
         }
     }
 
