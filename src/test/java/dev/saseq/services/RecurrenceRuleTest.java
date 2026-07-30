@@ -244,9 +244,10 @@ class RecurrenceRuleTest {
     }
 
     @Test
-    void parsesNumbersExactlyRatherThanThroughDouble() {
+    void parsesQuotedNumbersExactlyRatherThanThroughDouble() {
         // 1e-400 underflows to 0.0 as a double, which reads as whole and would normalise to 0 --
         // silently creating a YEARLY rule out of input that should have been rejected.
+        // Quoted spellings only: an unquoted float is already a Double before this class sees it.
         assertThatThrownBy(() -> RecurrenceRule.parse("{\"frequency\": \"1e-400\"}", START))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("whole number");
@@ -266,6 +267,31 @@ class RecurrenceRuleTest {
         assertThatThrownBy(() -> RecurrenceRule.parse("{\"frequency\": \"99999999999999999999\"}", START))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("out of range");
+    }
+
+    @Test
+    void blamesTheTimezoneOnlyWhenTheAnchorCrossesADate() {
+        // A midday start whose local and UTC dates match: the caller mistyped the date, so telling
+        // them the start is "almost certainly right" and to drop the selector would hand back the
+        // wrong series reported as success.
+        assertThatThrownBy(() -> RecurrenceRule.parse(
+                "{\"frequency\": 2, \"by_weekday\": [0]}", "2026-08-05T12:00:00-05:00"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Move start to the date you want")
+                .hasMessageNotContaining("almost certainly right");
+
+        // The evening case still gets the timezone explanation.
+        assertThatThrownBy(() -> RecurrenceRule.parse("{\"frequency\": 2, \"by_weekday\": [2]}", START))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("crosses into the next day in UTC");
+    }
+
+    @Test
+    void namesANullSelectorElement() {
+        assertThatThrownBy(() -> RecurrenceRule.parse(
+                "{\"frequency\": 3, \"by_weekday\": [0,1,2,3,null]}", START))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("got null");
     }
 
     @Test

@@ -294,15 +294,23 @@ public final class RecurrenceRule {
                 }
             }
             if (!want.equals(got)) {
+                // Only blame the timezone when the anchor actually crosses a date boundary.
+                // Otherwise the explanation is false and the advice is harmful: for a midday start
+                // the caller almost certainly mistyped the date, and "omit the selector" would give
+                // them the wrong series reported as success.
+                boolean crossesDate = !moment.toLocalDate()
+                        .equals(moment.withOffsetSameInstant(ZoneOffset.UTC).toLocalDate());
+                String omit = selector.startsWith("by_month") ? "by_month and by_month_day" : selector;
                 throw new IllegalArgumentException(
                         "recurrence_rule." + selector + " is " + got + " but start " + anchor
                                 + " is " + moment.withOffsetSameInstant(ZoneOffset.UTC).toLocalDate()
                                 + " in UTC, which is " + want + ". "
-                                + "Discord evaluates recurrence against the UTC date, so a late-evening event "
-                                + "in a western timezone falls on the following day. The start time is almost "
-                                + "certainly right - omit "
-                                + (selector.startsWith("by_month") ? "by_month and by_month_day" : selector)
-                                + " and it is derived correctly.");
+                                + (crossesDate
+                                ? "Discord evaluates recurrence against the UTC date, and this start crosses "
+                                + "into the next day in UTC. The start time is almost certainly right - omit "
+                                + omit + " and it is derived correctly."
+                                : "The anchor is the first occurrence, so they must agree. Move start to the "
+                                + "date you want, or omit " + omit + " to derive it from the start."));
             }
         }
         return rule;
@@ -338,7 +346,11 @@ public final class RecurrenceRule {
         DataArray values = arrayOf(holder, key);
         DataArray normalized = DataArray.empty();
         for (int i = 0; i < values.length(); i++) {
-            normalized.add(wholeValueOf(values.getString(i, ""), label + " values"));
+            String element = values.getString(i, null);
+            if (element == null) {
+                throw new IllegalArgumentException(label + " values must be numbers, got null");
+            }
+            normalized.add(wholeValueOf(element, label + " values"));
         }
         holder.put(key, normalized);
     }
@@ -350,6 +362,12 @@ public final class RecurrenceRule {
      * matter: {@code "1e-400"} underflows to 0.0 and would pass as whole, silently becoming a
      * yearly rule, and {@code "2.0000000000000001"} rounds to 2. Both are then written back as if
      * the caller had asked for them.
+     *
+     * <p>This covers <em>quoted</em> spellings only. An unquoted JSON float is already a
+     * {@code Double} by the time it reaches this class, because the rule is parsed by JDA's own
+     * mapper without {@code USE_BIG_DECIMAL_FOR_FLOATS}, so the precision is gone before any check
+     * here can see it. Closing that would mean parsing the caller's JSON separately rather than
+     * reusing JDA's, which is more machinery than the remaining exposure justifies.
      */
     private static int wholeValueOf(String raw, String label) {
         BigDecimal value;
