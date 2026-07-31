@@ -702,6 +702,12 @@ public class MessageService {
         }
         Path temporary = null;
         try {
+            // Saved files inherit createTempFile's owner-only mode (0600 on POSIX) rather than
+            // the 0644 a direct create would have produced. Kept on purpose: the MCP client is
+            // normally the same user, so nothing needs the wider mode, and a downloaded file
+            // should not become world-readable on a shared host just because it passed through
+            // a temp file. A consumer running as a different user gets access through ownership
+            // on the root directory, not through the mode on every file in it.
             temporary = Files.createTempFile(root, ".download-", ".part");
             Files.write(temporary, bytes, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
             try {

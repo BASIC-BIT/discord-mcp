@@ -17,6 +17,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermission;
 import java.time.OffsetDateTime;
 import java.util.List;
 
@@ -262,6 +263,23 @@ class MessageServiceTest {
             // Also pins that the temporary .part file did not survive the move.
             assertThat(entries).hasSize(1);
         }
+    }
+
+    @Test
+    void writeIntoAllowedRootSavesOwnerOnlyFiles(@TempDir Path dir) throws IOException {
+        Path root = Files.createDirectory(dir.resolve("downloads"));
+        if (!root.getFileSystem().supportedFileAttributeViews().contains("posix")) {
+            Assumptions.abort("no POSIX file permissions on this host");
+        }
+
+        Path saved = messageService.writeIntoAllowedRoot(
+                root, "321", "poster.png", "bytes".getBytes(StandardCharsets.UTF_8));
+
+        // Going through a temp file means these land 0600, not the 0644 a direct create gives.
+        // That is deliberate, so pin it: a refactor back to a direct write would widen every
+        // saved attachment on a shared host without anything failing.
+        assertThat(Files.getPosixFilePermissions(saved))
+                .containsExactlyInAnyOrder(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE);
     }
 
     @Test

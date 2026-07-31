@@ -188,6 +188,10 @@ hidden files. Writes go to a temporary file in the same directory and are moved 
 so a failed write cannot destroy an already-saved copy and a symlink at the target is
 replaced rather than followed.
 
+Saved files are owner-only (`0600` on POSIX). A consumer running as a different user
+should get access through ownership on this directory rather than through the mode on
+every file in it.
+
 Per call: 25 MB per attachment, 50 MB total. **Nothing caps the number of calls** — a
 poisoned context can loop the tool until the volume is full, so point this at a
 size-limited filesystem rather than at `/`.
