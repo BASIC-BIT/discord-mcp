@@ -106,12 +106,8 @@ class RemoteFetchGuardTest {
         // cast, maxBytes - total + 1 wraps and the allocation fails with
         // NegativeArraySizeException on the first iteration.
         //
-        // This proves the allocation only. The accumulator's overflow guard is NOT exercised
-        // here and cannot be without a 2 GB body — the earlier version of this test asserted
-        // the same thing while calling itself an overflow test, which is how the accumulator
-        // stayed broken behind a green suite. The guard is written so it cannot overflow
-        // (comparing read > maxBytes - total rather than summing first) instead of relying on a
-        // test to catch it.
+        // Proves the allocation only. The accumulator guard cannot be exercised without a 2 GB
+        // body, so it is written to be overflow-free rather than covered by a test.
         byte[] body = body(9000);
 
         assertThat(RemoteFetchGuard.readBounded(new CountingStream(body), Integer.MAX_VALUE, "attachment"))
@@ -119,10 +115,10 @@ class RemoteFetchGuardTest {
     }
 
     @Test
-    void theSizeBoundHoldsWhenTheAllowanceIsNearlyTheWholeAccumulator() {
-        // The same arithmetic shape as the Integer.MAX_VALUE case, at a size that can actually
-        // be run: the allowance is one byte under the body, so the bound has to fire on the
-        // final comparison rather than after a sum that could have wrapped.
+    void theSizeBoundFiresOnAPartialFinalChunk() {
+        // A boundary test, not an overflow one — at this magnitude nothing can wrap, so it
+        // passes against the old arithmetic too. What it pins is that the bound still fires
+        // when the overrun arrives in a narrowed final chunk rather than a full one.
         byte[] body = body(12_000);
 
         assertThatThrownBy(() -> RemoteFetchGuard.readBounded(new CountingStream(body), 11_999, "attachment"))

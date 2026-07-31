@@ -267,24 +267,10 @@ public class MessageService {
                     "DISCORD_MCP_DOWNLOAD_ROOT is not writable by this process: " + root
                             + ". Nothing was downloaded.");
         }
-        // Probe create-then-rename, because every download does both: a temp file, renamed to
-        // its final name. Windows and NFSv4 ACLs grant those separately, so a directory can
-        // accept the create and refuse the rename; probing only the create passes it and then
-        // fails during the write with the attachment already fetched.
-        //
-        // Deliberately renames to a *fresh* name rather than over an existing one, even though
-        // re-downloading an attachment does replace its own file. Replacement is a third,
-        // separately grantable right, and requiring it here would reject a directory where every
-        // first download succeeds and only a repeat fails — turning a partial capability into a
-        // total refusal. The trade is accepted knowingly: on such a directory a re-download
-        // fetches and then fails at the replace, which is the failure this preflight otherwise
-        // avoids. It is the cheaper half of the trade, because a re-download is by definition of
-        // a file already on disk.
-        //
-        // No test covers the failure branch, and none can on POSIX: rename within a directory
-        // needs the same write bit as create, so the split cannot be constructed there. It ships
-        // unverified on the only platforms where it changes anything — a reason to keep it, not
-        // to drop it for lack of coverage.
+        // Every download creates a temp file and renames it. Windows and NFSv4 ACLs grant those
+        // separately, so both are probed — and replacement is a third right, deliberately not
+        // probed, so a directory that only allows new files still works for first downloads.
+        // Untestable on POSIX, where rename needs the same directory write bit as create.
         Path probe = null;
         try {
             probe = Files.createTempFile(root, ".writable-", ".probe");
@@ -292,15 +278,15 @@ public class MessageService {
             Files.move(probe, renamed);
             probe = renamed;
         } catch (IOException e) {
+            // Claims only what the probe observed: a full disk or an fd limit lands here too,
+            // and calling either a permissions problem sends someone to fix the wrong thing.
             throw new IllegalArgumentException(
-                    "DISCORD_MCP_DOWNLOAD_ROOT does not allow this process to create files and "
-                            + "rename them, which saving an attachment requires: " + root
+                    "Could not create and rename a file in DISCORD_MCP_DOWNLOAD_ROOT, which "
+                            + "saving an attachment requires: " + root
                             + " (" + e.getMessage() + "). Nothing was downloaded.");
         } finally {
-            // Cleanup is best-effort and separate from the diagnosis above: a failed delete does
-            // not mean the directory cannot be created in and renamed within, which is what the
-            // probe establishes directly. A probe stranded by a SIGKILL between the calls is
-            // inert.
+            // Best-effort: a failed delete does not mean the directory cannot be written to,
+            // which the probe above establishes directly.
             deleteQuietly(probe);
         }
         return root;

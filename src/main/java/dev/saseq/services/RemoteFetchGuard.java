@@ -158,6 +158,9 @@ public final class RemoteFetchGuard {
      * readNBytes} discards its partial buffer when the stream errors, so a caller cannot tell a
      * failure that cost nothing from one that cost 44 MB. Both look identical, and a byte budget
      * built on that distinction silently stops bounding anything.
+     *
+     * @param maxBytes must be non-negative; a negative allowance fails on the allocation rather
+     *                 than raising {@link TooLargeException}
      */
     // Package-private so RemoteFetchGuardTest can call it directly, matching isBlocked above.
     // Reflection would drop compile-time checking of this signature.
@@ -170,21 +173,17 @@ public final class RemoteFetchGuard {
         List<byte[]> chunks = new ArrayList<>();
         int total = 0;
         while (true) {
-            // Never ask for more than the allowance leaves, plus the one byte that distinguishes
-            // "exactly at the limit" from "over it". Asking for a full chunk regardless meant up
-            // to maxBytes + 8191 bytes reached this loop before it noticed, while the caller
-            // charges exactly the allowance for the rejection — so a byte budget spent on
-            // oversized responses drifted by a chunk per attachment.
+            // At most what the allowance leaves, plus the one byte that tells "at the limit"
+            // from "over" it. A full chunk regardless let maxBytes + 8191 reach this loop while
+            // the caller charges the allowance, so a byte budget drifted by a chunk per
+            // rejection. It now drifts by one byte the other way, which is the better side to
+            // be wrong on.
             //
-            // This makes the accounting exact, not the bandwidth: HttpURLConnection buffers from
-            // the socket independently of how much is requested here, so what crosses the wire is
-            // not bounded any more tightly than before.
+            // Accounting only, not bandwidth: HttpURLConnection buffers from the socket
+            // regardless of what is requested here.
             //
-            // The long cast keeps this addition from wrapping when maxBytes is near
-            // Integer.MAX_VALUE — the value a caller would reach for to mean "no limit". It
-            // covers the allocation only; the accumulator below has its own overflow guard,
-            // because fixing one and not the other removes the allocation crash while leaving
-            // the size bound silently disabled, which is worse than crashing.
+            // The long cast stops this wrapping at maxBytes near Integer.MAX_VALUE. It covers
+            // the allocation; the accumulator below is guarded separately.
             int want = (int) Math.min(CHUNK_BYTES, (long) maxBytes - total + 1);
             byte[] chunk = new byte[want];
             int read;
@@ -196,11 +195,9 @@ public final class RemoteFetchGuard {
             if (read < 0) {
                 break;
             }
-            // Compared before adding, not after. "total + read > maxBytes" overflows when
-            // maxBytes is near Integer.MAX_VALUE: total wraps negative, the comparison goes
-            // false, and the size bound disappears at exactly the value a caller would pass to
-            // mean "no limit". Subtracting cannot overflow, because total <= maxBytes holds at
-            // the top of every iteration.
+            // Compared before adding. Summing first overflows when maxBytes is near
+            // Integer.MAX_VALUE — total wraps negative and the bound silently disappears.
+            // Subtracting cannot, given the invariant total <= maxBytes.
             if (read > maxBytes - total) {
                 throw new TooLargeException(what + " exceeds the maximum allowed size");
             }
