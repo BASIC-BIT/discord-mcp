@@ -1,5 +1,6 @@
 package dev.saseq.services;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
@@ -71,6 +72,30 @@ public final class RemoteFetchGuard {
     }
 
     /**
+     * The transfer failed partway, after {@link #bytesConsumed()} bytes had already arrived.
+     *
+     * <p>A response that dies at 44 MB cost 44 MB of bandwidth, and a caller running a byte
+     * budget has to charge it — otherwise repeated mid-transfer failures pull far more than the
+     * budget allows while the counter never moves. The count is carried on the exception because
+     * only the read loop knows it.
+     *
+     * <p>The message stays deliberately generic for the same reason the plain failure path does:
+     * echoing the underlying {@link IOException} would turn this into a reachability prober.
+     */
+    public static class TransferFailedException extends IllegalArgumentException {
+        private final int bytesConsumed;
+
+        TransferFailedException(String message, int bytesConsumed) {
+            super(message);
+            this.bytesConsumed = bytesConsumed;
+        }
+
+        public int bytesConsumed() {
+            return bytesConsumed;
+        }
+    }
+
+    /**
      * Fetch a caller-supplied URL with SSRF protection and a size ceiling.
      *
      * @param url      the caller-supplied URL
@@ -114,17 +139,43 @@ public final class RemoteFetchGuard {
                                 "Refusing " + what + " URL: server returned HTTP " + status);
                     }
                 }
-                byte[] data = in.readNBytes(maxBytes + 1);
-                if (data.length > maxBytes) {
-                    throw new TooLargeException(what + " exceeds the maximum allowed size");
-                }
-                return data;
+                return readBounded(in, maxBytes, what);
             }
         } catch (IOException e) {
             // Deliberately does not echo the underlying IOException. Passing it
             // through turns this into a reachability prober for arbitrary
             // public IP:port, including the host's own public address.
             throw new IllegalArgumentException("Failed to download " + what + " from URL");
+        }
+    }
+
+    /**
+     * Reads at most {@code maxBytes}, reporting how much arrived if the transfer fails.
+     *
+     * <p>Hand-rolled rather than {@code readNBytes(maxBytes + 1)} for one reason: {@code
+     * readNBytes} discards its partial buffer when the stream errors, so a caller cannot tell a
+     * failure that cost nothing from one that cost 44 MB. Both look identical, and a byte budget
+     * built on that distinction silently stops bounding anything.
+     */
+    private static byte[] readBounded(InputStream in, int maxBytes, String what) {
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        byte[] chunk = new byte[8192];
+        int total = 0;
+        while (true) {
+            int read;
+            try {
+                read = in.read(chunk);
+            } catch (IOException e) {
+                throw new TransferFailedException("Failed to download " + what + " from URL", total);
+            }
+            if (read < 0) {
+                return buffer.toByteArray();
+            }
+            total += read;
+            if (total > maxBytes) {
+                throw new TooLargeException(what + " exceeds the maximum allowed size");
+            }
+            buffer.write(chunk, 0, read);
         }
     }
 

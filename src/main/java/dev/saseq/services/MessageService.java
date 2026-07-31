@@ -712,9 +712,18 @@ public class MessageService {
                                 ? " — all that was left of this call's budget. Fetch it on its own."
                                 : ", the per-file limit. Its reported size understated the body.")
                         .append("\n");
+            } catch (RemoteFetchGuard.TransferFailedException e) {
+                // A transfer that died partway still cost what had already arrived. Without this
+                // the counter never moves for a mid-transfer reset, and ten of them pull most of
+                // the per-file cap each while the budget reads as untouched.
+                attempted += e.bytesConsumed();
+                failed.append("- `").append(attachment.getFileName()).append("` (ID ")
+                        .append(attachment.getId()).append("): transfer failed after ")
+                        .append(formatFileSize(e.bytesConsumed())).append(".\n");
             } catch (RuntimeException e) {
-                // Everything else — unreachable host, 404, refused scheme — spent no meaningful
-                // bandwidth, so it does not charge the budget.
+                // Everything else — unreachable host, 404, refused scheme — failed before any
+                // body arrived, so it does not charge the budget. Charging these would let a
+                // couple of 404s cut a call short over failures that cost nothing.
                 failed.append("- `").append(attachment.getFileName()).append("` (ID ")
                         .append(attachment.getId()).append("): ").append(reasonOf(e)).append("\n");
             }

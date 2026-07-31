@@ -361,6 +361,33 @@ class MessageServiceTest {
     }
 
     @Test
+    void aTransferThatDiesPartwayChargesWhatItAlreadyPulled(@TempDir Path dir) throws IOException {
+        Path root = Files.createDirectory(dir.resolve("downloads"));
+        messageService.downloadRoot = root.toString();
+        stubMessageWithAttachments(
+                attachment("1", "a.png", 1024, "https://cdn.example/a.png"),
+                attachment("2", "b.png", 1024, "https://cdn.example/b.png"),
+                attachment("3", "c.png", 1024, "https://cdn.example/c.png"));
+
+        try (MockedStatic<RemoteFetchGuard> guard = mockStatic(RemoteFetchGuard.class)) {
+            // A reset after 40 MB. The bandwidth is spent even though nothing reached disk, so
+            // it has to charge the budget — otherwise ten of these pull ~400 MB while the
+            // counter reads zero, which is the gap a size-only rejection check leaves open.
+            guard.when(() -> RemoteFetchGuard.fetch(any(), anyInt(), any()))
+                    .thenThrow(new RemoteFetchGuard.TransferFailedException(
+                            "Failed to download attachment from URL", 40 * 1024 * 1024));
+
+            assertThatThrownBy(() -> messageService.downloadAttachment(CHANNEL_ID, MESSAGE_ID, null))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("transfer failed after 40.0 MB");
+
+            // 40 + 40 = 80 leaves 20 MB, so a third is still attempted; 120 would exceed the
+            // budget, so there is no fourth. Three attachments, three attempts, budget spent.
+            guard.verify(() -> RemoteFetchGuard.fetch(any(), anyInt(), any()), times(3));
+        }
+    }
+
+    @Test
     void anOrdinaryFetchFailureDoesNotChargeTheBudget(@TempDir Path dir) throws IOException {
         Path root = Files.createDirectory(dir.resolve("downloads"));
         messageService.downloadRoot = root.toString();
