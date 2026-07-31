@@ -705,9 +705,11 @@ public class MessageService {
                 attempted += allowance;
                 failed.append("- `").append(attachment.getFileName()).append("` (ID ")
                         .append(attachment.getId()).append("): body exceeded the ")
-                        .append(allowance / (1024 * 1024)).append(" MB allowed for it")
+                        // formatFileSize, not integer MB: the remainder of a budget is routinely
+                        // under a megabyte, and "exceeded the 0 MB allowed for it" reads as a bug.
+                        .append(formatFileSize(allowance)).append(" allowed for it")
                         .append(allowance < MAX_DOWNLOAD_FILE_BYTES
-                                ? " — the remainder of this call's budget. Fetch it on its own."
+                                ? " — all that was left of this call's budget. Fetch it on its own."
                                 : ", the per-file limit. Its reported size understated the body.")
                         .append("\n");
             } catch (RuntimeException e) {
