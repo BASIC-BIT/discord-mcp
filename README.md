@@ -34,6 +34,9 @@ Discord by managing channels, sending messages, and retrieving server informatio
 export DISCORD_TOKEN="YOUR_DISCORD_BOT_TOKEN"
 export DISCORD_GUILD_ID="OPTIONAL_DEFAULT_SERVER_ID"
 export SPRING_PROFILES_ACTIVE=http
+# Only if you want download_attachment. Must match the container path mounted below,
+# not a host path — see Security notes.
+export DISCORD_MCP_DOWNLOAD_ROOT=/var/lib/discord-mcp/downloads
 ```
 
 > [!IMPORTANT]
@@ -79,6 +82,8 @@ cat > .env <<EOF
 SPRING_PROFILES_ACTIVE=http
 DISCORD_TOKEN=<YOUR_DISCORD_BOT_TOKEN>
 DISCORD_GUILD_ID=<OPTIONAL_DEFAULT_SERVER_ID>
+# Optional, enables download_attachment. Container path, matching the named volume.
+DISCORD_MCP_DOWNLOAD_ROOT=/var/lib/discord-mcp/downloads
 EOF
 ```
 
@@ -188,9 +193,20 @@ hidden files. Writes go to a temporary file in the same directory and are moved 
 so a failed write cannot destroy an already-saved copy and a symlink at the target is
 replaced rather than followed.
 
-Saved files are owner-only (`0600` on POSIX). A consumer running as a different user
-should get access through ownership on this directory rather than through the mode on
-every file in it.
+Saved files are `rw-r-----`. If the process reading them runs as a different user from the
+server, that user needs to be in the file's **group** — directory ownership will not do it,
+and neither will a POSIX default ACL, since the ACL is masked by the mode the file is
+created with. The two arrangements that work:
+
+- run the MCP server and its consumer as the same user (the usual case, where the client
+  spawns the server), or
+- make the download directory `setgid` and owned by a group both accounts are in, so saved
+  files inherit that group:
+
+```bash
+sudo install -d -m 2770 -o discord-mcp -g attachments /var/lib/discord-mcp/downloads
+sudo usermod -aG attachments the-consuming-user
+```
 
 Per call: 25 MB per attachment, 50 MB total. **Nothing caps the number of calls** — a
 poisoned context can loop the tool until the volume is full, so point this at a

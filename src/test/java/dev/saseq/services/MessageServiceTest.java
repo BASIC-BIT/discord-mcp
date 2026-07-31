@@ -266,7 +266,7 @@ class MessageServiceTest {
     }
 
     @Test
-    void writeIntoAllowedRootSavesOwnerOnlyFiles(@TempDir Path dir) throws IOException {
+    void writeIntoAllowedRootSavesGroupReadableFiles(@TempDir Path dir) throws IOException {
         Path root = Files.createDirectory(dir.resolve("downloads"));
         if (!root.getFileSystem().supportedFileAttributeViews().contains("posix")) {
             Assumptions.abort("no POSIX file permissions on this host");
@@ -275,11 +275,13 @@ class MessageServiceTest {
         Path saved = messageService.writeIntoAllowedRoot(
                 root, "321", "poster.png", "bytes".getBytes(StandardCharsets.UTF_8));
 
-        // Going through a temp file means these land 0600, not the 0644 a direct create gives.
-        // That is deliberate, so pin it: a refactor back to a direct write would widen every
-        // saved attachment on a shared host without anything failing.
+        // rw-r-----, not createTempFile's 0600 and not a direct write's 0644. Group read is
+        // what makes a shared-group deployment possible at all — nothing about the directory
+        // can grant read on a 0600 file after the fact. Not world-readable, because these are
+        // Discord attachments landing on a possibly shared host.
         assertThat(Files.getPosixFilePermissions(saved))
-                .containsExactlyInAnyOrder(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE);
+                .containsExactlyInAnyOrder(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE,
+                        PosixFilePermission.GROUP_READ);
     }
 
     @Test

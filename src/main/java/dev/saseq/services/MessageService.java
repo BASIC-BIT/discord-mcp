@@ -15,13 +15,13 @@ import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Base64;
 import java.util.List;
 
@@ -582,7 +582,7 @@ public class MessageService {
      * @param attachmentId Optional ID of a specific attachment (if omitted, downloads all).
      * @return A formatted list of the saved file paths.
      */
-    @Tool(name = "download_attachment", description = "Download a message's attachments to the server's allowed file directory (DISCORD_MCP_FILE_ROOT) and return the saved paths. Use get_attachment instead if you only need metadata. Max 25MB per file.")
+    @Tool(name = "download_attachment", description = "Download a message's attachments to the server's download directory (DISCORD_MCP_DOWNLOAD_ROOT) and return the saved paths. Use get_attachment instead if you only need metadata. Max 25MB per file, 50MB per call.")
     public String downloadAttachment(@ToolParam(description = "Discord channel ID") String channelId,
                                      @ToolParam(description = "Discord message ID") String messageId,
                                      @ToolParam(description = "Specific attachment ID (omit to download all)", required = false) String attachmentId) {
@@ -621,15 +621,38 @@ public class MessageService {
 
         assertWithinDownloadLimits(attachments);
 
-        StringBuilder sb = new StringBuilder();
-        sb.append("**Downloaded ").append(attachments.size()).append(" attachment(s) to ")
-                .append(root).append(":**\n");
+        // Per-attachment failures are collected rather than thrown. Throwing on the second of
+        // three would abandon the first: already committed to disk, and its path lost with the
+        // stack — the same partial-result problem the size preflight exists to avoid, just moved
+        // later. Reporting both halves is safe to act on because writes are keyed by attachment
+        // ID, so retrying the call rewrites the same paths instead of accumulating duplicates.
+        StringBuilder saved = new StringBuilder();
+        StringBuilder failed = new StringBuilder();
+        int savedCount = 0;
         for (Message.Attachment attachment : attachments) {
-            byte[] bytes = RemoteFetchGuard.fetch(attachment.getUrl(), MAX_DOWNLOAD_FILE_BYTES, "attachment");
-            Path saved = writeIntoAllowedRoot(root, attachment.getId(), attachment.getFileName(), bytes);
-            sb.append("- `").append(saved).append("` (").append(formatFileSize(bytes.length)).append(")\n");
+            try {
+                byte[] bytes = RemoteFetchGuard.fetch(attachment.getUrl(), MAX_DOWNLOAD_FILE_BYTES, "attachment");
+                Path path = writeIntoAllowedRoot(root, attachment.getId(), attachment.getFileName(), bytes);
+                saved.append("- `").append(path).append("` (").append(formatFileSize(bytes.length)).append(")\n");
+                savedCount++;
+            } catch (RuntimeException e) {
+                failed.append("- `").append(attachment.getFileName()).append("` (ID ")
+                        .append(attachment.getId()).append("): ").append(e.getMessage()).append("\n");
+            }
         }
-        return sb.toString().trim();
+
+        if (savedCount == 0) {
+            throw new IllegalArgumentException("No attachments were downloaded.\n" + failed.toString().trim());
+        }
+
+        StringBuilder result = new StringBuilder();
+        result.append("**Downloaded ").append(savedCount).append(" of ").append(attachments.size())
+                .append(" attachment(s) to ").append(root).append(":**\n").append(saved);
+        if (failed.length() > 0) {
+            result.append("\n**Failed, and not saved. Re-running is safe — it overwrites in place ")
+                    .append("rather than duplicating:**\n").append(failed);
+        }
+        return result.toString().trim();
     }
 
     /**
@@ -702,19 +725,18 @@ public class MessageService {
         }
         Path temporary = null;
         try {
-            // Saved files inherit createTempFile's owner-only mode (0600 on POSIX) rather than
-            // the 0644 a direct create would have produced. Kept on purpose: the MCP client is
-            // normally the same user, so nothing needs the wider mode, and a downloaded file
-            // should not become world-readable on a shared host just because it passed through
-            // a temp file. A consumer running as a different user gets access through ownership
-            // on the root directory, not through the mode on every file in it.
             temporary = Files.createTempFile(root, ".download-", ".part");
             Files.write(temporary, bytes, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+            relaxTempFileMode(temporary);
             try {
                 Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-            } catch (AtomicMoveNotSupportedException e) {
-                // Same directory, so this should not happen; if a filesystem refuses anyway,
-                // a non-atomic replace still beats writing straight over the target.
+            } catch (IOException e) {
+                // Not just AtomicMoveNotSupportedException. Under the ATOMIC_MOVE contract the
+                // other options are "ignored" and replacing an existing target is left
+                // provider-specific, so a provider may refuse with a plain IOException instead.
+                // The default providers all replace — verified on Windows, where the concern is
+                // usually raised — but the guarantee is not in the contract, and a non-atomic
+                // replace is the correct fallback for either refusal.
                 Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING);
             }
             temporary = null;
@@ -731,6 +753,33 @@ public class MessageService {
             }
         }
         return target;
+    }
+
+    /**
+     * Widens a temp file from {@code createTempFile}'s owner-only mode to {@code rw-r-----}.
+     *
+     * <p>{@link Files#createTempFile} deliberately creates 0600, which a direct write would not
+     * have. Left alone, every saved attachment would be readable only by the service account —
+     * and there is no directory-level arrangement that fixes that after the fact. Directory
+     * ownership governs the entry, not the file's contents, and a POSIX default ACL is masked by
+     * the mode the file was created with, so 0600 defeats that too. The only ways out are running
+     * both components as one user or giving the file a group.
+     *
+     * <p>Group-readable rather than world-readable: it makes the shared-group deployment work
+     * (a setgid download directory gives saved files its group) without publishing Discord
+     * attachments to every account on the host. Silently skipped on filesystems without POSIX
+     * permissions, where 0600 was never the behaviour anyway.
+     */
+    private static void relaxTempFileMode(Path temporary) {
+        if (!temporary.getFileSystem().supportedFileAttributeViews().contains("posix")) {
+            return;
+        }
+        try {
+            Files.setPosixFilePermissions(temporary, PosixFilePermissions.fromString("rw-r-----"));
+        } catch (IOException | UnsupportedOperationException e) {
+            // The download is still correct at 0600; a consumer that cannot read it is a
+            // deployment problem to surface there, not a reason to fail the write here.
+        }
     }
 
     static String sanitizeFileName(String fileName) {
