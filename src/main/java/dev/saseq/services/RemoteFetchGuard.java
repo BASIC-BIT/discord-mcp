@@ -1,6 +1,5 @@
 package dev.saseq.services;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
@@ -8,6 +7,9 @@ import java.net.InetAddress;
 import java.net.URI;
 import java.net.URLConnection;
 import java.net.UnknownHostException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 
 /**
  * Shared guard for fetching caller-supplied URLs.
@@ -158,10 +160,15 @@ public final class RemoteFetchGuard {
      * built on that distinction silently stops bounding anything.
      */
     private static byte[] readBounded(InputStream in, int maxBytes, String what) {
-        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-        byte[] chunk = new byte[8192];
+        // Chunks in a list, assembled once — not a ByteArrayOutputStream. BAOS doubles its
+        // internal array as it grows and then toByteArray() copies again, so peak heap reaches
+        // roughly three times the body. This holds the data once plus the final array, matching
+        // what readNBytes did before, which matters because these limits are 50 MB and the
+        // deployment this was written for runs the JVM at a few hundred megabytes.
+        List<byte[]> chunks = new ArrayList<>();
         int total = 0;
         while (true) {
+            byte[] chunk = new byte[CHUNK_BYTES];
             int read;
             try {
                 read = in.read(chunk);
@@ -169,15 +176,25 @@ public final class RemoteFetchGuard {
                 throw new TransferFailedException("Failed to download " + what + " from URL", total);
             }
             if (read < 0) {
-                return buffer.toByteArray();
+                break;
             }
             total += read;
             if (total > maxBytes) {
                 throw new TooLargeException(what + " exceeds the maximum allowed size");
             }
-            buffer.write(chunk, 0, read);
+            chunks.add(read == CHUNK_BYTES ? chunk : Arrays.copyOf(chunk, read));
         }
+
+        byte[] body = new byte[total];
+        int offset = 0;
+        for (byte[] chunk : chunks) {
+            System.arraycopy(chunk, 0, body, offset, chunk.length);
+            offset += chunk.length;
+        }
+        return body;
     }
+
+    private static final int CHUNK_BYTES = 8192;
 
     private static void assertHostIsPublic(String host, String what) {
         InetAddress[] addresses;
