@@ -19,6 +19,7 @@ import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
 import java.util.Base64;
 import java.util.List;
 
@@ -28,8 +29,9 @@ public class MessageService {
     private final JDA jda;
 
     /**
-     * The only directory {@code send_file} may read local paths from. Unset disables local
-     * paths entirely. Package-private so tests can set it without Spring.
+     * The only directory {@code send_file} may read local paths from, and the only one
+     * {@code download_attachment} may write to. Unset disables local paths entirely.
+     * Package-private so tests can set it without Spring.
      */
     @Value("${DISCORD_MCP_FILE_ROOT:}")
     String fileRoot;
@@ -216,8 +218,9 @@ public class MessageService {
     private Path allowedRoot() {
         if (fileRoot == null || fileRoot.isBlank()) {
             throw new IllegalArgumentException(
-                    "Local filePath uploads are disabled. Set DISCORD_MCP_FILE_ROOT to an "
-                            + "allowed directory, or supply fileUrl or base64 fileData instead.");
+                    "DISCORD_MCP_FILE_ROOT is not set, so local file reads and writes are "
+                            + "disabled. Set it to the one directory this server may use. "
+                            + "send_file can still take fileUrl or base64 fileData instead.");
         }
         Path root;
         try {
@@ -535,6 +538,123 @@ public class MessageService {
             sb.append(formatAttachmentDetail(attachment)).append("\n");
         }
         return sb.toString().trim();
+    }
+
+    /**
+     * Downloads a message's attachments into the allowed file directory.
+     *
+     * <p>Deliberately takes IDs rather than a URL. The URLs are resolved here, from Discord,
+     * so this is not a general fetch-anything-to-disk tool and cannot be pointed at the host's
+     * private network. It also sidesteps the reason a caller would want one: Discord CDN links
+     * are signed and expire, so a URL copied out of an earlier tool result is usually dead by
+     * the time anyone tries to use it. Re-resolving from the message is always fresh.
+     *
+     * @param channelId    The ID of the channel containing the message.
+     * @param messageId    The ID of the message to download attachments from.
+     * @param attachmentId Optional ID of a specific attachment (if omitted, downloads all).
+     * @return A formatted list of the saved file paths.
+     */
+    @Tool(name = "download_attachment", description = "Download a message's attachments to the server's allowed file directory (DISCORD_MCP_FILE_ROOT) and return the saved paths. Use get_attachment instead if you only need metadata. Max 25MB per file.")
+    public String downloadAttachment(@ToolParam(description = "Discord channel ID") String channelId,
+                                     @ToolParam(description = "Discord message ID") String messageId,
+                                     @ToolParam(description = "Specific attachment ID (omit to download all)", required = false) String attachmentId) {
+        if (channelId == null || channelId.isEmpty()) {
+            throw new IllegalArgumentException("channelId cannot be null");
+        }
+        if (messageId == null || messageId.isEmpty()) {
+            throw new IllegalArgumentException("messageId cannot be null");
+        }
+
+        // Resolve the root before spending any network calls, so a misconfigured
+        // root fails immediately instead of after downloading 25 MB.
+        Path root = allowedRoot();
+
+        MessageChannel channel = getMessageChannelById(channelId);
+        if (channel == null) {
+            throw new IllegalArgumentException("Channel not found by channelId");
+        }
+        Message message = channel.retrieveMessageById(messageId).complete();
+        if (message == null) {
+            throw new IllegalArgumentException("Message not found by messageId");
+        }
+
+        List<Message.Attachment> attachments = message.getAttachments();
+        if (attachments.isEmpty()) {
+            return "This message has no attachments.";
+        }
+        if (attachmentId != null && !attachmentId.isEmpty()) {
+            attachments = attachments.stream()
+                    .filter(a -> a.getId().equals(attachmentId))
+                    .toList();
+            if (attachments.isEmpty()) {
+                throw new IllegalArgumentException("Attachment not found by attachmentId");
+            }
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("**Downloaded ").append(attachments.size()).append(" attachment(s) to ")
+                .append(root).append(":**\n");
+        long budget = MAX_DOWNLOAD_BUDGET_BYTES;
+        for (Message.Attachment attachment : attachments) {
+            byte[] bytes = RemoteFetchGuard.fetch(attachment.getUrl(), MAX_UPLOAD_BYTES, "attachment");
+            budget -= bytes.length;
+            if (budget < 0) {
+                throw new IllegalArgumentException(
+                        "Message attachments exceed the " + (MAX_DOWNLOAD_BUDGET_BYTES / (1024 * 1024))
+                                + " MB total download limit. Pass attachmentId to fetch them one at a time.");
+            }
+            Path saved = writeIntoAllowedRoot(root, attachment.getId(), attachment.getFileName(), bytes);
+            sb.append("- `").append(saved).append("` (").append(formatFileSize(bytes.length)).append(")\n");
+        }
+        return sb.toString().trim();
+    }
+
+    // One message can carry ten attachments, so the per-file cap alone would allow a
+    // quarter-gigabyte write from a single call. This is a small droplet.
+    private static final long MAX_DOWNLOAD_BUDGET_BYTES = 50L * 1024 * 1024;
+
+    /**
+     * Writes one attachment into the allowed root under a name derived from Discord's.
+     *
+     * <p>The filename comes from whoever uploaded the file, so it is untrusted: it is reduced to
+     * a single path component here rather than resolved, because {@code root.resolve("../x")}
+     * happily escapes. The attachment ID prefix makes the name collision-free without an
+     * overwrite flag — a re-download of the same attachment writes the same bytes to the same
+     * place.
+     */
+    // Package-private so tests can exercise the untrusted-filename cases without a live message.
+    Path writeIntoAllowedRoot(Path root, String attachmentId, String fileName, byte[] bytes) {
+        Path target = root.resolve(attachmentId + "-" + sanitizeFileName(fileName));
+        if (!target.getParent().equals(root)) {
+            // Unreachable given sanitizeFileName, and worth failing loudly if that ever changes.
+            throw new IllegalArgumentException("Refusing to write outside the allowed directory");
+        }
+        try {
+            // Unlink first, then CREATE_NEW: an ordinary truncating write follows a symlink,
+            // so an existing link at this path would redirect the bytes to its target.
+            // deleteIfExists removes the link itself, never what it points at.
+            Files.deleteIfExists(target);
+            Files.write(target, bytes, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+        } catch (IOException e) {
+            throw new IllegalArgumentException("Failed to save attachment: " + e.getMessage());
+        }
+        return target;
+    }
+
+    static String sanitizeFileName(String fileName) {
+        if (fileName == null || fileName.isBlank()) {
+            return "attachment";
+        }
+        // Allowlist, not a blocklist of separators: this has to hold on both POSIX and
+        // Windows, where '\' and ':' are also separators and device names are reserved.
+        String cleaned = fileName.replaceAll("[^A-Za-z0-9._-]", "_");
+        // A leading dot would produce a hidden file; a name of only dots would resolve
+        // to the directory itself.
+        cleaned = cleaned.replaceAll("^\\.+", "");
+        if (cleaned.isBlank()) {
+            return "attachment";
+        }
+        return cleaned.length() > 120 ? cleaned.substring(cleaned.length() - 120) : cleaned;
     }
 
     private String formatAttachmentDetail(Message.Attachment attachment) {

@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.OffsetDateTime;
@@ -136,6 +137,86 @@ class MessageServiceTest {
         String result = messageService.sendFile(CHANNEL_ID, file.toString(), null, null, null, null);
 
         assertThat(result).contains("File sent successfully");
+    }
+
+    @Test
+    void downloadAttachmentRefusesWhenNoRootIsConfigured() {
+        assertThatThrownBy(() -> messageService.downloadAttachment(CHANNEL_ID, "999", null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("DISCORD_MCP_FILE_ROOT");
+    }
+
+    @Test
+    void downloadAttachmentChecksTheRootBeforeTouchingTheNetwork() {
+        messageService.fileRoot = "/does/not/exist";
+
+        // No channel stubbed: reaching Discord at all would throw a different error.
+        assertThatThrownBy(() -> messageService.downloadAttachment(CHANNEL_ID, "999", null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("does not exist or cannot be resolved");
+    }
+
+    @Test
+    void sanitizeFileNameReducesTraversalToASinglePathComponent(@TempDir Path dir) {
+        // The name comes from whoever uploaded the file, so these are the inputs that matter.
+        // The invariant is not "contains no dots" — a literal ".." inside a name is inert once
+        // the separators are gone. It is that the result stays one component directly under the
+        // root, which is what actually stops an escape.
+        for (String hostile : List.of(
+                "../../etc/cron.d/payload",
+                "..\\..\\windows\\system32\\evil.dll",
+                "C:evil.txt",
+                "/etc/shadow",
+                "....//....//passwd",
+                "poster.png\u0000.sh")) {
+            Path resolved = dir.resolve(MessageService.sanitizeFileName(hostile));
+            assertThat(resolved.getParent()).as("sanitizing %s", hostile).isEqualTo(dir);
+            assertThat(resolved.normalize()).as("normalizing %s", hostile).isEqualTo(resolved);
+        }
+
+        assertThat(MessageService.sanitizeFileName("..")).isEqualTo("attachment");
+        assertThat(MessageService.sanitizeFileName(".hidden")).isEqualTo("hidden");
+        assertThat(MessageService.sanitizeFileName("")).isEqualTo("attachment");
+        assertThat(MessageService.sanitizeFileName(null)).isEqualTo("attachment");
+        assertThat(MessageService.sanitizeFileName("poster-2026.png")).isEqualTo("poster-2026.png");
+        // Long names must stay usable, and the extension is the end worth keeping.
+        assertThat(MessageService.sanitizeFileName("x".repeat(200) + ".png")).hasSize(120).endsWith(".png");
+    }
+
+    @Test
+    void writeIntoAllowedRootReplacesASymlinkRatherThanFollowingIt(@TempDir Path dir) throws IOException {
+        Path root = Files.createDirectory(dir.resolve("downloads"));
+        Path secret = Files.writeString(dir.resolve("secret.env"), "DISCORD_TOKEN=hunter2");
+        Path link = root.resolve("123-poster.png");
+        try {
+            Files.createSymbolicLink(link, secret);
+        } catch (IOException | UnsupportedOperationException e) {
+            Assumptions.abort("symlink creation not permitted on this host");
+        }
+        messageService.fileRoot = root.toString();
+
+        Path saved = messageService.writeIntoAllowedRoot(root, "123", "poster.png", "new bytes".getBytes(StandardCharsets.UTF_8));
+
+        assertThat(saved).isEqualTo(link);
+        assertThat(Files.isSymbolicLink(saved)).isFalse();
+        assertThat(Files.readString(saved)).isEqualTo("new bytes");
+        // The whole point: a truncating write would have clobbered the target instead.
+        assertThat(Files.readString(secret)).isEqualTo("DISCORD_TOKEN=hunter2");
+    }
+
+    @Test
+    void writeIntoAllowedRootIsIdempotentForTheSameAttachment(@TempDir Path dir) throws IOException {
+        Path root = Files.createDirectory(dir.resolve("downloads"));
+        messageService.fileRoot = root.toString();
+
+        Path first = messageService.writeIntoAllowedRoot(root, "456", "poster.png", "v1".getBytes(StandardCharsets.UTF_8));
+        Path second = messageService.writeIntoAllowedRoot(root, "456", "poster.png", "v2".getBytes(StandardCharsets.UTF_8));
+
+        assertThat(second).isEqualTo(first);
+        assertThat(Files.readString(second)).isEqualTo("v2");
+        try (var entries = Files.list(root)) {
+            assertThat(entries).hasSize(1);
+        }
     }
 
     private TextChannel stubChannel() {
