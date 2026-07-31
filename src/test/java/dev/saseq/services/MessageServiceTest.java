@@ -19,6 +19,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.time.OffsetDateTime;
 import java.util.List;
 
@@ -218,6 +219,60 @@ class MessageServiceTest {
     }
 
     @Test
+    void downloadAttachmentRefusesARootItCannotWriteTo(@TempDir Path dir) throws IOException {
+        Path root = Files.createDirectory(dir.resolve("downloads"));
+        if (!root.getFileSystem().supportedFileAttributeViews().contains("posix")) {
+            Assumptions.abort("read-only directories are not enforced the same way here");
+        }
+        Files.setPosixFilePermissions(root, PosixFilePermissions.fromString("r-xr-xr-x"));
+        messageService.downloadRoot = root.toString();
+
+        try {
+            // Nothing stubbed: if this reached Discord it would fail differently, which is the
+            // point — a read-only bind mount must be caught before the CDN transfer, not after.
+            assertThatThrownBy(() -> messageService.downloadAttachment(CHANNEL_ID, MESSAGE_ID, null))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("not writable by this process");
+        } finally {
+            Files.setPosixFilePermissions(root, PosixFilePermissions.fromString("rwxr-xr-x"));
+        }
+    }
+
+    @Test
+    void downloadRootRejectsAFilesystemRootAndANonDirectory(@TempDir Path dir) throws IOException {
+        // The refactor that split resolveRoot out kept the FILE_ROOT messages intact; these pin
+        // that the DOWNLOAD_ROOT variable reports against its own name rather than the old one.
+        messageService.downloadRoot = dir.getRoot().toString();
+        assertThatThrownBy(() -> messageService.downloadAttachment(CHANNEL_ID, MESSAGE_ID, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("DISCORD_MCP_DOWNLOAD_ROOT must not be a filesystem root");
+
+        messageService.downloadRoot = Files.writeString(dir.resolve("a-file"), "x").toString();
+        assertThatThrownBy(() -> messageService.downloadAttachment(CHANNEL_ID, MESSAGE_ID, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("DISCORD_MCP_DOWNLOAD_ROOT is not a directory");
+    }
+
+    @Test
+    void sanitizeFileNameBoundsBytesNotCharactersSoNonAsciiNamesStillFit() {
+        // 120 CJK characters is 360 UTF-8 bytes, over ext4's 255-byte NAME_MAX. createTempFile
+        // would succeed (its own name is short) and the rename would then fail ENAMETOOLONG on
+        // a perfectly ordinary upload — only reachable once non-ASCII names were preserved.
+        String longCjk = "写".repeat(200) + ".png";
+        String sanitized = MessageService.sanitizeFileName(longCjk);
+
+        assertThat(sanitized.getBytes(StandardCharsets.UTF_8).length).isLessThanOrEqualTo(200);
+        // Room left for the caller's "<snowflake>-" prefix inside a 255-byte name.
+        assertThat(("123456789012345678-" + sanitized).getBytes(StandardCharsets.UTF_8).length)
+                .isLessThan(255);
+        // The tail is kept, so the extension survives.
+        assertThat(sanitized).endsWith(".png");
+        // ASCII names still get the full budget rather than being cut to the byte count of the
+        // worst case.
+        assertThat(MessageService.sanitizeFileName("x".repeat(300) + ".png")).hasSize(200);
+    }
+
+    @Test
     void downloadAttachmentReportsSavedAndFailedTogether(@TempDir Path dir) throws IOException {
         Path root = Files.createDirectory(dir.resolve("downloads"));
         messageService.downloadRoot = root.toString();
@@ -319,8 +374,9 @@ class MessageServiceTest {
         assertThat(MessageService.sanitizeFileName("nul")).isEqualTo("_nul");
         assertThat(MessageService.sanitizeFileName("LPT1.txt")).isEqualTo("_LPT1.txt");
         assertThat(MessageService.sanitizeFileName("console.png")).isEqualTo("console.png");
-        // Long names must stay usable, and the extension is the end worth keeping.
-        assertThat(MessageService.sanitizeFileName("x".repeat(200) + ".png")).hasSize(120).endsWith(".png");
+        // Long names must stay usable, and the extension is the end worth keeping. The budget is
+        // in bytes now, so an all-ASCII name gets the whole 200 of it.
+        assertThat(MessageService.sanitizeFileName("x".repeat(300) + ".png")).hasSize(200).endsWith(".png");
     }
 
     @Test

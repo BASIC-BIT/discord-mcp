@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
@@ -130,7 +131,9 @@ public class MessageService {
 
         ResolvedFile resolvedFile = resolveFile(filePath, fileUrl, fileData, fileName);
         if (resolvedFile.bytes().length > MAX_UPLOAD_BYTES) {
-            throw new IllegalArgumentException("File exceeds the " + (MAX_UPLOAD_BYTES / (1024 * 1024)) + " MB limit (" + (resolvedFile.bytes().length / (1024 * 1024)) + " MB).");
+            throw new IllegalArgumentException("File exceeds the " + (MAX_UPLOAD_BYTES / (1024 * 1024))
+                    + " MB limit (" + (resolvedFile.bytes().length / (1024 * 1024)) + " MB). Discord's own"
+                    + " ceiling is lower below boost tier 2, so a smaller file may still be rejected there.");
         }
 
         FileUpload fileUpload = FileUpload.fromData(resolvedFile.bytes(), resolvedFile.name());
@@ -256,12 +259,24 @@ public class MessageService {
         // at createTempFile, by which point the whole 100 MB budget may already have been pulled
         // from the CDN to be thrown away. Same reasoning as resolving the root before fetching:
         // spend the cheap check first.
+        Path probe = null;
         try {
-            Files.delete(Files.createTempFile(root, ".writable-", ".probe"));
+            probe = Files.createTempFile(root, ".writable-", ".probe");
         } catch (IOException e) {
             throw new IllegalArgumentException(
                     "DISCORD_MCP_DOWNLOAD_ROOT is not writable by this process: " + root
                             + " (" + e.getMessage() + "). Nothing was downloaded.");
+        } finally {
+            // Cleanup is separate from the diagnosis above on purpose: a failed delete does not
+            // mean the directory is unwritable, and saying so would send someone to fix the
+            // wrong thing. A probe stranded by a SIGKILL between the two calls is inert.
+            if (probe != null) {
+                try {
+                    Files.deleteIfExists(probe);
+                } catch (IOException ignored) {
+                    // Nothing to do, and nothing worth failing the call over.
+                }
+            }
         }
         return root;
     }
@@ -654,7 +669,13 @@ public class MessageService {
         for (Message.Attachment attachment : attachments) {
             index++;
             try {
-                byte[] bytes = RemoteFetchGuard.fetch(attachment.getUrl(), MAX_DOWNLOAD_FILE_BYTES, "attachment");
+                // Hand the guard whichever is smaller: the per-file cap, or what is left of the
+                // per-call budget. Always passing the per-file cap meant the last fetch before
+                // the break could pull a further 50 MB only to discard it, so bytes over the
+                // wire were bounded by budget + per-file cap rather than by the budget this
+                // claims to be. The subtraction never exceeds the budget, so the cast is safe.
+                int allowance = (int) Math.min(MAX_DOWNLOAD_FILE_BYTES, MAX_DOWNLOAD_BUDGET_BYTES - written);
+                byte[] bytes = RemoteFetchGuard.fetch(attachment.getUrl(), allowance, "attachment");
                 // Break, do not throw. A throw here lands in the catch below as an ordinary
                 // per-attachment failure and the loop carries on fetching, which bounds the
                 // bytes actually pulled over the wire by (per-file cap × count) rather than by
@@ -680,7 +701,7 @@ public class MessageService {
                 savedCount++;
             } catch (RuntimeException e) {
                 failed.append("- `").append(attachment.getFileName()).append("` (ID ")
-                        .append(attachment.getId()).append("): ").append(e.getMessage()).append("\n");
+                        .append(attachment.getId()).append("): ").append(reasonOf(e)).append("\n");
             }
         }
 
@@ -714,7 +735,7 @@ public class MessageService {
             if (size > MAX_DOWNLOAD_FILE_BYTES) {
                 throw new IllegalArgumentException(String.format(
                         "Attachment `%s` (ID %s) is %s, over the %d MB per-file download limit.",
-                        attachment.getFileName(), attachment.getId(), formatFileSize(attachment.getSize()),
+                        attachment.getFileName(), attachment.getId(), formatFileSize(size),
                         MAX_DOWNLOAD_FILE_BYTES / (1024 * 1024)));
             }
             total += size;
@@ -816,7 +837,13 @@ public class MessageService {
         // path was not put there by us and is not ours to move aside; let the replace below fail
         // against it, which is what a directory sitting on the target name should do.
         if (Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(target)) {
-            rescued = root.resolve(target.getFileName() + ".replaced");
+            // A unique name per invocation, not "<target>.replaced". Two concurrent calls for
+            // the same attachment would otherwise share one rescue path, and the second could
+            // delete the copy the first is still relying on to restore — turning a safety net
+            // into the way the file disappears. createTempFile then delete leaves the name
+            // reserved to this call; the window is inside our own root and harmless.
+            rescued = Files.createTempFile(root, ".replaced-", ".bak");
+            Files.delete(rescued);
             Files.move(target, rescued, StandardCopyOption.REPLACE_EXISTING);
         }
         try {
@@ -858,6 +885,12 @@ public class MessageService {
      * attachments to every account on the host. Silently skipped on filesystems without POSIX
      * permissions, where 0600 was never the behaviour anyway.
      */
+    /** {@code getMessage()} is null for some RuntimeExceptions, and a literal "null" in a report
+     * the model reads and acts on is worse than a vague noun. */
+    private static String reasonOf(RuntimeException e) {
+        return e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+    }
+
     private static void relaxTempFileMode(Path temporary) {
         if (!temporary.getFileSystem().supportedFileAttributeViews().contains("posix")) {
             return;
@@ -894,12 +927,7 @@ public class MessageService {
         if (cleaned.isBlank()) {
             return "attachment";
         }
-        if (cleaned.length() > 120) {
-            // Keep the tail, since that is where the extension is — then re-strip, because
-            // cutting mid-name can expose a new leading dot or dash. Callers prefix this with
-            // an attachment ID today, but the result should not depend on them doing so.
-            cleaned = cleaned.substring(cleaned.length() - 120).replaceAll("^[.\\-]+", "");
-        }
+        cleaned = truncateToBytes(cleaned, MAX_NAME_BYTES);
         if (cleaned.isBlank()) {
             return "attachment";
         }
@@ -912,6 +940,45 @@ public class MessageService {
 
     private static final java.util.regex.Pattern WINDOWS_DEVICE_NAMES = java.util.regex.Pattern.compile(
             "(?i)(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\\..*)?");
+
+    /**
+     * Byte budget for the sanitized part of a saved filename.
+     *
+     * <p>Bytes, not characters. {@code NAME_MAX} is 255 <i>bytes</i> on ext4, and one CJK
+     * character is three of them — so a 120-character limit permits a 360-byte name, which
+     * {@code createTempFile} accepts (its own name is short) and the rename then rejects with
+     * {@code ENAMETOOLONG}. That combination only became reachable when this method started
+     * preserving non-ASCII names, and it would have failed a perfectly ordinary upload.
+     *
+     * <p>200 leaves room for the caller's {@code <snowflake>-} prefix, which is 20 bytes, plus
+     * the {@code .replaced} suffix the non-atomic fallback may append.
+     */
+    private static final int MAX_NAME_BYTES = 200;
+
+    /**
+     * Trims to a UTF-8 byte budget from the front, never splitting a character.
+     *
+     * <p>Keeps the tail because that is where the extension is, then re-strips leading dots and
+     * dashes: cutting mid-name can expose a new one, and the result should not depend on callers
+     * prefixing an attachment ID even though they do.
+     */
+    private static String truncateToBytes(String value, int maxBytes) {
+        if (value.getBytes(StandardCharsets.UTF_8).length <= maxBytes) {
+            return value;
+        }
+        int[] codePoints = value.codePoints().toArray();
+        int bytes = 0;
+        int start = codePoints.length;
+        while (start > 0) {
+            int width = new String(Character.toChars(codePoints[start - 1])).getBytes(StandardCharsets.UTF_8).length;
+            if (bytes + width > maxBytes) {
+                break;
+            }
+            bytes += width;
+            start--;
+        }
+        return new String(codePoints, start, codePoints.length - start).replaceAll("^[.\\-]+", "");
+    }
 
     private String formatAttachmentDetail(Message.Attachment attachment) {
         return String.format(

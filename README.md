@@ -181,8 +181,9 @@ substitute for one.
 
 Optional. The single directory that `download_attachment` may write saved attachments into.
 
-**Unset (default), downloads are refused.** `download_attachment` is the only tool that
-writes to the filesystem; with this unset it fails immediately and nothing else changes.
+**Unset (default), downloads are refused.** `download_attachment` is the only *tool* that
+writes to the filesystem — the process still writes its own logs — and with this unset it
+fails immediately and nothing else changes.
 
 ```bash
 export DISCORD_MCP_DOWNLOAD_ROOT=/var/lib/discord-mcp/downloads
@@ -213,7 +214,9 @@ created with. The two arrangements that work:
   files inherit that group:
 
 ```bash
-sudo install -d -m 2770 -o discord-mcp -g attachments /var/lib/discord-mcp/downloads
+# 2750, not 2770: the group needs read and traverse to open the 0640 files, not write.
+# A consumer in this group should not be able to delete or replace the archive.
+sudo install -d -m 2750 -o discord-mcp -g attachments /var/lib/discord-mcp/downloads
 sudo usermod -aG attachments the-consuming-user
 ```
 
