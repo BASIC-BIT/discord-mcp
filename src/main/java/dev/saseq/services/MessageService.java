@@ -250,7 +250,20 @@ public class MessageService {
                             + "from DISCORD_MCP_FILE_ROOT on purpose: read and write are "
                             + "different grants.");
         }
-        return resolveRoot(downloadRoot, "DISCORD_MCP_DOWNLOAD_ROOT");
+        Path root = resolveRoot(downloadRoot, "DISCORD_MCP_DOWNLOAD_ROOT");
+        // Existing and writable are different things, and a read-only bind mount is a common
+        // way to get the first without the second. Without this probe the failure surfaces only
+        // at createTempFile, by which point the whole 100 MB budget may already have been pulled
+        // from the CDN to be thrown away. Same reasoning as resolving the root before fetching:
+        // spend the cheap check first.
+        try {
+            Files.delete(Files.createTempFile(root, ".writable-", ".probe"));
+        } catch (IOException e) {
+            throw new IllegalArgumentException(
+                    "DISCORD_MCP_DOWNLOAD_ROOT is not writable by this process: " + root
+                            + " (" + e.getMessage() + "). Nothing was downloaded.");
+        }
+        return root;
     }
 
     private Path resolveRoot(String configured, String variableName) {
@@ -637,16 +650,31 @@ public class MessageService {
         // `size` server-side so the two agree in practice, but the tool advertises the per-call
         // ceiling as a guarantee and metadata is the wrong thing to guarantee it with.
         long written = 0;
+        int index = 0;
         for (Message.Attachment attachment : attachments) {
+            index++;
             try {
                 byte[] bytes = RemoteFetchGuard.fetch(attachment.getUrl(), MAX_DOWNLOAD_FILE_BYTES, "attachment");
-                written += bytes.length;
-                if (written > MAX_DOWNLOAD_BUDGET_BYTES) {
-                    throw new IllegalArgumentException(
-                            "the call passed its " + (MAX_DOWNLOAD_BUDGET_BYTES / (1024 * 1024))
-                                    + " MB total once this was fetched, so it was not saved. Its "
-                                    + "reported size understated the actual body.");
+                // Break, do not throw. A throw here lands in the catch below as an ordinary
+                // per-attachment failure and the loop carries on fetching, which bounds the
+                // bytes actually pulled over the wire by (per-file cap × count) rather than by
+                // the budget — defeating the check this exists to be. The overrun's own bytes
+                // are also left out of the running total: they were discarded, and counting
+                // them would fail every later attachment that would still have fit.
+                if (written + bytes.length > MAX_DOWNLOAD_BUDGET_BYTES) {
+                    failed.append("- `").append(attachment.getFileName()).append("` (ID ")
+                            .append(attachment.getId()).append("): fetching this passed the ")
+                            .append(MAX_DOWNLOAD_BUDGET_BYTES / (1024 * 1024))
+                            .append(" MB per-call total, so it was discarded. Its reported size ")
+                            .append("understated the actual body.\n");
+                    int remaining = attachments.size() - index;
+                    if (remaining > 0) {
+                        failed.append("- ").append(remaining)
+                                .append(" further attachment(s): not attempted, the call was already over budget.\n");
+                    }
+                    break;
                 }
+                written += bytes.length;
                 Path path = writeIntoAllowedRoot(root, attachment.getId(), attachment.getFileName(), bytes);
                 saved.append("- `").append(path).append("` (").append(formatFileSize(bytes.length)).append(")\n");
                 savedCount++;
@@ -752,9 +780,9 @@ public class MessageService {
                 // other options are "ignored" and replacing an existing target is left
                 // provider-specific, so a provider may refuse with a plain IOException instead.
                 // The default providers all replace — verified on Windows, where the concern is
-                // usually raised — but the guarantee is not in the contract, and a non-atomic
-                // replace is the correct fallback for either refusal.
-                Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING);
+                // usually raised — so this path is unreachable in practice, but it is the only
+                // path that can lose an archived file, which is reason enough to make it safe.
+                replaceWithoutAtomicMove(root, temporary, target);
             }
             temporary = null;
         } catch (IOException e) {
@@ -770,6 +798,49 @@ public class MessageService {
             }
         }
         return target;
+    }
+
+    /**
+     * Replaces {@code target} without {@code ATOMIC_MOVE}, without risking the file already there.
+     *
+     * <p>A plain {@code REPLACE_EXISTING} move deletes the target first and then leaves source and
+     * target in an undefined state if it fails partway — so the one path that exists to preserve an
+     * archived copy could destroy it. The existing file is moved aside first and put back if the
+     * replacement does not land, which makes the method's guarantee hold on a provider that refuses
+     * atomic moves as well as on the ones that do not.
+     */
+    private static void replaceWithoutAtomicMove(Path root, Path temporary, Path target) throws IOException {
+        Path rescued = null;
+        // Only a regular file or a symlink is worth rescuing — those are the shapes this tool
+        // writes, so those are the ones that can be a previous download. Anything else at that
+        // path was not put there by us and is not ours to move aside; let the replace below fail
+        // against it, which is what a directory sitting on the target name should do.
+        if (Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(target)) {
+            rescued = root.resolve(target.getFileName() + ".replaced");
+            Files.move(target, rescued, StandardCopyOption.REPLACE_EXISTING);
+        }
+        try {
+            Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException e) {
+            if (rescued != null && !Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
+                try {
+                    Files.move(rescued, target);
+                } catch (IOException restoreFailed) {
+                    // Say where it went rather than let it look like the file simply vanished.
+                    e.addSuppressed(new IOException(
+                            "the previous copy could not be restored and is at " + rescued, restoreFailed));
+                }
+            }
+            throw e;
+        }
+        if (rescued != null) {
+            try {
+                Files.deleteIfExists(rescued);
+            } catch (IOException cleanupFailed) {
+                // The replacement already landed. Failing the call now would report a successful
+                // write as a failure and invite a retry that has nothing left to fix.
+            }
+        }
     }
 
     /**
@@ -804,11 +875,22 @@ public class MessageService {
             return "attachment";
         }
         // Allowlist, not a blocklist of separators: this has to hold on both POSIX and
-        // Windows, where '\' and ':' are also separators and device names are reserved.
-        String cleaned = fileName.replaceAll("[^A-Za-z0-9._-]", "_");
+        // Windows, where '\' and ':' are separators too. Letters and digits are matched by
+        // Unicode category rather than by ASCII range, so `résumé.pdf` and `写真.png` survive
+        // as themselves instead of arriving as `r_sum_.pdf` and `__.png`. That is safe because
+        // no separator, control character or bidi override is a letter or a digit, and because
+        // the caller independently verifies the resolved target is a direct child of the root.
+        StringBuilder sb = new StringBuilder(fileName.length());
+        fileName.codePoints().forEach(cp -> {
+            if (Character.isLetterOrDigit(cp) || cp == '.' || cp == '_' || cp == '-') {
+                sb.appendCodePoint(cp);
+            } else {
+                sb.append('_');
+            }
+        });
         // A leading dot would produce a hidden file; a name of only dots would resolve
         // to the directory itself.
-        cleaned = cleaned.replaceAll("^\\.+", "");
+        String cleaned = sb.toString().replaceAll("^\\.+", "");
         if (cleaned.isBlank()) {
             return "attachment";
         }
@@ -818,8 +900,18 @@ public class MessageService {
             // an attachment ID today, but the result should not depend on them doing so.
             cleaned = cleaned.substring(cleaned.length() - 120).replaceAll("^[.\\-]+", "");
         }
-        return cleaned.isBlank() ? "attachment" : cleaned;
+        if (cleaned.isBlank()) {
+            return "attachment";
+        }
+        // Windows reserves these regardless of extension, and opening `CON.png` there does
+        // something other than open a file. Harmless today because callers prefix an
+        // attachment ID — but the truncation comment above promises not to rely on that, and
+        // a promise that holds for one hazard and not another is worse than no promise.
+        return WINDOWS_DEVICE_NAMES.matcher(cleaned).matches() ? "_" + cleaned : cleaned;
     }
+
+    private static final java.util.regex.Pattern WINDOWS_DEVICE_NAMES = java.util.regex.Pattern.compile(
+            "(?i)(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\\..*)?");
 
     private String formatAttachmentDetail(Message.Attachment attachment) {
         return String.format(

@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.MockedStatic;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -24,7 +25,11 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.when;
 
 class MessageServiceTest {
@@ -213,6 +218,65 @@ class MessageServiceTest {
     }
 
     @Test
+    void downloadAttachmentReportsSavedAndFailedTogether(@TempDir Path dir) throws IOException {
+        Path root = Files.createDirectory(dir.resolve("downloads"));
+        messageService.downloadRoot = root.toString();
+        stubMessageWithAttachments(
+                attachment("1", "good.png", 8, "https://cdn.example/good.png"),
+                attachment("2", "bad.png", 8, "https://cdn.example/bad.png"));
+
+        String result;
+        try (MockedStatic<RemoteFetchGuard> guard = mockStatic(RemoteFetchGuard.class)) {
+            guard.when(() -> RemoteFetchGuard.fetch(eq("https://cdn.example/good.png"), anyInt(), any()))
+                    .thenReturn("poster!!".getBytes(StandardCharsets.UTF_8));
+            guard.when(() -> RemoteFetchGuard.fetch(eq("https://cdn.example/bad.png"), anyInt(), any()))
+                    .thenThrow(new IllegalArgumentException("Failed to download attachment from URL"));
+
+            result = messageService.downloadAttachment(CHANNEL_ID, MESSAGE_ID, null);
+        }
+
+        // The header counts what landed, not what was asked for.
+        assertThat(result).contains("Downloaded 1 of 2 attachment(s) to " + root);
+        assertThat(result).contains("1-good.png");
+        // The failure section is a contract the model reads and acts on, so pin its wording.
+        assertThat(result).contains("Failed, and not saved. Re-running is safe");
+        assertThat(result).contains("`bad.png` (ID 2): Failed to download attachment from URL");
+        assertThat(Files.readString(root.resolve("1-good.png"))).isEqualTo("poster!!");
+        try (var entries = Files.list(root)) {
+            assertThat(entries).as("only the good one, and no .part left over").hasSize(1);
+        }
+    }
+
+    @Test
+    void downloadAttachmentStopsFetchingOnceTheCallIsOverBudget(@TempDir Path dir) throws IOException {
+        Path root = Files.createDirectory(dir.resolve("downloads"));
+        messageService.downloadRoot = root.toString();
+        // Sizes that pass the preflight, bodies that do not. This is the lying-metadata case
+        // the running total exists for.
+        stubMessageWithAttachments(
+                attachment("1", "a.png", 1024, "https://cdn.example/a.png"),
+                attachment("2", "b.png", 1024, "https://cdn.example/b.png"),
+                attachment("3", "c.png", 1024, "https://cdn.example/c.png"));
+        byte[] huge = new byte[60 * 1024 * 1024];
+
+        String result;
+        try (MockedStatic<RemoteFetchGuard> guard = mockStatic(RemoteFetchGuard.class)) {
+            guard.when(() -> RemoteFetchGuard.fetch(any(), anyInt(), any())).thenReturn(huge);
+
+            result = messageService.downloadAttachment(CHANNEL_ID, MESSAGE_ID, null);
+
+            // The point of breaking rather than throwing: a caught throw would let the loop
+            // fetch every remaining attachment, so the bytes actually pulled would be bounded
+            // by per-file-cap x count instead of by the budget.
+            guard.verify(() -> RemoteFetchGuard.fetch(any(), anyInt(), any()), times(2));
+        }
+
+        assertThat(result).contains("Downloaded 1 of 3");
+        assertThat(result).contains("passed the 100 MB per-call total");
+        assertThat(result).contains("1 further attachment(s): not attempted");
+    }
+
+    @Test
     void downloadAttachmentNamesTheFileThatIsTooBig(@TempDir Path dir) throws IOException {
         messageService.downloadRoot = Files.createDirectory(dir.resolve("downloads")).toString();
         // Inbound attachments are not bound by the send-side upload ceiling.
@@ -247,6 +311,14 @@ class MessageServiceTest {
         assertThat(MessageService.sanitizeFileName("")).isEqualTo("attachment");
         assertThat(MessageService.sanitizeFileName(null)).isEqualTo("attachment");
         assertThat(MessageService.sanitizeFileName("poster-2026.png")).isEqualTo("poster-2026.png");
+        // Non-ASCII names survive as themselves rather than becoming a row of underscores.
+        assertThat(MessageService.sanitizeFileName("résumé.pdf")).isEqualTo("résumé.pdf");
+        assertThat(MessageService.sanitizeFileName("写真.png")).isEqualTo("写真.png");
+        // Windows reserves these whatever the extension, so they must not come through intact.
+        assertThat(MessageService.sanitizeFileName("CON.png")).isEqualTo("_CON.png");
+        assertThat(MessageService.sanitizeFileName("nul")).isEqualTo("_nul");
+        assertThat(MessageService.sanitizeFileName("LPT1.txt")).isEqualTo("_LPT1.txt");
+        assertThat(MessageService.sanitizeFileName("console.png")).isEqualTo("console.png");
         // Long names must stay usable, and the extension is the end worth keeping.
         assertThat(MessageService.sanitizeFileName("x".repeat(200) + ".png")).hasSize(120).endsWith(".png");
     }

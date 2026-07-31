@@ -217,20 +217,23 @@ sudo install -d -m 2770 -o discord-mcp -g attachments /var/lib/discord-mcp/downl
 sudo usermod -aG attachments the-consuming-user
 ```
 
-Per call: 50 MB per attachment, 100 MB total. **Nothing caps the number of calls** — a
-poisoned context can loop the tool until the volume is full, so point this at a
-size-limited filesystem rather than at `/`. The Compose default is a plain named volume,
-which lives on the Docker host's root filesystem and is *not* size-limited; give it
-`driver_opts` or a dedicated device if that matters:
+Per call: 50 MB per attachment, 100 MB total. **Nothing caps the number of calls.** The
+hazard is smaller than that sounds — names are keyed by attachment ID, so re-downloading
+the same attachment overwrites in place, and filling a volume needs a stream of *distinct*
+attachments that someone has actually uploaded to Discord under its own rate limits. Still
+worth bounding, since the Compose default is a plain named volume on the Docker host's root
+filesystem with no size limit of its own. Point it at a dedicated device:
 
 ```yaml
 volumes:
   discord-mcp-downloads:
     driver_opts:
-      type: tmpfs          # or a real device
-      device: tmpfs
-      o: size=2g
+      type: ext4
+      device: /dev/disk/by-label/discord-mcp
 ```
+
+A `tmpfs` volume would also bound the size, but it charges it to RAM and empties on every
+restart — which defeats the reason this is a named volume at all.
 
 ## 🔗 Connections
 
