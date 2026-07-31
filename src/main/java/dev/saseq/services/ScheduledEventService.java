@@ -14,6 +14,7 @@ import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.List;
@@ -153,14 +154,50 @@ public class ScheduledEventService {
 
     /** Human list of the fields JDA's manager has already written. */
     private String describeApplied(String name, String description, String scheduledStartTime,
-                                   String location, Integer statusCode) {
+                                   OffsetDateTime endTime, String location, Integer statusCode) {
         List<String> parts = new java.util.ArrayList<>();
         if (name != null && !name.isEmpty()) parts.add("name");
         if (description != null && !description.isEmpty()) parts.add("description");
         if (scheduledStartTime != null && !scheduledStartTime.isEmpty()) parts.add("start time");
+        if (endTime != null) parts.add("end time");
         if (location != null && !location.isEmpty()) parts.add("location");
         if (statusCode != null) parts.add("status");
         return String.join(", ", parts);
+    }
+
+    /**
+     * Works out the end time an edit should apply, which is usually one the caller did not supply.
+     *
+     * <p>Discord stores start and end independently and validates that end is after start, so
+     * moving a dated event's start without its end is rejected outright — the failure the staff
+     * agent hit trying to shift three weekly classes four weeks out. Nothing in the rejection says
+     * the end time is the problem, and the obvious workaround is to delete and recreate the
+     * series, which loses its ID, its subscribers, and its history.
+     *
+     * <p>So an omitted {@code scheduledEndTime} means "keep the duration", not "leave the end
+     * alone": the end moves by the same amount as the start. That is what shifting an event
+     * already means to whoever asked for it. Preserving the elapsed duration rather than the
+     * wall-clock end is deliberate — an event moved across a DST boundary should still run for an
+     * hour, not for fifty-nine minutes or sixty-one.
+     *
+     * @return the end time to set, or {@code null} to leave it untouched
+     */
+    // Package-private so the duration-preserving cases can be tested without a live event.
+    OffsetDateTime resolveEndTime(ScheduledEvent event, String scheduledStartTime, String scheduledEndTime) {
+        if (scheduledEndTime != null && !scheduledEndTime.isEmpty()) {
+            return parseTime(scheduledEndTime);
+        }
+        if (scheduledStartTime == null || scheduledStartTime.isEmpty()) {
+            return null;
+        }
+        OffsetDateTime currentStart = event.getStartTime();
+        OffsetDateTime currentEnd = event.getEndTime();
+        // Stage and voice events carry no end time at all, so there is no duration to preserve
+        // and setting one would invent a constraint the event did not have.
+        if (currentStart == null || currentEnd == null) {
+            return null;
+        }
+        return parseTime(scheduledStartTime).plus(Duration.between(currentStart, currentEnd));
     }
 
     /**
@@ -361,7 +398,8 @@ public class ScheduledEventService {
             @ToolParam(description = "New status: 1=Scheduled, 2=Active (start), 3=Completed, 4=Canceled", required = false) String status,
             @ToolParam(description = "New name", required = false) String name,
             @ToolParam(description = "New description", required = false) String description,
-            @ToolParam(description = "New ISO8601 start time. If the event recurs, its recurrence anchor is moved to match, so the series actually changes rather than snapping back.", required = false) String scheduledStartTime,
+            @ToolParam(description = "New ISO8601 start time. If the event recurs, its recurrence anchor is moved to match, so the series actually changes rather than snapping back. When scheduledEndTime is omitted the end time shifts by the same amount, so the event keeps its current duration.", required = false) String scheduledStartTime,
+            @ToolParam(description = "New ISO8601 end time. Optional. Omit it when moving scheduledStartTime and the end is shifted by the same amount automatically, preserving the current duration — supply it only to change how long the event runs.", required = false) String scheduledEndTime,
             @ToolParam(description = "New location (for External events)", required = false) String location,
             @ToolParam(description = RECURRENCE_PARAM, required = false) String recurrenceRule) {
 
@@ -444,10 +482,13 @@ public class ScheduledEventService {
                             + "Do the recurrence change first, or drop it from this call.");
         }
 
+        OffsetDateTime newEnd = resolveEndTime(event, scheduledStartTime, scheduledEndTime);
+
         var manager = event.getManager();
         if (name != null && !name.isEmpty()) manager.setName(name);
         if (description != null && !description.isEmpty()) manager.setDescription(description);
         if (movingStart) manager.setStartTime(parseTime(scheduledStartTime));
+        if (newEnd != null) manager.setEndTime(newEnd);
         if (location != null && !location.isEmpty()) manager.setLocation(location);
         if (statusCode != null) {
             manager.setStatus(switch (statusCode) {
@@ -468,7 +509,7 @@ public class ScheduledEventService {
         // half landed. Creation can compensate by deleting the event it just made; an edit has
         // nothing equivalent to undo, and the honest report is worth more than a rollback that
         // would itself be a second fallible write.
-        String applied = describeApplied(name, description, scheduledStartTime, location, statusCode);
+        String applied = describeApplied(name, description, scheduledStartTime, newEnd, location, statusCode);
 
         if (clearingRecurrence) {
             patchRecurrence(guild, event, DataObject.empty().putNull("recurrence_rule"), applied);
