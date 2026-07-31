@@ -2,6 +2,7 @@ package dev.saseq.services;
 
 import org.junit.jupiter.api.Test;
 
+import java.io.InputStream;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 
@@ -66,6 +67,50 @@ class RemoteFetchGuardTest {
                 .hasMessageContaining("https");
     }
 
+    @Test
+    void readingStopsOneByteAfterTheAllowanceRatherThanOneChunk() {
+        // Asking for a full chunk regardless of remaining allowance let up to maxBytes + 8191
+        // bytes reach the loop before it noticed, while the caller charges exactly the allowance
+        // for the rejection.
+        CountingStream stream = new CountingStream(new byte[64 * 1024]);
+
+        assertThatThrownBy(() -> RemoteFetchGuard.readBounded(stream, 1000, "attachment"))
+                .isInstanceOf(RemoteFetchGuard.TooLargeException.class);
+
+        assertThat(stream.delivered).isEqualTo(1001);
+    }
+
+    @Test
+    void aBodyExactlyAtTheLimitIsReturnedWhole() {
+        // The boundary the +1 is most likely to get wrong in a future edit. Off the other way and
+        // a 50 MB attachment silently loses its last byte with every other test still green.
+        byte[] body = body(1000);
+
+        assertThat(RemoteFetchGuard.readBounded(new CountingStream(body), 1000, "attachment"))
+                .isEqualTo(body);
+    }
+
+    @Test
+    void aMultiChunkBodyReassemblesByteForByte() {
+        // Spans several 8 KiB chunks with a partial one at the end, so both the full-chunk and
+        // the trimmed-chunk branch of the assembly run.
+        byte[] body = body(20_000);
+
+        assertThat(RemoteFetchGuard.readBounded(new CountingStream(body), 50_000, "attachment"))
+                .isEqualTo(body);
+    }
+
+    @Test
+    void anUnlimitedAllowanceDoesNotOverflowIntoANegativeAllocation() {
+        // Integer.MAX_VALUE is the natural "no limit" value for a future caller. In int
+        // arithmetic maxBytes - total + 1 wraps negative, and the allocation then fails with
+        // NegativeArraySizeException, which explains nothing about what went wrong.
+        byte[] body = body(9000);
+
+        assertThat(RemoteFetchGuard.readBounded(new CountingStream(body), Integer.MAX_VALUE, "attachment"))
+                .isEqualTo(body);
+    }
+
     /** Parses a literal address without touching DNS. */
     private boolean blocked(String literal) {
         try {
@@ -75,27 +120,17 @@ class RemoteFetchGuardTest {
         }
     }
 
-    @Test
-    void readingStopsOneByteAfterTheAllowanceRatherThanOneChunk() throws Exception {
-        // A chunked reader that always asks for a full 8 KiB can pull maxBytes + 8191 before it
-        // notices, while the caller charges only the allowance — so a byte budget spent on
-        // oversized responses overshoots by a chunk per attachment.
-        byte[] body = new byte[64 * 1024];
-        CountingStream stream = new CountingStream(body);
-
-        java.lang.reflect.Method readBounded = RemoteFetchGuard.class.getDeclaredMethod(
-                "readBounded", java.io.InputStream.class, int.class, String.class);
-        readBounded.setAccessible(true);
-
-        assertThatThrownBy(() -> readBounded.invoke(null, stream, 1000, "attachment"))
-                .hasRootCauseInstanceOf(RemoteFetchGuard.TooLargeException.class);
-
-        // 1001, not 1000 + 8192: exactly the one byte needed to prove it is over.
-        assertThat(stream.delivered).isEqualTo(1001);
+    private static byte[] body(int length) {
+        byte[] data = new byte[length];
+        for (int i = 0; i < length; i++) {
+            // Position-dependent, so a misassembled or truncated result cannot match by accident.
+            data[i] = (byte) (i % 251);
+        }
+        return data;
     }
 
-    /** Counts what was actually handed out, which is the thing under test. */
-    private static final class CountingStream extends java.io.InputStream {
+    /** Counts what was actually handed to the reader, which is the thing under test. */
+    private static final class CountingStream extends InputStream {
         private final byte[] data;
         private int position;
         private int delivered;
@@ -106,19 +141,23 @@ class RemoteFetchGuardTest {
 
         @Override
         public int read() {
-            if (position >= data.length) return -1;
+            if (position >= data.length) {
+                return -1;
+            }
             delivered++;
             return data[position++] & 0xFF;
         }
 
         @Override
-        public int read(byte[] target, int off, int len) {
-            if (position >= data.length) return -1;
-            int n = Math.min(len, data.length - position);
-            System.arraycopy(data, position, target, off, n);
-            position += n;
-            delivered += n;
-            return n;
+        public int read(byte[] target, int offset, int length) {
+            if (position >= data.length) {
+                return -1;
+            }
+            int count = Math.min(length, data.length - position);
+            System.arraycopy(data, position, target, offset, count);
+            position += count;
+            delivered += count;
+            return count;
         }
     }
 }

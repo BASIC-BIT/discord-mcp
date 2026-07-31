@@ -159,7 +159,9 @@ public final class RemoteFetchGuard {
      * failure that cost nothing from one that cost 44 MB. Both look identical, and a byte budget
      * built on that distinction silently stops bounding anything.
      */
-    private static byte[] readBounded(InputStream in, int maxBytes, String what) {
+    // Package-private so RemoteFetchGuardTest can call it directly, matching isBlocked above.
+    // Reflection would drop compile-time checking of this signature.
+    static byte[] readBounded(InputStream in, int maxBytes, String what) {
         // Chunks in a list, assembled once — not a ByteArrayOutputStream. BAOS doubles its
         // internal array as it grows and then toByteArray() copies again, so peak heap reaches
         // roughly three times the body. This holds the data once plus the final array, matching
@@ -169,11 +171,19 @@ public final class RemoteFetchGuard {
         int total = 0;
         while (true) {
             // Never ask for more than the allowance leaves, plus the one byte that distinguishes
-            // "exactly at the limit" from "over it". Asking for a full chunk regardless let the
-            // read consume up to maxBytes + 8191 before noticing, and the caller charges only the
-            // allowance for the rejection — so a budget spent on oversized responses overshot by
-            // 8 KiB per attachment. Small, but the point of this counter is to be exact.
-            int want = Math.min(CHUNK_BYTES, maxBytes - total + 1);
+            // "exactly at the limit" from "over it". Asking for a full chunk regardless meant up
+            // to maxBytes + 8191 bytes reached this loop before it noticed, while the caller
+            // charges exactly the allowance for the rejection — so a byte budget spent on
+            // oversized responses drifted by a chunk per attachment.
+            //
+            // This makes the accounting exact, not the bandwidth: HttpURLConnection buffers from
+            // the socket independently of how much is requested here, so what crosses the wire is
+            // not bounded any more tightly than before.
+            //
+            // The long cast matters for maxBytes = Integer.MAX_VALUE, the natural "no limit"
+            // value for a future caller: in int arithmetic that addition wraps negative and the
+            // allocation below fails with NegativeArraySizeException, which explains nothing.
+            int want = (int) Math.min(CHUNK_BYTES, (long) maxBytes - total + 1);
             byte[] chunk = new byte[want];
             int read;
             try {

@@ -267,36 +267,51 @@ public class MessageService {
                     "DISCORD_MCP_DOWNLOAD_ROOT is not writable by this process: " + root
                             + ". Nothing was downloaded.");
         }
-        // Probe both operations a download actually needs, not just the first. Saving a file is
-        // create-then-rename, and an ACL can permit creating children while denying renaming
-        // them — Windows and NFSv4 both express that. Probing only the create would pass such a
-        // directory, then fail at the rename with the attachment already fetched and written,
-        // which is the outcome this preflight exists to prevent.
-        Path probe = null;
+        // Probe every operation saving a download actually performs, not just the first. That is
+        // create, then rename *over an existing file* — re-downloading an attachment replaces its
+        // own copy. Windows and NFSv4 ACLs grant those separately, and can permit creating a
+        // child, or renaming to a fresh name, while denying replacement of an existing entry.
+        // Probing anything less passes such a directory and then fails during the write, with the
+        // attachment already fetched — the outcome this preflight exists to prevent.
+        //
+        // No test covers the failure branch, and none can on POSIX: rename within a directory
+        // needs the same write bit as create, so the split this guards against cannot be
+        // constructed there. It ships unverified on the only platforms where it changes anything.
+        // That is a reason to keep it rather than to drop it for lack of coverage.
+        Path source = null;
+        Path destination = null;
         try {
-            probe = Files.createTempFile(root, ".writable-", ".probe");
-            Path renamed = root.resolve(probe.getFileName() + ".moved");
-            Files.move(probe, renamed, StandardCopyOption.REPLACE_EXISTING);
-            probe = renamed;
+            source = Files.createTempFile(root, ".writable-", ".probe");
+            destination = Files.createTempFile(root, ".writable-", ".probe");
+            Files.move(source, destination, StandardCopyOption.REPLACE_EXISTING);
+            source = null;
         } catch (IOException e) {
             throw new IllegalArgumentException(
-                    "DISCORD_MCP_DOWNLOAD_ROOT does not allow this process to create and rename "
-                            + "files, which saving an attachment requires: " + root
-                            + " (" + e.getMessage() + "). Nothing was downloaded.");
+                    "DISCORD_MCP_DOWNLOAD_ROOT does not allow this process to create files and "
+                            + "rename them over existing ones, which saving an attachment "
+                            + "requires: " + root + " (" + e.getMessage() + "). Nothing was "
+                            + "downloaded.");
         } finally {
-            // Delete stays best-effort, and deliberately does not fail the preflight: a
-            // successful download never deletes anything, so a directory that forbids deletion
-            // still works. Failing here would refuse a working configuration, and a probe
-            // stranded by a SIGKILL between the calls is inert either way.
-            if (probe != null) {
-                try {
-                    Files.deleteIfExists(probe);
-                } catch (IOException ignored) {
-                    // Nothing to do, and nothing worth failing the call over.
-                }
-            }
+            // Cleanup is best-effort and separate from the diagnosis above: a failed delete does
+            // not mean the directory cannot be created in and renamed within, which is what the
+            // probe above establishes directly. A probe stranded by a SIGKILL between the calls
+            // is inert.
+            deleteQuietly(source);
+            deleteQuietly(destination);
         }
         return root;
+    }
+
+    /** Best-effort removal of a scratch file, where failing to clean up is not worth an error. */
+    private static void deleteQuietly(Path path) {
+        if (path == null) {
+            return;
+        }
+        try {
+            Files.deleteIfExists(path);
+        } catch (IOException ignored) {
+            // Nothing to do, and nothing worth failing the call over.
+        }
     }
 
     private Path resolveRoot(String configured, String variableName) {
