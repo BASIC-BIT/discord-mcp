@@ -267,17 +267,27 @@ public class MessageService {
                     "DISCORD_MCP_DOWNLOAD_ROOT is not writable by this process: " + root
                             + ". Nothing was downloaded.");
         }
+        // Probe both operations a download actually needs, not just the first. Saving a file is
+        // create-then-rename, and an ACL can permit creating children while denying renaming
+        // them — Windows and NFSv4 both express that. Probing only the create would pass such a
+        // directory, then fail at the rename with the attachment already fetched and written,
+        // which is the outcome this preflight exists to prevent.
         Path probe = null;
         try {
             probe = Files.createTempFile(root, ".writable-", ".probe");
+            Path renamed = root.resolve(probe.getFileName() + ".moved");
+            Files.move(probe, renamed, StandardCopyOption.REPLACE_EXISTING);
+            probe = renamed;
         } catch (IOException e) {
             throw new IllegalArgumentException(
-                    "DISCORD_MCP_DOWNLOAD_ROOT is not writable by this process: " + root
+                    "DISCORD_MCP_DOWNLOAD_ROOT does not allow this process to create and rename "
+                            + "files, which saving an attachment requires: " + root
                             + " (" + e.getMessage() + "). Nothing was downloaded.");
         } finally {
-            // Cleanup is separate from the diagnosis above on purpose: a failed delete does not
-            // mean the directory is unwritable, and saying so would send someone to fix the
-            // wrong thing. A probe stranded by a SIGKILL between the two calls is inert.
+            // Delete stays best-effort, and deliberately does not fail the preflight: a
+            // successful download never deletes anything, so a directory that forbids deletion
+            // still works. Failing here would refuse a working configuration, and a probe
+            // stranded by a SIGKILL between the calls is inert either way.
             if (probe != null) {
                 try {
                     Files.deleteIfExists(probe);

@@ -168,10 +168,16 @@ public final class RemoteFetchGuard {
         List<byte[]> chunks = new ArrayList<>();
         int total = 0;
         while (true) {
-            byte[] chunk = new byte[CHUNK_BYTES];
+            // Never ask for more than the allowance leaves, plus the one byte that distinguishes
+            // "exactly at the limit" from "over it". Asking for a full chunk regardless let the
+            // read consume up to maxBytes + 8191 before noticing, and the caller charges only the
+            // allowance for the rejection — so a budget spent on oversized responses overshot by
+            // 8 KiB per attachment. Small, but the point of this counter is to be exact.
+            int want = Math.min(CHUNK_BYTES, maxBytes - total + 1);
+            byte[] chunk = new byte[want];
             int read;
             try {
-                read = in.read(chunk);
+                read = in.read(chunk, 0, want);
             } catch (IOException e) {
                 throw new TransferFailedException("Failed to download " + what + " from URL", total);
             }
@@ -182,7 +188,7 @@ public final class RemoteFetchGuard {
             if (total > maxBytes) {
                 throw new TooLargeException(what + " exceeds the maximum allowed size");
             }
-            chunks.add(read == CHUNK_BYTES ? chunk : Arrays.copyOf(chunk, read));
+            chunks.add(read == chunk.length ? chunk : Arrays.copyOf(chunk, read));
         }
 
         byte[] body = new byte[total];

@@ -74,4 +74,51 @@ class RemoteFetchGuardTest {
             throw new AssertionError("not a literal address: " + literal, e);
         }
     }
+
+    @Test
+    void readingStopsOneByteAfterTheAllowanceRatherThanOneChunk() throws Exception {
+        // A chunked reader that always asks for a full 8 KiB can pull maxBytes + 8191 before it
+        // notices, while the caller charges only the allowance — so a byte budget spent on
+        // oversized responses overshoots by a chunk per attachment.
+        byte[] body = new byte[64 * 1024];
+        CountingStream stream = new CountingStream(body);
+
+        java.lang.reflect.Method readBounded = RemoteFetchGuard.class.getDeclaredMethod(
+                "readBounded", java.io.InputStream.class, int.class, String.class);
+        readBounded.setAccessible(true);
+
+        assertThatThrownBy(() -> readBounded.invoke(null, stream, 1000, "attachment"))
+                .hasRootCauseInstanceOf(RemoteFetchGuard.TooLargeException.class);
+
+        // 1001, not 1000 + 8192: exactly the one byte needed to prove it is over.
+        assertThat(stream.delivered).isEqualTo(1001);
+    }
+
+    /** Counts what was actually handed out, which is the thing under test. */
+    private static final class CountingStream extends java.io.InputStream {
+        private final byte[] data;
+        private int position;
+        private int delivered;
+
+        CountingStream(byte[] data) {
+            this.data = data;
+        }
+
+        @Override
+        public int read() {
+            if (position >= data.length) return -1;
+            delivered++;
+            return data[position++] & 0xFF;
+        }
+
+        @Override
+        public int read(byte[] target, int off, int len) {
+            if (position >= data.length) return -1;
+            int n = Math.min(len, data.length - position);
+            System.arraycopy(data, position, target, off, n);
+            position += n;
+            delivered += n;
+            return n;
+        }
+    }
 }
