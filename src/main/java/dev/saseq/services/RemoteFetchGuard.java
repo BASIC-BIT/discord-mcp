@@ -56,6 +56,21 @@ public final class RemoteFetchGuard {
     }
 
     /**
+     * The body was larger than the caller allowed.
+     *
+     * <p>Distinguishable from every other failure on purpose. A caller running a byte budget
+     * across several fetches needs to tell "this response was too big, and reading it spent the
+     * allowance" from "the host was unreachable, and it spent nothing" — the two have opposite
+     * consequences for what is left to spend. String-matching the message would work and would
+     * break the first time anyone reworded it.
+     */
+    public static class TooLargeException extends IllegalArgumentException {
+        TooLargeException(String message) {
+            super(message);
+        }
+    }
+
+    /**
      * Fetch a caller-supplied URL with SSRF protection and a size ceiling.
      *
      * @param url      the caller-supplied URL
@@ -101,7 +116,7 @@ public final class RemoteFetchGuard {
                 }
                 byte[] data = in.readNBytes(maxBytes + 1);
                 if (data.length > maxBytes) {
-                    throw new IllegalArgumentException(what + " exceeds the maximum allowed size");
+                    throw new TooLargeException(what + " exceeds the maximum allowed size");
                 }
                 return data;
             }

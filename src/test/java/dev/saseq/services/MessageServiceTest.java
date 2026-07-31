@@ -225,6 +225,12 @@ class MessageServiceTest {
             Assumptions.abort("read-only directories are not enforced the same way here");
         }
         Files.setPosixFilePermissions(root, PosixFilePermissions.fromString("r-xr-xr-x"));
+        // root ignores the mode bits, so this asserts nothing when tests run as root — which
+        // is exactly what happens in a container-based build.
+        if (Files.isWritable(root)) {
+            Files.setPosixFilePermissions(root, PosixFilePermissions.fromString("rwxr-xr-x"));
+            Assumptions.abort("running as a user that bypasses directory permissions");
+        }
         messageService.downloadRoot = root.toString();
 
         try {
@@ -303,32 +309,78 @@ class MessageServiceTest {
     }
 
     @Test
-    void downloadAttachmentStopsFetchingOnceTheCallIsOverBudget(@TempDir Path dir) throws IOException {
+    void downloadAttachmentStopsFetchingOnceTheCallsBudgetIsSpent(@TempDir Path dir) throws IOException {
         Path root = Files.createDirectory(dir.resolve("downloads"));
         messageService.downloadRoot = root.toString();
-        // Sizes that pass the preflight, bodies that do not. This is the lying-metadata case
-        // the running total exists for.
+        // Sizes that pass the preflight, bodies that do not — the lying-metadata case the
+        // running total exists for. Three attachments, each claiming 1 KB.
         stubMessageWithAttachments(
                 attachment("1", "a.png", 1024, "https://cdn.example/a.png"),
                 attachment("2", "b.png", 1024, "https://cdn.example/b.png"),
                 attachment("3", "c.png", 1024, "https://cdn.example/c.png"));
-        byte[] huge = new byte[60 * 1024 * 1024];
 
-        String result;
         try (MockedStatic<RemoteFetchGuard> guard = mockStatic(RemoteFetchGuard.class)) {
-            guard.when(() -> RemoteFetchGuard.fetch(any(), anyInt(), any())).thenReturn(huge);
+            // Honour the guard's real contract: it never returns more than maxBytes, it throws.
+            // The previous version of this test returned 60 MB for a 40 MB allowance, which the
+            // real guard cannot do — so it was asserting behaviour production could not reach.
+            guard.when(() -> RemoteFetchGuard.fetch(any(), anyInt(), any()))
+                    .thenThrow(new RemoteFetchGuard.TooLargeException("attachment exceeds the maximum allowed size"));
 
-            result = messageService.downloadAttachment(CHANNEL_ID, MESSAGE_ID, null);
+            assertThatThrownBy(() -> messageService.downloadAttachment(CHANNEL_ID, MESSAGE_ID, null))
+                    .isInstanceOf(IllegalArgumentException.class);
 
-            // The point of breaking rather than throwing: a caught throw would let the loop
-            // fetch every remaining attachment, so the bytes actually pulled would be bounded
-            // by per-file-cap x count instead of by the budget.
+            // Two fetches, not three: each rejection charges its allowance to the budget, so the
+            // 100 MB total is spent after two 50 MB attempts and the third is never requested.
+            // Counting only bytes *kept* would leave the total at zero and fetch all three.
             guard.verify(() -> RemoteFetchGuard.fetch(any(), anyInt(), any()), times(2));
         }
+    }
 
-        assertThat(result).contains("Downloaded 1 of 3");
-        assertThat(result).contains("passed the 100 MB per-call total");
-        assertThat(result).contains("1 further attachment(s): not attempted");
+    @Test
+    void downloadAttachmentChargesRejectedBodiesToTheBudget(@TempDir Path dir) throws IOException {
+        Path root = Files.createDirectory(dir.resolve("downloads"));
+        messageService.downloadRoot = root.toString();
+        stubMessageWithAttachments(
+                attachment("1", "a.png", 1024, "https://cdn.example/a.png"),
+                attachment("2", "b.png", 1024, "https://cdn.example/b.png"),
+                attachment("3", "c.png", 1024, "https://cdn.example/c.png"));
+
+        try (MockedStatic<RemoteFetchGuard> guard = mockStatic(RemoteFetchGuard.class)) {
+            guard.when(() -> RemoteFetchGuard.fetch(any(), anyInt(), any()))
+                    .thenThrow(new RemoteFetchGuard.TooLargeException("attachment exceeds the maximum allowed size"));
+
+            assertThatThrownBy(() -> messageService.downloadAttachment(CHANNEL_ID, MESSAGE_ID, null))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("No attachments were downloaded")
+                    // The per-file limit bound the first two; the message says which limit it was.
+                    .hasMessageContaining("the per-file limit")
+                    // The third was never attempted, and the reason names the budget, not the file.
+                    .hasMessageContaining("1 further attachment(s): not attempted")
+                    .hasMessageContaining("100 MB total was already spent");
+        }
+    }
+
+    @Test
+    void anOrdinaryFetchFailureDoesNotChargeTheBudget(@TempDir Path dir) throws IOException {
+        Path root = Files.createDirectory(dir.resolve("downloads"));
+        messageService.downloadRoot = root.toString();
+        stubMessageWithAttachments(
+                attachment("1", "a.png", 1024, "https://cdn.example/a.png"),
+                attachment("2", "b.png", 1024, "https://cdn.example/b.png"),
+                attachment("3", "c.png", 1024, "https://cdn.example/c.png"));
+
+        try (MockedStatic<RemoteFetchGuard> guard = mockStatic(RemoteFetchGuard.class)) {
+            // A 404 or an unreachable host spends no meaningful bandwidth, so all three are
+            // still attempted. Charging the allowance for these would cut a call short over
+            // failures that cost nothing.
+            guard.when(() -> RemoteFetchGuard.fetch(any(), anyInt(), any()))
+                    .thenThrow(new IllegalArgumentException("Failed to download attachment from URL"));
+
+            assertThatThrownBy(() -> messageService.downloadAttachment(CHANNEL_ID, MESSAGE_ID, null))
+                    .isInstanceOf(IllegalArgumentException.class);
+
+            guard.verify(() -> RemoteFetchGuard.fetch(any(), anyInt(), any()), times(3));
+        }
     }
 
     @Test

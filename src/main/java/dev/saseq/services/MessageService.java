@@ -259,6 +259,14 @@ public class MessageService {
         // at createTempFile, by which point the whole 100 MB budget may already have been pulled
         // from the CDN to be thrown away. Same reasoning as resolving the root before fetching:
         // spend the cheap check first.
+        // Cheap check first: it costs no file at all, and catches the ordinary permissions case
+        // so the probe below only runs where it might actually tell us something new. isWritable
+        // alone is not enough — it can report true for a read-only bind mount.
+        if (!Files.isWritable(root)) {
+            throw new IllegalArgumentException(
+                    "DISCORD_MCP_DOWNLOAD_ROOT is not writable by this process: " + root
+                            + ". Nothing was downloaded.");
+        }
         Path probe = null;
         try {
             probe = Files.createTempFile(root, ".writable-", ".probe");
@@ -661,45 +669,50 @@ public class MessageService {
         StringBuilder saved = new StringBuilder();
         StringBuilder failed = new StringBuilder();
         int savedCount = 0;
-        // Counts bytes actually received, not the sizes the preflight trusted. Discord computes
-        // `size` server-side so the two agree in practice, but the tool advertises the per-call
-        // ceiling as a guarantee and metadata is the wrong thing to guarantee it with.
-        long written = 0;
+        // Bytes *attempted*, not bytes kept. Counting only what was kept cannot bound anything:
+        // the guard rejects an over-allowance body by throwing, so a rejected fetch consumed the
+        // wire and left the running total untouched, and the next attachment would be handed the
+        // same allowance again. Ten attachments understating their size would each pull the
+        // per-file cap before being rejected — the half-gigabyte call this budget exists to rule
+        // out. Charging the allowance for a rejection is what makes the budget a real ceiling.
+        long attempted = 0;
         int index = 0;
         for (Message.Attachment attachment : attachments) {
             index++;
+            long remainingBudget = MAX_DOWNLOAD_BUDGET_BYTES - attempted;
+            if (remainingBudget <= 0) {
+                // Checked before computing an allowance, so the guard is never called with zero
+                // — that would fail with its generic "exceeds the maximum allowed size", which
+                // blames the file when the call budget is what ran out.
+                failed.append("- ").append(attachments.size() - index + 1)
+                        .append(" further attachment(s): not attempted, the call's ")
+                        .append(MAX_DOWNLOAD_BUDGET_BYTES / (1024 * 1024))
+                        .append(" MB total was already spent.\n");
+                break;
+            }
+            int allowance = (int) Math.min(MAX_DOWNLOAD_FILE_BYTES, remainingBudget);
             try {
-                // Hand the guard whichever is smaller: the per-file cap, or what is left of the
-                // per-call budget. Always passing the per-file cap meant the last fetch before
-                // the break could pull a further 50 MB only to discard it, so bytes over the
-                // wire were bounded by budget + per-file cap rather than by the budget this
-                // claims to be. The subtraction never exceeds the budget, so the cast is safe.
-                int allowance = (int) Math.min(MAX_DOWNLOAD_FILE_BYTES, MAX_DOWNLOAD_BUDGET_BYTES - written);
                 byte[] bytes = RemoteFetchGuard.fetch(attachment.getUrl(), allowance, "attachment");
-                // Break, do not throw. A throw here lands in the catch below as an ordinary
-                // per-attachment failure and the loop carries on fetching, which bounds the
-                // bytes actually pulled over the wire by (per-file cap × count) rather than by
-                // the budget — defeating the check this exists to be. The overrun's own bytes
-                // are also left out of the running total: they were discarded, and counting
-                // them would fail every later attachment that would still have fit.
-                if (written + bytes.length > MAX_DOWNLOAD_BUDGET_BYTES) {
-                    failed.append("- `").append(attachment.getFileName()).append("` (ID ")
-                            .append(attachment.getId()).append("): fetching this passed the ")
-                            .append(MAX_DOWNLOAD_BUDGET_BYTES / (1024 * 1024))
-                            .append(" MB per-call total, so it was discarded. Its reported size ")
-                            .append("understated the actual body.\n");
-                    int remaining = attachments.size() - index;
-                    if (remaining > 0) {
-                        failed.append("- ").append(remaining)
-                                .append(" further attachment(s): not attempted, the call was already over budget.\n");
-                    }
-                    break;
-                }
-                written += bytes.length;
+                attempted += bytes.length;
                 Path path = writeIntoAllowedRoot(root, attachment.getId(), attachment.getFileName(), bytes);
                 saved.append("- `").append(path).append("` (").append(formatFileSize(bytes.length)).append(")\n");
                 savedCount++;
+            } catch (RemoteFetchGuard.TooLargeException e) {
+                // The body was read up to the allowance before being rejected, so that bandwidth
+                // is spent whether or not anything reached disk. Say which limit bound it: the
+                // per-file cap and "the rest of this call's budget" are different problems with
+                // different fixes, and the guard's own message cannot tell them apart.
+                attempted += allowance;
+                failed.append("- `").append(attachment.getFileName()).append("` (ID ")
+                        .append(attachment.getId()).append("): body exceeded the ")
+                        .append(allowance / (1024 * 1024)).append(" MB allowed for it")
+                        .append(allowance < MAX_DOWNLOAD_FILE_BYTES
+                                ? " — the remainder of this call's budget. Fetch it on its own."
+                                : ", the per-file limit. Its reported size understated the body.")
+                        .append("\n");
             } catch (RuntimeException e) {
+                // Everything else — unreachable host, 404, refused scheme — spent no meaningful
+                // bandwidth, so it does not charge the budget.
                 failed.append("- `").append(attachment.getFileName()).append("` (ID ")
                         .append(attachment.getId()).append("): ").append(reasonOf(e)).append("\n");
             }
@@ -786,7 +799,10 @@ public class MessageService {
     Path writeIntoAllowedRoot(Path root, String attachmentId, String fileName, byte[] bytes) {
         Path target = root.resolve(attachmentId + "-" + sanitizeFileName(fileName));
         if (!target.getParent().equals(root)) {
-            // Unreachable given sanitizeFileName, and worth failing loudly if that ever changes.
+            // Not merely a backstop for sanitizeFileName: attachmentId is interpolated straight
+            // in, unsanitized. It is a Discord snowflake today, so it cannot contain a separator
+            // — this check is what makes that an assumption the code verifies rather than one it
+            // relies on, and it matters most for the second caller the javadoc above anticipates.
             throw new IllegalArgumentException("Refusing to write outside the allowed directory");
         }
         Path temporary = null;
@@ -885,12 +901,6 @@ public class MessageService {
      * attachments to every account on the host. Silently skipped on filesystems without POSIX
      * permissions, where 0600 was never the behaviour anyway.
      */
-    /** {@code getMessage()} is null for some RuntimeExceptions, and a literal "null" in a report
-     * the model reads and acts on is worse than a vague noun. */
-    private static String reasonOf(RuntimeException e) {
-        return e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
-    }
-
     private static void relaxTempFileMode(Path temporary) {
         if (!temporary.getFileSystem().supportedFileAttributeViews().contains("posix")) {
             return;
@@ -901,6 +911,16 @@ public class MessageService {
             // The download is still correct at 0600; a consumer that cannot read it is a
             // deployment problem to surface there, not a reason to fail the write here.
         }
+    }
+
+    /**
+     * A reportable reason for a failure.
+     *
+     * <p>{@code getMessage()} is null for some RuntimeExceptions, and a literal "null" in text the
+     * model reads and acts on is worse than a vague noun.
+     */
+    private static String reasonOf(RuntimeException e) {
+        return e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
     }
 
     static String sanitizeFileName(String fileName) {
@@ -950,8 +970,8 @@ public class MessageService {
      * {@code ENAMETOOLONG}. That combination only became reachable when this method started
      * preserving non-ASCII names, and it would have failed a perfectly ordinary upload.
      *
-     * <p>200 leaves room for the caller's {@code <snowflake>-} prefix, which is 20 bytes, plus
-     * the {@code .replaced} suffix the non-atomic fallback may append.
+     * <p>200 leaves room for the caller's {@code <snowflake>-} prefix, which is 20 bytes, and
+     * keeps the total comfortably inside 255 without depending on that prefix's exact length.
      */
     private static final int MAX_NAME_BYTES = 200;
 
