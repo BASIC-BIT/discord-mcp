@@ -164,6 +164,11 @@ class RemoteFetchGuardTest {
 
         @Override
         public int read(byte[] target, int offset, int length) {
+            // InputStream specifies 0 for a zero-length request, even at EOF. Not reachable
+            // through readBounded, which always asks for at least one byte.
+            if (length == 0) {
+                return 0;
+            }
             if (position >= data.length) {
                 return -1;
             }

@@ -851,14 +851,9 @@ public class MessageService {
         } catch (IOException e) {
             throw new IllegalArgumentException("Failed to save attachment: " + e.getMessage());
         } finally {
-            if (temporary != null) {
-                try {
-                    Files.deleteIfExists(temporary);
-                } catch (IOException ignored) {
-                    // Best effort. A leftover .part file is inert and better than masking
-                    // the real failure being thrown above.
-                }
-            }
+            // Best effort. A leftover .part file is inert and better than masking the real
+            // failure being thrown above.
+            deleteQuietly(temporary);
         }
         return target;
     }

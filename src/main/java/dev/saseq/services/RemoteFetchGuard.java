@@ -159,12 +159,16 @@ public final class RemoteFetchGuard {
      * failure that cost nothing from one that cost 44 MB. Both look identical, and a byte budget
      * built on that distinction silently stops bounding anything.
      *
-     * @param maxBytes must be non-negative; a negative allowance fails on the allocation rather
-     *                 than raising {@link TooLargeException}
+     * @param maxBytes the ceiling, which must be non-negative
      */
-    // Package-private so RemoteFetchGuardTest can call it directly, matching isBlocked above.
-    // Reflection would drop compile-time checking of this signature.
+    // Package-private so RemoteFetchGuardTest can call it directly, as it already does with
+    // isBlocked. Reflection would drop compile-time checking of this signature.
     static byte[] readBounded(InputStream in, int maxBytes, String what) {
+        if (maxBytes < 0) {
+            // Cheaper than the NegativeArraySizeException the allocation below would raise, and
+            // it names the actual problem. Unreachable from either caller today.
+            throw new IllegalArgumentException("maxBytes must be non-negative, was " + maxBytes);
+        }
         // Chunks in a list, assembled once — not a ByteArrayOutputStream. BAOS doubles its
         // internal array as it grows and then toByteArray() copies again, so peak heap reaches
         // roughly three times the body. This holds the data once plus the final array, matching
