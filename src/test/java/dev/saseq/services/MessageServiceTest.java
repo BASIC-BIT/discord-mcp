@@ -171,17 +171,17 @@ class MessageServiceTest {
     @Test
     void downloadAttachmentRejectsAnOversizedSetBeforeFetchingAnything(@TempDir Path dir) throws IOException {
         messageService.downloadRoot = Files.createDirectory(dir.resolve("downloads")).toString();
-        // Three 20 MB files: each is under the per-file cap, together they are over the
+        // Three 40 MB files: each is under the per-file cap, together they are over the
         // per-call one. The URLs are unreachable on purpose — if anything is fetched, the
         // failure will not be the one asserted here.
         stubMessageWithAttachments(
-                attachment("1", "a.png", 20 * 1024 * 1024),
-                attachment("2", "b.png", 20 * 1024 * 1024),
-                attachment("3", "c.png", 20 * 1024 * 1024));
+                attachment("1", "a.png", 40 * 1024 * 1024),
+                attachment("2", "b.png", 40 * 1024 * 1024),
+                attachment("3", "c.png", 40 * 1024 * 1024));
 
         assertThatThrownBy(() -> messageService.downloadAttachment(CHANNEL_ID, MESSAGE_ID, null))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("over the 50 MB per-call download limit");
+                .hasMessageContaining("over the 100 MB per-call download limit");
 
         try (var entries = Files.list(Path.of(messageService.downloadRoot))) {
             assertThat(entries).as("nothing written before the limit was enforced").isEmpty();
@@ -189,10 +189,34 @@ class MessageServiceTest {
     }
 
     @Test
+    void downloadAttachmentCollectsEveryFailureAndThrowsWhenNothingSaved(@TempDir Path dir) throws IOException {
+        Path root = Files.createDirectory(dir.resolve("downloads"));
+        messageService.downloadRoot = root.toString();
+        // http:// is refused by RemoteFetchGuard on scheme alone, so this drives the collection
+        // loop and the savedCount == 0 throw without touching the network.
+        stubMessageWithAttachments(
+                attachment("1", "a.png", 1024, "http://cdn.example/a.png"),
+                attachment("2", "b.png", 1024, "http://cdn.example/b.png"));
+
+        assertThatThrownBy(() -> messageService.downloadAttachment(CHANNEL_ID, MESSAGE_ID, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("No attachments were downloaded")
+                // Both are named with their own reason, rather than the first failure aborting
+                // the rest — that is the whole point of collecting instead of throwing.
+                .hasMessageContaining("(ID 1)")
+                .hasMessageContaining("(ID 2)")
+                .hasMessageContaining("https scheme");
+
+        try (var entries = Files.list(root)) {
+            assertThat(entries).as("no .part files left behind by failed fetches").isEmpty();
+        }
+    }
+
+    @Test
     void downloadAttachmentNamesTheFileThatIsTooBig(@TempDir Path dir) throws IOException {
         messageService.downloadRoot = Files.createDirectory(dir.resolve("downloads")).toString();
-        // Inbound attachments are not bound by the 25 MB bot upload limit.
-        stubMessageWithAttachments(attachment("7", "huge-poster.png", 40 * 1024 * 1024));
+        // Inbound attachments are not bound by the send-side upload ceiling.
+        stubMessageWithAttachments(attachment("7", "huge-poster.png", 80 * 1024 * 1024));
 
         assertThatThrownBy(() -> messageService.downloadAttachment(CHANNEL_ID, MESSAGE_ID, null))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -237,7 +261,6 @@ class MessageServiceTest {
         } catch (IOException | UnsupportedOperationException e) {
             Assumptions.abort("symlink creation not permitted on this host");
         }
-        messageService.fileRoot = root.toString();
 
         Path saved = messageService.writeIntoAllowedRoot(root, "123", "poster.png", "new bytes".getBytes(StandardCharsets.UTF_8));
 
@@ -308,10 +331,17 @@ class MessageServiceTest {
     }
 
     private Message.Attachment attachment(String id, String fileName, int size) {
+        return attachment(id, fileName, size, null);
+    }
+
+    private Message.Attachment attachment(String id, String fileName, int size, String url) {
         Message.Attachment attachment = mock(Message.Attachment.class);
         when(attachment.getId()).thenReturn(id);
         when(attachment.getFileName()).thenReturn(fileName);
         when(attachment.getSize()).thenReturn(size);
+        if (url != null) {
+            when(attachment.getUrl()).thenReturn(url);
+        }
         return attachment;
     }
 

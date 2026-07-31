@@ -56,8 +56,15 @@ docker run -d -i \
   -e SPRING_PROFILES_ACTIVE \
   -e DISCORD_TOKEN \
   -e DISCORD_GUILD_ID \
+  -e DISCORD_MCP_DOWNLOAD_ROOT \
+  -v discord-mcp-downloads:/var/lib/discord-mcp/downloads \
   saseq/discord-mcp:latest
 ```
+
+> [!TIP]
+> The `-e DISCORD_MCP_DOWNLOAD_ROOT` and `-v` lines are only needed for `download_attachment`.
+> Leave them off and that tool refuses; nothing else changes. The named volume is what keeps
+> saved attachments across `docker rm` — a container-local path loses them on recreate.
 
 Default MCP endpoint URL (HTTP profile): `http://localhost:8085/mcp`
 
@@ -141,6 +148,8 @@ java -jar /absolute/path/to/discord-mcp-1.0.0.jar
 
 Default MCP endpoint URL (HTTP profile): `http://localhost:8085/mcp`
 
+</details>
+
 ## 🔒 Security notes
 
 ### `DISCORD_MCP_FILE_ROOT`
@@ -208,11 +217,20 @@ sudo install -d -m 2770 -o discord-mcp -g attachments /var/lib/discord-mcp/downl
 sudo usermod -aG attachments the-consuming-user
 ```
 
-Per call: 25 MB per attachment, 50 MB total. **Nothing caps the number of calls** — a
+Per call: 50 MB per attachment, 100 MB total. **Nothing caps the number of calls** — a
 poisoned context can loop the tool until the volume is full, so point this at a
-size-limited filesystem rather than at `/`.
+size-limited filesystem rather than at `/`. The Compose default is a plain named volume,
+which lives on the Docker host's root filesystem and is *not* size-limited; give it
+`driver_opts` or a dedicated device if that matters:
 
-</details>
+```yaml
+volumes:
+  discord-mcp-downloads:
+    driver_opts:
+      type: tmpfs          # or a real device
+      device: tmpfs
+      o: size=2g
+```
 
 ## 🔗 Connections
 
@@ -427,9 +445,9 @@ mvn -Dtest=DiscordLiveIntegrationTest test
 
 #### Message Management
 - [`send_message`](): Send a message to a specific channel
-- [`send_file`](): Send a file (attachment) to a specific channel via local path, URL, or base64, with an optional message (max 25MB). Local `filePath` uploads require [`DISCORD_MCP_FILE_ROOT`](#-security-notes)
+- [`send_file`](): Send a file (attachment) to a specific channel via local path, URL, or base64, with an optional message (max 50MB, Discord-boost dependent). Local `filePath` uploads require [`DISCORD_MCP_FILE_ROOT`](#-security-notes)
 - [`get_attachment`](): Get attachment metadata (filename, size, content type, URLs) from a specific message, without downloading
-- [`download_attachment`](): Download a message's attachments to disk and return the saved paths (max 25MB each, 50MB per call). Requires [`DISCORD_MCP_DOWNLOAD_ROOT`](#-security-notes)
+- [`download_attachment`](): Download a message's attachments to disk and return the saved paths (max 50MB each, 100MB per call). Requires [`DISCORD_MCP_DOWNLOAD_ROOT`](#-security-notes)
 - [`edit_message`](): Edit a message from a specific channel
 - [`delete_message`](): Delete a message from a specific channel
 - [`read_messages`](): Read message history from a specific channel (includes author IDs, attachment metadata, supports `count` 1-100 and optional cursor: `before` or `after` or `around`)

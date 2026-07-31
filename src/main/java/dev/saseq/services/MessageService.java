@@ -112,7 +112,7 @@ public class MessageService {
      * @param message   Optional text content to accompany the file.
      * @return A confirmation message with a link to the sent message.
      */
-    @Tool(name = "send_file", description = "Send a file (attachment) to a specific channel. Provide the file as a local filePath OR a direct fileUrl OR base64 fileData (with fileName). Optionally include a text message. Max 25MB")
+    @Tool(name = "send_file", description = "Send a file (attachment) to a specific channel. Provide the file as a local filePath OR a direct fileUrl OR base64 fileData (with fileName). Optionally include a text message. Max 50MB — Discord accepts that only on boosted guilds; on an unboosted one it caps at 25MB and rejects larger uploads itself.")
     public String sendFile(@ToolParam(description = "Discord channel ID") String channelId,
                            @ToolParam(description = "Absolute path to a local file to upload", required = false) String filePath,
                            @ToolParam(description = "Direct URL to a file to upload (alternative to filePath)", required = false) String fileUrl,
@@ -130,7 +130,7 @@ public class MessageService {
 
         ResolvedFile resolvedFile = resolveFile(filePath, fileUrl, fileData, fileName);
         if (resolvedFile.bytes().length > MAX_UPLOAD_BYTES) {
-            throw new IllegalArgumentException("File exceeds 25 MB limit (" + (resolvedFile.bytes().length / (1024 * 1024)) + " MB). Discord rejects larger uploads for standard bots.");
+            throw new IllegalArgumentException("File exceeds the " + (MAX_UPLOAD_BYTES / (1024 * 1024)) + " MB limit (" + (resolvedFile.bytes().length / (1024 * 1024)) + " MB).");
         }
 
         FileUpload fileUpload = FileUpload.fromData(resolvedFile.bytes(), resolvedFile.name());
@@ -146,8 +146,12 @@ public class MessageService {
     private record ResolvedFile(byte[] bytes, String name) {
     }
 
-    // Discord rejects standard-bot uploads above 25 MB.
-    private static final int MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+    // Discord's own upload ceiling, which depends on the guild's boost level: 25 MB
+    // unboosted, 50 MB at tier 2, 100 MB at tier 3. Set to the tier-2 value so boosted
+    // guilds are not blocked by a limit of ours that is stricter than Discord's. An
+    // unboosted guild gets Discord's own rejection instead of this one, which is the
+    // correct authority for a limit we cannot determine locally.
+    private static final int MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 
     private ResolvedFile resolveFile(String filePath, String fileUrl, String fileData, String fileName) {
         boolean hasPath = filePath != null && !filePath.isEmpty();
@@ -185,7 +189,7 @@ public class MessageService {
                 bytes = in.readNBytes(MAX_UPLOAD_BYTES + 1);
             }
             if (bytes.length > MAX_UPLOAD_BYTES) {
-                throw new IllegalArgumentException("File exceeds the 25 MB limit. Discord rejects larger uploads for standard bots.");
+                throw new IllegalArgumentException("File exceeds the " + (MAX_UPLOAD_BYTES / (1024 * 1024)) + " MB limit.");
             }
             String name = overrideName != null ? overrideName : path.getFileName().toString();
             return new ResolvedFile(bytes, name);
@@ -582,7 +586,7 @@ public class MessageService {
      * @param attachmentId Optional ID of a specific attachment (if omitted, downloads all).
      * @return A formatted list of the saved file paths.
      */
-    @Tool(name = "download_attachment", description = "Download a message's attachments to the server's download directory (DISCORD_MCP_DOWNLOAD_ROOT) and return the saved paths. Use get_attachment instead if you only need metadata. Max 25MB per file, 50MB per call.")
+    @Tool(name = "download_attachment", description = "Download a message's attachments to the server's download directory (DISCORD_MCP_DOWNLOAD_ROOT) and return the saved paths. Use get_attachment instead if you only need metadata. Max 50MB per file, 100MB per call.")
     public String downloadAttachment(@ToolParam(description = "Discord channel ID") String channelId,
                                      @ToolParam(description = "Discord message ID") String messageId,
                                      @ToolParam(description = "Specific attachment ID (omit to download all)", required = false) String attachmentId) {
@@ -594,7 +598,7 @@ public class MessageService {
         }
 
         // Resolve the root before spending any network calls, so a misconfigured
-        // root fails immediately instead of after downloading 25 MB.
+        // root fails immediately instead of after downloading 50 MB.
         Path root = allowedDownloadRoot();
 
         MessageChannel channel = getMessageChannelById(channelId);
@@ -629,9 +633,20 @@ public class MessageService {
         StringBuilder saved = new StringBuilder();
         StringBuilder failed = new StringBuilder();
         int savedCount = 0;
+        // Counts bytes actually received, not the sizes the preflight trusted. Discord computes
+        // `size` server-side so the two agree in practice, but the tool advertises the per-call
+        // ceiling as a guarantee and metadata is the wrong thing to guarantee it with.
+        long written = 0;
         for (Message.Attachment attachment : attachments) {
             try {
                 byte[] bytes = RemoteFetchGuard.fetch(attachment.getUrl(), MAX_DOWNLOAD_FILE_BYTES, "attachment");
+                written += bytes.length;
+                if (written > MAX_DOWNLOAD_BUDGET_BYTES) {
+                    throw new IllegalArgumentException(
+                            "the call passed its " + (MAX_DOWNLOAD_BUDGET_BYTES / (1024 * 1024))
+                                    + " MB total once this was fetched, so it was not saved. Its "
+                                    + "reported size understated the actual body.");
+                }
                 Path path = writeIntoAllowedRoot(root, attachment.getId(), attachment.getFileName(), bytes);
                 saved.append("- `").append(path).append("` (").append(formatFileSize(bytes.length)).append(")\n");
                 savedCount++;
@@ -689,14 +704,16 @@ public class MessageService {
      *
      * <p>Not {@link #MAX_UPLOAD_BYTES}: that one is Discord's limit on what a standard bot may
      * <i>send</i>, and inbound attachments are not bound by it — a Nitro user or a boosted guild
-     * can post well above 25 MB. Reusing it would have rejected such a file with the guard's
+     * can exceed it. Reusing it would tie the download limit to a send-side ceiling that moves
+     * with the guild's boost level, and would have rejected such a file with the guard's
      * generic size message, naming neither the file nor the real reason.
      */
-    private static final int MAX_DOWNLOAD_FILE_BYTES = 25 * 1024 * 1024;
+    private static final int MAX_DOWNLOAD_FILE_BYTES = 50 * 1024 * 1024;
 
-    // One message can carry ten attachments, so the per-file cap alone would allow a
-    // quarter-gigabyte write from a single call. This is a small droplet.
-    private static final long MAX_DOWNLOAD_BUDGET_BYTES = 50L * 1024 * 1024;
+    // One message can carry ten attachments, so the per-file cap alone would allow half a
+    // gigabyte from a single call. Kept at twice the per-file cap so a normal multi-image
+    // post still goes through in one call while a pathological one does not.
+    private static final long MAX_DOWNLOAD_BUDGET_BYTES = 2L * MAX_DOWNLOAD_FILE_BYTES;
 
     /**
      * Writes one attachment into the allowed root under a name derived from Discord's.
