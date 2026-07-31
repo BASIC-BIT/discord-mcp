@@ -180,24 +180,50 @@ public class ScheduledEventService {
      * wall-clock end is deliberate — an event moved across a DST boundary should still run for an
      * hour, not for fifty-nine minutes or sixty-one.
      *
+     * @param raw the live event as returned by {@link #fetchRaw}, which is the authority for
+     *            the current times — JDA's cached entity can lag an out-of-band edit
      * @return the end time to set, or {@code null} to leave it untouched
      */
     // Package-private so the duration-preserving cases can be tested without a live event.
-    OffsetDateTime resolveEndTime(ScheduledEvent event, String scheduledStartTime, String scheduledEndTime) {
+    OffsetDateTime resolveEndTime(DataObject raw, String scheduledStartTime, String scheduledEndTime) {
+        boolean movingStart = scheduledStartTime != null && !scheduledStartTime.isEmpty();
+        // Read from the live GET rather than JDA's cache. The cached entity can be behind an
+        // out-of-band edit, or behind an earlier edit whose gateway update has not arrived yet,
+        // and a stale duration would then be applied silently — or a stale null end would skip
+        // the shift entirely and let the move fail exactly as it did before this existed. The
+        // caller has already fetched this, and whenever the start is moving that fetch is
+        // guaranteed to have succeeded, because a failed read throws before reaching here.
+        String currentStart = raw.getString("scheduled_start_time", null);
+        String currentEnd = raw.getString("scheduled_end_time", null);
+
+        OffsetDateTime effectiveStart = movingStart
+                ? parseTime(scheduledStartTime)
+                : (currentStart == null ? null : parseTime(currentStart));
+
         if (scheduledEndTime != null && !scheduledEndTime.isEmpty()) {
-            return parseTime(scheduledEndTime);
+            OffsetDateTime end = parseTime(scheduledEndTime);
+            // Discord rejects the whole manager update for an end at or before the start, with
+            // the same opaque server-side error this parameter exists to stop people hitting.
+            if (effectiveStart != null && !end.isAfter(effectiveStart)) {
+                throw new IllegalArgumentException(
+                        "scheduledEndTime " + scheduledEndTime + " is not after the start time "
+                                + effectiveStart + (movingStart
+                                ? ", which this call is moving the event to. Move the end past it, or "
+                                + "omit it and it will follow the start automatically."
+                                : ". Pass scheduledStartTime too if you meant to move both."));
+            }
+            return end;
         }
-        if (scheduledStartTime == null || scheduledStartTime.isEmpty()) {
+
+        if (!movingStart) {
             return null;
         }
-        OffsetDateTime currentStart = event.getStartTime();
-        OffsetDateTime currentEnd = event.getEndTime();
         // Stage and voice events carry no end time at all, so there is no duration to preserve
         // and setting one would invent a constraint the event did not have.
         if (currentStart == null || currentEnd == null) {
             return null;
         }
-        return parseTime(scheduledStartTime).plus(Duration.between(currentStart, currentEnd));
+        return effectiveStart.plus(Duration.between(parseTime(currentStart), parseTime(currentEnd)));
     }
 
     /**
@@ -482,7 +508,7 @@ public class ScheduledEventService {
                             + "Do the recurrence change first, or drop it from this call.");
         }
 
-        OffsetDateTime newEnd = resolveEndTime(event, scheduledStartTime, scheduledEndTime);
+        OffsetDateTime newEnd = resolveEndTime(raw, scheduledStartTime, scheduledEndTime);
 
         var manager = event.getManager();
         if (name != null && !name.isEmpty()) manager.setName(name);
