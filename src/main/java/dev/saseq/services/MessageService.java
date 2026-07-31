@@ -15,10 +15,12 @@ import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.Base64;
 import java.util.List;
@@ -29,12 +31,24 @@ public class MessageService {
     private final JDA jda;
 
     /**
-     * The only directory {@code send_file} may read local paths from, and the only one
-     * {@code download_attachment} may write to. Unset disables local paths entirely.
-     * Package-private so tests can set it without Spring.
+     * The only directory {@code send_file} may read local paths from. Unset disables local
+     * paths entirely. Package-private so tests can set it without Spring.
      */
     @Value("${DISCORD_MCP_FILE_ROOT:}")
     String fileRoot;
+
+    /**
+     * The only directory {@code download_attachment} may write to.
+     *
+     * <p>Deliberately a separate variable with <b>no fallback</b> to {@link #fileRoot}. Reading
+     * a directory and writing to it are different grants, and an existing deployment set
+     * {@code DISCORD_MCP_FILE_ROOT} to opt into the first one only. Falling back would mean
+     * upgrading the jar silently hands an LLM-driven tool write access to a directory chosen
+     * for uploads, with no configuration change and nothing to notice. Unset means downloads
+     * are refused, which matches how {@code fileRoot} already behaves.
+     */
+    @Value("${DISCORD_MCP_DOWNLOAD_ROOT:}")
+    String downloadRoot;
 
     public MessageService(JDA jda) {
         this.jda = jda;
@@ -218,24 +232,38 @@ public class MessageService {
     private Path allowedRoot() {
         if (fileRoot == null || fileRoot.isBlank()) {
             throw new IllegalArgumentException(
-                    "DISCORD_MCP_FILE_ROOT is not set, so local file reads and writes are "
-                            + "disabled. Set it to the one directory this server may use. "
-                            + "send_file can still take fileUrl or base64 fileData instead.");
+                    "Local filePath uploads are disabled. Set DISCORD_MCP_FILE_ROOT to an "
+                            + "allowed directory, or supply fileUrl or base64 fileData instead.");
         }
+        return resolveRoot(fileRoot, "DISCORD_MCP_FILE_ROOT");
+    }
+
+    private Path allowedDownloadRoot() {
+        if (downloadRoot == null || downloadRoot.isBlank()) {
+            throw new IllegalArgumentException(
+                    "Attachment downloads are disabled. Set DISCORD_MCP_DOWNLOAD_ROOT to the "
+                            + "directory this server may write downloads into. It is separate "
+                            + "from DISCORD_MCP_FILE_ROOT on purpose: read and write are "
+                            + "different grants.");
+        }
+        return resolveRoot(downloadRoot, "DISCORD_MCP_DOWNLOAD_ROOT");
+    }
+
+    private Path resolveRoot(String configured, String variableName) {
         Path root;
         try {
-            root = Paths.get(fileRoot).toRealPath();
+            root = Paths.get(configured).toRealPath();
         } catch (IOException e) {
             throw new IllegalArgumentException(
-                    "DISCORD_MCP_FILE_ROOT does not exist or cannot be resolved: " + fileRoot);
+                    variableName + " does not exist or cannot be resolved: " + configured);
         }
         if (!Files.isDirectory(root)) {
-            throw new IllegalArgumentException("DISCORD_MCP_FILE_ROOT is not a directory: " + fileRoot);
+            throw new IllegalArgumentException(variableName + " is not a directory: " + configured);
         }
         // A filesystem root has no name components. Accepting "/" would confine
         // nothing at all and silently re-open the whole vulnerability.
         if (root.getNameCount() == 0) {
-            throw new IllegalArgumentException("DISCORD_MCP_FILE_ROOT must not be a filesystem root");
+            throw new IllegalArgumentException(variableName + " must not be a filesystem root");
         }
         return root;
     }
@@ -567,7 +595,7 @@ public class MessageService {
 
         // Resolve the root before spending any network calls, so a misconfigured
         // root fails immediately instead of after downloading 25 MB.
-        Path root = allowedRoot();
+        Path root = allowedDownloadRoot();
 
         MessageChannel channel = getMessageChannelById(channelId);
         if (channel == null) {
@@ -591,23 +619,57 @@ public class MessageService {
             }
         }
 
+        assertWithinDownloadLimits(attachments);
+
         StringBuilder sb = new StringBuilder();
         sb.append("**Downloaded ").append(attachments.size()).append(" attachment(s) to ")
                 .append(root).append(":**\n");
-        long budget = MAX_DOWNLOAD_BUDGET_BYTES;
         for (Message.Attachment attachment : attachments) {
-            byte[] bytes = RemoteFetchGuard.fetch(attachment.getUrl(), MAX_UPLOAD_BYTES, "attachment");
-            budget -= bytes.length;
-            if (budget < 0) {
-                throw new IllegalArgumentException(
-                        "Message attachments exceed the " + (MAX_DOWNLOAD_BUDGET_BYTES / (1024 * 1024))
-                                + " MB total download limit. Pass attachmentId to fetch them one at a time.");
-            }
+            byte[] bytes = RemoteFetchGuard.fetch(attachment.getUrl(), MAX_DOWNLOAD_FILE_BYTES, "attachment");
             Path saved = writeIntoAllowedRoot(root, attachment.getId(), attachment.getFileName(), bytes);
             sb.append("- `").append(saved).append("` (").append(formatFileSize(bytes.length)).append(")\n");
         }
         return sb.toString().trim();
     }
+
+    /**
+     * Rejects an oversized set before the first byte is fetched.
+     *
+     * <p>Checking after each download would still be correct, but it fails in the worst possible
+     * place: the offending file is already in the heap, its siblings are already on disk, and the
+     * caller gets an exception instead of the paths — so the files it did write are left in the
+     * root unmentioned, for a tool whose entire contract is returning where things landed.
+     * {@code getSize()} is metadata already carried on the message, so this costs no network call.
+     */
+    private void assertWithinDownloadLimits(List<Message.Attachment> attachments) {
+        long total = 0;
+        for (Message.Attachment attachment : attachments) {
+            long size = attachment.getSize();
+            if (size > MAX_DOWNLOAD_FILE_BYTES) {
+                throw new IllegalArgumentException(String.format(
+                        "Attachment `%s` (ID %s) is %s, over the %d MB per-file download limit.",
+                        attachment.getFileName(), attachment.getId(), formatFileSize(attachment.getSize()),
+                        MAX_DOWNLOAD_FILE_BYTES / (1024 * 1024)));
+            }
+            total += size;
+        }
+        if (total > MAX_DOWNLOAD_BUDGET_BYTES) {
+            throw new IllegalArgumentException(String.format(
+                    "The %d attachments total %s, over the %d MB per-call download limit. "
+                            + "Pass attachmentId to fetch them one at a time.",
+                    attachments.size(), formatFileSize(total), MAX_DOWNLOAD_BUDGET_BYTES / (1024 * 1024)));
+        }
+    }
+
+    /**
+     * Per-file download ceiling.
+     *
+     * <p>Not {@link #MAX_UPLOAD_BYTES}: that one is Discord's limit on what a standard bot may
+     * <i>send</i>, and inbound attachments are not bound by it — a Nitro user or a boosted guild
+     * can post well above 25 MB. Reusing it would have rejected such a file with the guard's
+     * generic size message, naming neither the file nor the real reason.
+     */
+    private static final int MAX_DOWNLOAD_FILE_BYTES = 25 * 1024 * 1024;
 
     // One message can carry ten attachments, so the per-file cap alone would allow a
     // quarter-gigabyte write from a single call. This is a small droplet.
@@ -618,9 +680,18 @@ public class MessageService {
      *
      * <p>The filename comes from whoever uploaded the file, so it is untrusted: it is reduced to
      * a single path component here rather than resolved, because {@code root.resolve("../x")}
-     * happily escapes. The attachment ID prefix makes the name collision-free without an
-     * overwrite flag — a re-download of the same attachment writes the same bytes to the same
-     * place.
+     * happily escapes. The {@code <attachmentId>-} prefix makes names collision-free <i>across</i>
+     * attachments; the same attachment fetched twice overwrites its own file.
+     *
+     * <p>Written to a temporary file and moved into place rather than written directly. Three
+     * things fall out of that: an interrupted or failing write cannot destroy an already-archived
+     * copy or leave a truncated one, {@code rename(2)} replaces a symlink at the target rather
+     * than following it, and two concurrent calls for the same attachment cannot collide — the
+     * HTTP profile is a shared singleton, so that is reachable.
+     *
+     * @param root the already-validated download root; taken as a parameter so tests can supply
+     *             one, which means the confinement below is only as strong as what the single
+     *             caller passes. Any second caller must pass {@link #allowedDownloadRoot()} too.
      */
     // Package-private so tests can exercise the untrusted-filename cases without a live message.
     Path writeIntoAllowedRoot(Path root, String attachmentId, String fileName, byte[] bytes) {
@@ -629,14 +700,29 @@ public class MessageService {
             // Unreachable given sanitizeFileName, and worth failing loudly if that ever changes.
             throw new IllegalArgumentException("Refusing to write outside the allowed directory");
         }
+        Path temporary = null;
         try {
-            // Unlink first, then CREATE_NEW: an ordinary truncating write follows a symlink,
-            // so an existing link at this path would redirect the bytes to its target.
-            // deleteIfExists removes the link itself, never what it points at.
-            Files.deleteIfExists(target);
-            Files.write(target, bytes, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+            temporary = Files.createTempFile(root, ".download-", ".part");
+            Files.write(temporary, bytes, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+            try {
+                Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            } catch (AtomicMoveNotSupportedException e) {
+                // Same directory, so this should not happen; if a filesystem refuses anyway,
+                // a non-atomic replace still beats writing straight over the target.
+                Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING);
+            }
+            temporary = null;
         } catch (IOException e) {
             throw new IllegalArgumentException("Failed to save attachment: " + e.getMessage());
+        } finally {
+            if (temporary != null) {
+                try {
+                    Files.deleteIfExists(temporary);
+                } catch (IOException ignored) {
+                    // Best effort. A leftover .part file is inert and better than masking
+                    // the real failure being thrown above.
+                }
+            }
         }
         return target;
     }
@@ -654,7 +740,13 @@ public class MessageService {
         if (cleaned.isBlank()) {
             return "attachment";
         }
-        return cleaned.length() > 120 ? cleaned.substring(cleaned.length() - 120) : cleaned;
+        if (cleaned.length() > 120) {
+            // Keep the tail, since that is where the extension is — then re-strip, because
+            // cutting mid-name can expose a new leading dot or dash. Callers prefix this with
+            // an attachment ID today, but the result should not depend on them doing so.
+            cleaned = cleaned.substring(cleaned.length() - 120).replaceAll("^[.\\-]+", "");
+        }
+        return cleaned.isBlank() ? "attachment" : cleaned;
     }
 
     private String formatAttachmentDetail(Message.Attachment attachment) {
@@ -707,7 +799,9 @@ public class MessageService {
                 }).toList();
     }
 
-    private String formatFileSize(int bytes) {
+    // long rather than int: a per-call total can exceed Integer.MAX_VALUE even though
+    // any single attachment cannot. Widening is source-compatible with the int callers.
+    private String formatFileSize(long bytes) {
         if (bytes < 1024) return bytes + " B";
         if (bytes < 1024 * 1024) return String.format("%.1f KB", bytes / 1024.0);
         if (bytes < 1024 * 1024 * 1024) return String.format("%.1f MB", bytes / (1024.0 * 1024));

@@ -29,6 +29,7 @@ import static org.mockito.Mockito.when;
 class MessageServiceTest {
 
     private static final String CHANNEL_ID = "345678901234567890";
+    private static final String MESSAGE_ID = "456789012345678901";
 
     private JDA jda;
     private MessageService messageService;
@@ -140,20 +141,62 @@ class MessageServiceTest {
     }
 
     @Test
-    void downloadAttachmentRefusesWhenNoRootIsConfigured() {
+    void downloadAttachmentRefusesWhenNoDownloadRootIsConfigured() {
         assertThatThrownBy(() -> messageService.downloadAttachment(CHANNEL_ID, "999", null))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("DISCORD_MCP_FILE_ROOT");
+                .hasMessageContaining("DISCORD_MCP_DOWNLOAD_ROOT");
+    }
+
+    @Test
+    void downloadAttachmentDoesNotInheritTheUploadRoot(@TempDir Path dir) throws IOException {
+        // Upgrading the jar must not turn an upload directory into a writable one.
+        messageService.fileRoot = Files.createDirectory(dir.resolve("uploads")).toString();
+
+        assertThatThrownBy(() -> messageService.downloadAttachment(CHANNEL_ID, "999", null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("DISCORD_MCP_DOWNLOAD_ROOT");
     }
 
     @Test
     void downloadAttachmentChecksTheRootBeforeTouchingTheNetwork() {
-        messageService.fileRoot = "/does/not/exist";
+        messageService.downloadRoot = "/does/not/exist";
 
         // No channel stubbed: reaching Discord at all would throw a different error.
         assertThatThrownBy(() -> messageService.downloadAttachment(CHANNEL_ID, "999", null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("does not exist or cannot be resolved");
+    }
+
+    @Test
+    void downloadAttachmentRejectsAnOversizedSetBeforeFetchingAnything(@TempDir Path dir) throws IOException {
+        messageService.downloadRoot = Files.createDirectory(dir.resolve("downloads")).toString();
+        // Three 20 MB files: each is under the per-file cap, together they are over the
+        // per-call one. The URLs are unreachable on purpose — if anything is fetched, the
+        // failure will not be the one asserted here.
+        stubMessageWithAttachments(
+                attachment("1", "a.png", 20 * 1024 * 1024),
+                attachment("2", "b.png", 20 * 1024 * 1024),
+                attachment("3", "c.png", 20 * 1024 * 1024));
+
+        assertThatThrownBy(() -> messageService.downloadAttachment(CHANNEL_ID, MESSAGE_ID, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("over the 50 MB per-call download limit");
+
+        try (var entries = Files.list(Path.of(messageService.downloadRoot))) {
+            assertThat(entries).as("nothing written before the limit was enforced").isEmpty();
+        }
+    }
+
+    @Test
+    void downloadAttachmentNamesTheFileThatIsTooBig(@TempDir Path dir) throws IOException {
+        messageService.downloadRoot = Files.createDirectory(dir.resolve("downloads")).toString();
+        // Inbound attachments are not bound by the 25 MB bot upload limit.
+        stubMessageWithAttachments(attachment("7", "huge-poster.png", 40 * 1024 * 1024));
+
+        assertThatThrownBy(() -> messageService.downloadAttachment(CHANNEL_ID, MESSAGE_ID, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("huge-poster.png")
+                .hasMessageContaining("per-file download limit");
     }
 
     @Test
@@ -205,18 +248,61 @@ class MessageServiceTest {
     }
 
     @Test
-    void writeIntoAllowedRootIsIdempotentForTheSameAttachment(@TempDir Path dir) throws IOException {
+    void writeIntoAllowedRootOverwritesInPlaceRatherThanAccumulatingDuplicates(@TempDir Path dir) throws IOException {
         Path root = Files.createDirectory(dir.resolve("downloads"));
-        messageService.fileRoot = root.toString();
 
         Path first = messageService.writeIntoAllowedRoot(root, "456", "poster.png", "v1".getBytes(StandardCharsets.UTF_8));
         Path second = messageService.writeIntoAllowedRoot(root, "456", "poster.png", "v2".getBytes(StandardCharsets.UTF_8));
 
+        // Same attachment ID means the same path: the second write replaces the first
+        // rather than leaving poster(1).png behind. Not idempotence — a real overwrite.
         assertThat(second).isEqualTo(first);
         assertThat(Files.readString(second)).isEqualTo("v2");
         try (var entries = Files.list(root)) {
+            // Also pins that the temporary .part file did not survive the move.
             assertThat(entries).hasSize(1);
         }
+    }
+
+    @Test
+    void writeIntoAllowedRootLeavesTheArchivedCopyIntactWhenTheWriteCannotComplete(@TempDir Path dir) throws IOException {
+        Path root = Files.createDirectory(dir.resolve("downloads"));
+        Path archived = messageService.writeIntoAllowedRoot(
+                root, "789", "poster.png", "the good copy".getBytes(StandardCharsets.UTF_8));
+
+        // A directory at the target name makes the move fail the way a full disk or a
+        // killed process would, after the point where the old code had already unlinked.
+        Path blocked = root.resolve("789-blocker");
+        Files.createDirectory(blocked);
+        Files.writeString(blocked.resolve("child"), "keeps the directory non-empty");
+
+        assertThatThrownBy(() -> messageService.writeIntoAllowedRoot(
+                root, "789", "blocker", "replacement".getBytes(StandardCharsets.UTF_8)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Failed to save attachment");
+
+        assertThat(Files.readString(archived)).isEqualTo("the good copy");
+        try (var entries = Files.list(root)) {
+            assertThat(entries).as("no .part file left behind").hasSize(2);
+        }
+    }
+
+    private Message.Attachment attachment(String id, String fileName, int size) {
+        Message.Attachment attachment = mock(Message.Attachment.class);
+        when(attachment.getId()).thenReturn(id);
+        when(attachment.getFileName()).thenReturn(fileName);
+        when(attachment.getSize()).thenReturn(size);
+        return attachment;
+    }
+
+    @SuppressWarnings("unchecked")
+    private void stubMessageWithAttachments(Message.Attachment... attachments) {
+        TextChannel channel = stubChannel();
+        Message message = mock(Message.class);
+        RestAction<Message> retrieve = mock(RestAction.class);
+        when(channel.retrieveMessageById(MESSAGE_ID)).thenReturn(retrieve);
+        when(retrieve.complete()).thenReturn(message);
+        when(message.getAttachments()).thenReturn(List.of(attachments));
     }
 
     private TextChannel stubChannel() {

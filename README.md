@@ -163,6 +163,35 @@ filesystem root (`/`) is rejected, since it would confine nothing.
 Run the server as a dedicated unprivileged user regardless. The env var is a guard, not a
 substitute for one.
 
+### `DISCORD_MCP_DOWNLOAD_ROOT`
+
+Optional. The single directory that `download_attachment` may write saved attachments into.
+
+**Unset (default), downloads are refused.** `download_attachment` is the only tool that
+writes to the filesystem; with this unset it fails immediately and nothing else changes.
+
+```bash
+export DISCORD_MCP_DOWNLOAD_ROOT=/var/lib/discord-mcp/downloads
+```
+
+**It does not fall back to `DISCORD_MCP_FILE_ROOT`, deliberately.** Reading a directory
+and writing to it are different grants. An existing deployment set `DISCORD_MCP_FILE_ROOT`
+to allow local-path *uploads*; if downloads inherited it, upgrading the jar would hand an
+LLM-driven tool write access to that directory with no configuration change and nothing to
+notice. Point both at the same directory if you want that — but as a decision, not a
+default.
+
+Files are named `<attachmentId>-<sanitized original name>`. The attachment ID makes names
+unique across attachments; re-downloading the same one replaces its own file. Uploader
+filenames are untrusted, so they are reduced to a single path component — no traversal, no
+hidden files. Writes go to a temporary file in the same directory and are moved into place,
+so a failed write cannot destroy an already-saved copy and a symlink at the target is
+replaced rather than followed.
+
+Per call: 25 MB per attachment, 50 MB total. **Nothing caps the number of calls** — a
+poisoned context can loop the tool until the volume is full, so point this at a
+size-limited filesystem rather than at `/`.
+
 </details>
 
 ## 🔗 Connections
@@ -379,6 +408,8 @@ mvn -Dtest=DiscordLiveIntegrationTest test
 #### Message Management
 - [`send_message`](): Send a message to a specific channel
 - [`send_file`](): Send a file (attachment) to a specific channel via local path, URL, or base64, with an optional message (max 25MB). Local `filePath` uploads require [`DISCORD_MCP_FILE_ROOT`](#-security-notes)
+- [`get_attachment`](): Get attachment metadata (filename, size, content type, URLs) from a specific message, without downloading
+- [`download_attachment`](): Download a message's attachments to disk and return the saved paths (max 25MB each, 50MB per call). Requires [`DISCORD_MCP_DOWNLOAD_ROOT`](#-security-notes)
 - [`edit_message`](): Edit a message from a specific channel
 - [`delete_message`](): Delete a message from a specific channel
 - [`read_messages`](): Read message history from a specific channel (includes author IDs, attachment metadata, supports `count` 1-100 and optional cursor: `before` or `after` or `around`)
