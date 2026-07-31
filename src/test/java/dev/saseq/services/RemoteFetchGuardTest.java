@@ -101,14 +101,32 @@ class RemoteFetchGuardTest {
     }
 
     @Test
-    void anUnlimitedAllowanceDoesNotOverflowIntoANegativeAllocation() {
-        // Integer.MAX_VALUE is the natural "no limit" value for a future caller. In int
-        // arithmetic maxBytes - total + 1 wraps negative, and the allocation then fails with
-        // NegativeArraySizeException, which explains nothing about what went wrong.
+    void anUnlimitedAllowanceReadsNormallyRatherThanFailingOnTheAllocation() {
+        // Integer.MAX_VALUE is what a caller reaches for to mean "no limit". Without the long
+        // cast, maxBytes - total + 1 wraps and the allocation fails with
+        // NegativeArraySizeException on the first iteration.
+        //
+        // This proves the allocation only. The accumulator's overflow guard is NOT exercised
+        // here and cannot be without a 2 GB body — the earlier version of this test asserted
+        // the same thing while calling itself an overflow test, which is how the accumulator
+        // stayed broken behind a green suite. The guard is written so it cannot overflow
+        // (comparing read > maxBytes - total rather than summing first) instead of relying on a
+        // test to catch it.
         byte[] body = body(9000);
 
         assertThat(RemoteFetchGuard.readBounded(new CountingStream(body), Integer.MAX_VALUE, "attachment"))
                 .isEqualTo(body);
+    }
+
+    @Test
+    void theSizeBoundHoldsWhenTheAllowanceIsNearlyTheWholeAccumulator() {
+        // The same arithmetic shape as the Integer.MAX_VALUE case, at a size that can actually
+        // be run: the allowance is one byte under the body, so the bound has to fire on the
+        // final comparison rather than after a sum that could have wrapped.
+        byte[] body = body(12_000);
+
+        assertThatThrownBy(() -> RemoteFetchGuard.readBounded(new CountingStream(body), 11_999, "attachment"))
+                .isInstanceOf(RemoteFetchGuard.TooLargeException.class);
     }
 
     /** Parses a literal address without touching DNS. */

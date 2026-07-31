@@ -180,9 +180,11 @@ public final class RemoteFetchGuard {
             // the socket independently of how much is requested here, so what crosses the wire is
             // not bounded any more tightly than before.
             //
-            // The long cast matters for maxBytes = Integer.MAX_VALUE, the natural "no limit"
-            // value for a future caller: in int arithmetic that addition wraps negative and the
-            // allocation below fails with NegativeArraySizeException, which explains nothing.
+            // The long cast keeps this addition from wrapping when maxBytes is near
+            // Integer.MAX_VALUE — the value a caller would reach for to mean "no limit". It
+            // covers the allocation only; the accumulator below has its own overflow guard,
+            // because fixing one and not the other removes the allocation crash while leaving
+            // the size bound silently disabled, which is worse than crashing.
             int want = (int) Math.min(CHUNK_BYTES, (long) maxBytes - total + 1);
             byte[] chunk = new byte[want];
             int read;
@@ -194,10 +196,15 @@ public final class RemoteFetchGuard {
             if (read < 0) {
                 break;
             }
-            total += read;
-            if (total > maxBytes) {
+            // Compared before adding, not after. "total + read > maxBytes" overflows when
+            // maxBytes is near Integer.MAX_VALUE: total wraps negative, the comparison goes
+            // false, and the size bound disappears at exactly the value a caller would pass to
+            // mean "no limit". Subtracting cannot overflow, because total <= maxBytes holds at
+            // the top of every iteration.
+            if (read > maxBytes - total) {
                 throw new TooLargeException(what + " exceeds the maximum allowed size");
             }
+            total += read;
             chunks.add(read == chunk.length ? chunk : Arrays.copyOf(chunk, read));
         }
 

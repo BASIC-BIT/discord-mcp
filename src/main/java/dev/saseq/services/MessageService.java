@@ -267,37 +267,41 @@ public class MessageService {
                     "DISCORD_MCP_DOWNLOAD_ROOT is not writable by this process: " + root
                             + ". Nothing was downloaded.");
         }
-        // Probe every operation saving a download actually performs, not just the first. That is
-        // create, then rename *over an existing file* — re-downloading an attachment replaces its
-        // own copy. Windows and NFSv4 ACLs grant those separately, and can permit creating a
-        // child, or renaming to a fresh name, while denying replacement of an existing entry.
-        // Probing anything less passes such a directory and then fails during the write, with the
-        // attachment already fetched — the outcome this preflight exists to prevent.
+        // Probe create-then-rename, because every download does both: a temp file, renamed to
+        // its final name. Windows and NFSv4 ACLs grant those separately, so a directory can
+        // accept the create and refuse the rename; probing only the create passes it and then
+        // fails during the write with the attachment already fetched.
+        //
+        // Deliberately renames to a *fresh* name rather than over an existing one, even though
+        // re-downloading an attachment does replace its own file. Replacement is a third,
+        // separately grantable right, and requiring it here would reject a directory where every
+        // first download succeeds and only a repeat fails — turning a partial capability into a
+        // total refusal. The trade is accepted knowingly: on such a directory a re-download
+        // fetches and then fails at the replace, which is the failure this preflight otherwise
+        // avoids. It is the cheaper half of the trade, because a re-download is by definition of
+        // a file already on disk.
         //
         // No test covers the failure branch, and none can on POSIX: rename within a directory
-        // needs the same write bit as create, so the split this guards against cannot be
-        // constructed there. It ships unverified on the only platforms where it changes anything.
-        // That is a reason to keep it rather than to drop it for lack of coverage.
-        Path source = null;
-        Path destination = null;
+        // needs the same write bit as create, so the split cannot be constructed there. It ships
+        // unverified on the only platforms where it changes anything — a reason to keep it, not
+        // to drop it for lack of coverage.
+        Path probe = null;
         try {
-            source = Files.createTempFile(root, ".writable-", ".probe");
-            destination = Files.createTempFile(root, ".writable-", ".probe");
-            Files.move(source, destination, StandardCopyOption.REPLACE_EXISTING);
-            source = null;
+            probe = Files.createTempFile(root, ".writable-", ".probe");
+            Path renamed = root.resolve(probe.getFileName().toString() + ".moved");
+            Files.move(probe, renamed);
+            probe = renamed;
         } catch (IOException e) {
             throw new IllegalArgumentException(
                     "DISCORD_MCP_DOWNLOAD_ROOT does not allow this process to create files and "
-                            + "rename them over existing ones, which saving an attachment "
-                            + "requires: " + root + " (" + e.getMessage() + "). Nothing was "
-                            + "downloaded.");
+                            + "rename them, which saving an attachment requires: " + root
+                            + " (" + e.getMessage() + "). Nothing was downloaded.");
         } finally {
             // Cleanup is best-effort and separate from the diagnosis above: a failed delete does
             // not mean the directory cannot be created in and renamed within, which is what the
-            // probe above establishes directly. A probe stranded by a SIGKILL between the calls
-            // is inert.
-            deleteQuietly(source);
-            deleteQuietly(destination);
+            // probe establishes directly. A probe stranded by a SIGKILL between the calls is
+            // inert.
+            deleteQuietly(probe);
         }
         return root;
     }
