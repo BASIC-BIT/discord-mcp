@@ -1,10 +1,10 @@
 package dev.saseq.services;
 
+import net.dv8tion.jda.api.utils.data.DataArray;
 import net.dv8tion.jda.api.utils.data.DataObject;
 
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -18,20 +18,20 @@ import java.util.Set;
  * {@code returned} entry all produce confidently wrong caveat text with every test still green,
  * because those tests build the counts by hand.
  *
- * <p>Nothing here calls Discord, so a test supplies {@link DataObject}s directly.
+ * <p>Nothing here calls Discord, so a test supplies a {@link DataArray} directly.
  *
  * @param rules            id → rendered recurrence, for events that have one and could be read
  * @param covers           id → cover URL, for events that have one
  * @param described        ids whose cover was read, whether or not there was a cover
  * @param returned         every id Discord returned, parseable details or not
  * @param recurrenceFailed ids whose recurrence would not parse or render
- * @param unidentifiable   entries with no usable id, which belong to no event
+ * @param unidentifiable   entries that belong to no event: not an object, or no usable id
  */
 record LiveEventDetails(Map<String, String> rules, Map<String, String> covers,
                         Set<String> described, Set<String> returned,
                         Set<String> recurrenceFailed, int unidentifiable) {
 
-    static LiveEventDetails read(List<DataObject> entries) {
+    static LiveEventDetails read(DataArray entries) {
         Map<String, String> rules = new HashMap<>();
         Map<String, String> covers = new HashMap<>();
         Set<String> described = new HashSet<>();
@@ -39,7 +39,19 @@ record LiveEventDetails(Map<String, String> rules, Map<String, String> covers,
         Set<String> recurrenceFailed = new HashSet<>();
         int unidentifiable = 0;
 
-        for (DataObject o : entries) {
+        for (int i = 0; i < entries.length(); i++) {
+            // The array is walked here rather than converted to a list by the caller: that put one
+            // getObject per element outside every guard below, so a single non-object element took
+            // down the whole read — including every entry already parsed.
+            DataObject o;
+            try {
+                o = entries.getObject(i);
+            } catch (RuntimeException notAnEvent) {
+                // Discord returned something that is not an event object. It matches no listed
+                // event in either direction, which is what unidentifiable counts.
+                unidentifiable++;
+                continue;
+            }
             // Guarded, though not for the reason once claimed here:
             // DataObject.getString coerces via toString rather than throwing, so a numeric or
             // object id arrives as a usable string and only a missing or blank one is unusable.
@@ -77,8 +89,8 @@ record LiveEventDetails(Map<String, String> rules, Map<String, String> covers,
             String rule = null;
             boolean recurrenceRead = false;
             try {
-                DataObject parsed = recurrenceOf(o);
-                // Rendered here, not at display time: recurrenceOf checks only the top-level
+                DataObject parsed = RecurrenceRule.of(o);
+                // Rendered here, not at display time: RecurrenceRule.of checks only the top-level
                 // shape, so a malformed nested field survives it and describe throws — outside
                 // this guard that took down the whole listing.
                 rule = parsed == null ? null : RecurrenceRule.describe(parsed);
@@ -115,13 +127,5 @@ record LiveEventDetails(Map<String, String> rules, Map<String, String> covers,
     /** Nothing read, so nothing may be claimed from it. */
     static LiveEventDetails unread() {
         return new LiveEventDetails(Map.of(), Map.of(), Set.of(), Set.of(), Set.of(), 0);
-    }
-
-    /** The event's recurrence rule, or null if it is not a recurring event. */
-    private static DataObject recurrenceOf(DataObject raw) {
-        // Tolerates an absent key as well as an explicit null.
-        return !raw.hasKey("recurrence_rule") || raw.isNull("recurrence_rule")
-                ? null
-                : raw.getObject("recurrence_rule");
     }
 }

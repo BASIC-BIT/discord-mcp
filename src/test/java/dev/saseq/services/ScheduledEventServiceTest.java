@@ -4,6 +4,7 @@ import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.Icon;
 import net.dv8tion.jda.api.entities.ScheduledEvent;
+import net.dv8tion.jda.api.exceptions.ParsingException;
 import net.dv8tion.jda.api.utils.data.DataObject;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -376,6 +377,12 @@ class ScheduledEventServiceTest {
         // read is not.
         assertThat(ScheduledEventService.coverUrlOf(DataObject.empty(), "1")).isNull();
         assertThat(ScheduledEventService.coverUrlOf(DataObject.empty().putNull("image"), "1")).isNull();
+        // And a third state: present, but not a string. getString would coerce it via toString and
+        // build a URL around the result, reporting a cover this could not read. Throwing puts it
+        // where the caller already handles an unreadable field.
+        assertThatThrownBy(() -> ScheduledEventService.coverUrlOf(
+                DataObject.empty().put("image", DataObject.empty()), "1"))
+                .isInstanceOf(ParsingException.class);
     }
 
     @Test
@@ -520,6 +527,34 @@ class ScheduledEventServiceTest {
         assertThatThrownBy(() -> service.setScheduledEventImage(GUILD, EVENT, "  ", "	"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Supply either imageUrl");
+    }
+
+    @Test
+    void anEventIdThatIsNotASnowflakeNeverReachesARoute() {
+        // Every cache-based tool inherits this from MiscUtil.parseSnowflake inside
+        // getScheduledEventById. This one skips the cache deliberately, and Route#compile
+        // substitutes the placeholder textually with no escaping — so a value with a slash or a
+        // dot segment would choose which endpoint the bot token is spent on. OkHttp canonicalises
+        // the dot segments for it.
+        //
+        // The URL below is a real one the guard has to stop rather than a shape argument: it
+        // reaches an entirely different resource under the same token.
+        service.coverFileRoot = "";
+        assertThatThrownBy(() -> service.setScheduledEventImage(
+                GUILD, "1385996249957662770/../../../users/@me", "https://example.com/x.png", null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("eventId must be a Discord snowflake");
+        // Refused before the source is fetched, not after: the SSRF guard would otherwise have
+        // rejected that URL first and this assertion would pass without the id ever being checked.
+        assertThatThrownBy(() -> service.setScheduledEventImage(
+                GUILD, "not-a-snowflake", "http://169.254.169.254/", null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("eventId must be a Discord snowflake");
+        // "   " used to fail with "eventId cannot be null", naming a condition that did not fire.
+        assertThatThrownBy(() -> service.setScheduledEventImage(
+                GUILD, "   ", "https://example.com/x.png", null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("eventId must be a Discord snowflake");
     }
 
     @Test

@@ -1,9 +1,8 @@
 package dev.saseq.services;
 
+import net.dv8tion.jda.api.utils.data.DataArray;
 import net.dv8tion.jda.api.utils.data.DataObject;
 import org.junit.jupiter.api.Test;
-
-import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -21,9 +20,18 @@ class LiveEventDetailsTest {
         return DataObject.empty().put("id", id);
     }
 
+    /** The shape Discord's response has, elements and all. */
+    private static DataArray live(Object... entries) {
+        DataArray array = DataArray.empty();
+        for (Object entry : entries) {
+            array.add(entry);
+        }
+        return array;
+    }
+
     @Test
     void anEventWithACoverIsDescribedAndItsUrlKept() {
-        LiveEventDetails d = LiveEventDetails.read(List.of(
+        LiveEventDetails d = LiveEventDetails.read(live(
                 event("1").put("image", "8210694c9d4d01a72fafbdc9012675d1")));
 
         assertThat(d.returned()).containsExactly("1");
@@ -37,7 +45,7 @@ class LiveEventDetailsTest {
     void anEventWithNoCoverIsStillDescribed() {
         // "Described" means the cover was read, not that there was one. Conflating them is what
         // would turn "we looked and there is none" into "we did not look".
-        LiveEventDetails d = LiveEventDetails.read(List.of(event("1")));
+        LiveEventDetails d = LiveEventDetails.read(live(event("1")));
 
         assertThat(d.described()).containsExactly("1");
         assertThat(d.covers()).isEmpty();
@@ -47,7 +55,7 @@ class LiveEventDetailsTest {
     void aMalformedRecurrenceDoesNotDiscardAGoodCoverOrTheEvent() {
         // The direction that is actually reachable: recurrence_rule as a scalar makes getObject throw. The cover is
         // still read, so the event is described and its URL kept; only its schedule is unknown.
-        LiveEventDetails d = LiveEventDetails.read(List.of(
+        LiveEventDetails d = LiveEventDetails.read(live(
                 event("1").put("recurrence_rule", "weekly").put("image", "aaa")));
 
         assertThat(d.returned()).containsExactly("1");
@@ -59,10 +67,10 @@ class LiveEventDetailsTest {
 
     @Test
     void aRecurrenceThatParsesButWillNotRenderIsCaughtToo() {
-        // recurrenceOf checks only the top-level shape. describe() is what trips over a malformed
+        // RecurrenceRule.of checks only the top-level shape. describe() is what trips over a malformed
         // nested field, and it used to run at display time, outside every guard, taking the whole
         // listing down rather than costing this one event its schedule line.
-        LiveEventDetails d = LiveEventDetails.read(List.of(
+        LiveEventDetails d = LiveEventDetails.read(live(
                 event("1").put("recurrence_rule", DataObject.empty()
                         .put("frequency", 2).put("interval", 1)
                         .put("start", "2026-08-05T20:00:00Z")
@@ -84,7 +92,7 @@ class LiveEventDetailsTest {
         // Note what is NOT here: a numeric or object id. DataObject.getString coerces via
         // toString rather than throwing, so those arrive as usable ids. Comments in this codebase
         // claimed otherwise until this test disproved it.
-        LiveEventDetails d = LiveEventDetails.read(List.of(
+        LiveEventDetails d = LiveEventDetails.read(live(
                 DataObject.empty(),
                 event("   "),
                 event("real")));
@@ -97,7 +105,7 @@ class LiveEventDetailsTest {
     void oneUnreadableEntryCostsOnlyItself() {
         // The property the per-entry guards exist for: everything before and after survives. The
         // middle event's recurrence is unreadable, which is the failure that genuinely throws.
-        LiveEventDetails d = LiveEventDetails.read(List.of(
+        LiveEventDetails d = LiveEventDetails.read(live(
                 event("before").put("image", "aaa"),
                 event("bad").put("recurrence_rule", "not-an-object"),
                 event("after").put("image", "bbb")));
@@ -105,6 +113,35 @@ class LiveEventDetailsTest {
         assertThat(d.returned()).containsExactlyInAnyOrder("before", "bad", "after");
         assertThat(d.covers()).containsOnlyKeys("before", "after");
         assertThat(d.recurrenceFailed()).containsExactly("bad");
+    }
+
+    @Test
+    void anElementThatIsNotAnEventObjectCostsOnlyItself() {
+        // The array is walked here rather than converted by the caller. When the caller did it,
+        // this element's getObject threw one level up — outside every per-entry guard — so the
+        // whole live read was discarded and both good events lost their covers.
+        LiveEventDetails d = LiveEventDetails.read(live(
+                event("before").put("image", "aaa"),
+                "not-an-object",
+                event("after").put("image", "bbb")));
+
+        assertThat(d.unidentifiable()).isEqualTo(1);
+        assertThat(d.returned()).containsExactlyInAnyOrder("before", "after");
+        assertThat(d.covers()).containsOnlyKeys("before", "after");
+    }
+
+    @Test
+    void anImageThatIsNotAStringIsUnreadableRatherThanANonsenseUrl() {
+        // getString coerces via toString, so without a typed check this event would be reported as
+        // having a cover at a URL built from an object's toString — a claim about the event drawn
+        // from a field that could not be read. Unreadable is the honest side of that line: not
+        // described, so the caveat counts it rather than the listing printing it.
+        LiveEventDetails d = LiveEventDetails.read(live(
+                event("1").put("image", DataObject.empty().put("hash", "aaa"))));
+
+        assertThat(d.returned()).containsExactly("1");
+        assertThat(d.described()).isEmpty();
+        assertThat(d.covers()).isEmpty();
     }
 
     @Test

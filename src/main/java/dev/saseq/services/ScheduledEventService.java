@@ -7,10 +7,13 @@ import net.dv8tion.jda.api.entities.Member;
 import net.dv8tion.jda.api.entities.ScheduledEvent;
 import net.dv8tion.jda.api.entities.channel.middleman.GuildChannel;
 import net.dv8tion.jda.api.exceptions.ErrorResponseException;
+import net.dv8tion.jda.api.exceptions.ParsingException;
 import net.dv8tion.jda.api.requests.ErrorResponse;
 import net.dv8tion.jda.api.requests.Method;
 import net.dv8tion.jda.api.requests.Route;
+import net.dv8tion.jda.api.utils.data.DataArray;
 import net.dv8tion.jda.api.utils.data.DataObject;
+import net.dv8tion.jda.api.utils.data.DataType;
 import net.dv8tion.jda.internal.requests.RestActionImpl;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
@@ -20,7 +23,10 @@ import org.springframework.stereotype.Service;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
@@ -131,33 +137,46 @@ public class ScheduledEventService {
      */
     private DataObject fetchRaw(String guildId, String eventId) {
         Route.CompiledRoute route = Route.custom(Method.GET, "guilds/{guild_id}/scheduled-events/{event_id}")
-                .compile(guildId, eventId);
+                .compile(requireSnowflake(guildId, "guildId"), requireSnowflake(eventId, "eventId"));
         return new RestActionImpl<DataObject>(jda, route,
                 (response, request) -> response.getObject()).complete();
     }
 
     /** The guild's scheduled events as raw JSON, for the fields JDA's entities do not carry. */
-    private net.dv8tion.jda.api.utils.data.DataArray fetchRawList(String guildId) {
+    private DataArray fetchRawList(String guildId) {
         Route.CompiledRoute route = Route.custom(Method.GET, "guilds/{guild_id}/scheduled-events")
-                .compile(guildId);
-        return new RestActionImpl<net.dv8tion.jda.api.utils.data.DataArray>(jda, route,
+                .compile(requireSnowflake(guildId, "guildId"));
+        return new RestActionImpl<DataArray>(jda, route,
                 (response, request) -> response.getArray()).complete();
     }
 
     private DataObject patchRaw(String guildId, String eventId, DataObject body) {
         Route.CompiledRoute route = Route.custom(Method.PATCH, "guilds/{guild_id}/scheduled-events/{event_id}")
-                .compile(guildId, eventId);
+                .compile(requireSnowflake(guildId, "guildId"), requireSnowflake(eventId, "eventId"));
         return new RestActionImpl<DataObject>(jda, route, body,
                 (response, request) -> response.getObject()).complete();
     }
 
-    /** The event's recurrence rule, or null if it is not a recurring event. */
-    private DataObject recurrenceOf(DataObject raw) {
-        // Tolerates an absent key as well as an explicit null, so it is safe to call with the empty
-        // object used when a best-effort read failed.
-        return !raw.hasKey("recurrence_rule") || raw.isNull("recurrence_rule")
-                ? null
-                : raw.getObject("recurrence_rule");
+    /**
+     * Refuse anything that is not a snowflake before it becomes part of a route.
+     *
+     * <p>{@code Route#compile} substitutes placeholders textually, with no percent-encoding, and
+     * the result is concatenated onto the API prefix and handed to OkHttp, which canonicalises dot
+     * segments. A value containing {@code /}, {@code ..}, {@code ?} or {@code #} therefore chooses
+     * which endpoint the bot token is spent on rather than which event is addressed.
+     *
+     * <p>Every tool that goes through the cache gets this for free from
+     * {@code MiscUtil.parseSnowflake} inside {@code getScheduledEventById}. These routes bypass the
+     * cache deliberately — an event created seconds ago is not in it — so the check has to be here
+     * rather than inherited. Applied at the route rather than at each tool so a future caller
+     * cannot reintroduce the gap by forgetting it.
+     */
+    private static String requireSnowflake(String id, String paramName) {
+        if (id == null || id.isBlank() || !id.chars().allMatch(Character::isDigit)) {
+            throw new IllegalArgumentException(paramName
+                    + " must be a Discord snowflake (digits only)");
+        }
+        return id;
     }
 
     /**
@@ -179,7 +198,7 @@ public class ScheduledEventService {
             String outcome;
             try {
                 DataObject after = fetchRaw(guild.getId(), event.getId());
-                DataObject rule = recurrenceOf(after);
+                DataObject rule = RecurrenceRule.of(after);
                 outcome = rule == null
                         ? " The event is currently not recurring."
                         : " The event currently recurs: " + RecurrenceRule.describe(rule) + ".";
@@ -199,7 +218,7 @@ public class ScheduledEventService {
     /** Human list of the fields JDA's manager has already written. */
     private String describeApplied(String name, String description, String scheduledStartTime,
                                    OffsetDateTime endTime, String location, Integer statusCode) {
-        List<String> parts = new java.util.ArrayList<>();
+        List<String> parts = new ArrayList<>();
         if (name != null && !name.isEmpty()) parts.add("name");
         if (description != null && !description.isEmpty()) parts.add("description");
         if (scheduledStartTime != null && !scheduledStartTime.isEmpty()) parts.add("start time");
@@ -504,7 +523,7 @@ public class ScheduledEventService {
             recurrenceReadFailed = true;
             recurrenceReadError = e.getMessage();
         }
-        DataObject existingRecurrence = recurrenceOf(raw);
+        DataObject existingRecurrence = RecurrenceRule.of(raw);
 
         // Validate the recurrence BEFORE anything is persisted. manager.complete() below is not
         // undoable, so parsing afterwards would report failure on a request that had already
@@ -700,11 +719,9 @@ public class ScheduledEventService {
         // after a fetch and a round trip.
         Guild guild = getGuild(guildId);
         String resolvedGuild = guild.getId();
-        // isBlank, matching the source arguments above: "   " is not a supplied id, and treating
-        // it as one encodes it into the route and spends a request to be told so.
-        if (eventId == null || eventId.isBlank()) {
-            throw new IllegalArgumentException("eventId cannot be null");
-        }
+        // The same check the raw routes below make, run here so it costs nothing: a bad id refused
+        // now is refused before up to 8 MB is fetched or read from disk, rather than after.
+        requireSnowflake(eventId, "eventId");
 
         String source;
         byte[] bytes;
@@ -758,7 +775,7 @@ public class ScheduledEventService {
             }
             throw new IllegalArgumentException("Could not read that event before setting its cover"
                     + reason(discordSaidNo) + ". Nothing was changed.");
-        } catch (net.dv8tion.jda.api.exceptions.ParsingException malformed) {
+        } catch (ParsingException malformed) {
             // Discord answered; the answer would not parse. The listing keeps "returned but
             // unparseable" distinct from "not returned" at some length, and collapsing them here
             // would send the reader to check connectivity for a response that arrived.
@@ -1013,6 +1030,13 @@ public class ScheduledEventService {
     // Package-private for the same reason as resolveEndTime and coverType: testable without a
     // live event.
     static String coverUrlOf(DataObject raw, String eventId) {
+        // Typed check first. getString coerces via toString rather than throwing, so an object or
+        // array here would become a hash-shaped nonsense string and be reported as this event's
+        // cover — a positive claim from a field that was not readable. Callers already separate
+        // "no cover" from "could not read"; this is what puts it on the right side.
+        if (raw.hasKey("image") && !raw.isNull("image") && !raw.isType("image", DataType.STRING)) {
+            throw new ParsingException("image is not a string for event " + eventId);
+        }
         String hash = raw.getString("image", null);
         return hash == null ? null : coverUrl(eventId, hash);
     }
@@ -1099,7 +1123,7 @@ public class ScheduledEventService {
         // ScheduledEvent.getImageUrl() for two reasons: it costs nothing extra, and it is live. A
         // cover changed out of band is exactly the case this listing needs to be right about, and
         // that is the case where JDA's cached entity is stale.
-        // The rendered text, not the DataObject. recurrenceOf checks only the top-level shape,
+        // The rendered text, not the DataObject. RecurrenceRule.of checks only the top-level shape,
         // so a malformed by_weekday survives it and RecurrenceRule.describe throws — and describe
         // used to run in the render lambda below, outside every per-entry catch, taking the whole
         // listing down. Describing inside the guard means such an event reaches the
@@ -1112,15 +1136,13 @@ public class ScheduledEventService {
         // The per-entry reading lives in LiveEventDetails so it can be tested without driving a
         // RestActionImpl. That is the half where the mistakes were, and every test of the counts
         // and the caveat builds its input by hand — so a wiring error here would leave them green.
+        // The whole array goes across, elements included: converting them here first put one
+        // getObject per entry outside every per-entry guard, so a single non-object element threw
+        // past them and discarded the entries that had already been read.
         LiveEventDetails details;
         boolean rawKnown = false;
         try {
-            var raw = fetchRawList(guild.getId());
-            List<DataObject> entries = new java.util.ArrayList<>(raw.length());
-            for (int i = 0; i < raw.length(); i++) {
-                entries.add(raw.getObject(i));
-            }
-            details = LiveEventDetails.read(entries);
+            details = LiveEventDetails.read(fetchRawList(guild.getId()));
             rawKnown = true;
         } catch (RuntimeException e) {
             // Recurrence and cover detail are enhancements to this listing, not its purpose, so
@@ -1130,11 +1152,11 @@ public class ScheduledEventService {
             // information.
             details = LiveEventDetails.unread();
         }
-        java.util.Map<String, String> rules = details.rules();
-        java.util.Map<String, String> covers = details.covers();
-        java.util.Set<String> described = details.described();
-        java.util.Set<String> returned = details.returned();
-        java.util.Set<String> recurrenceFailed = details.recurrenceFailed();
+        Map<String, String> rules = details.rules();
+        Map<String, String> covers = details.covers();
+        Set<String> described = details.described();
+        Set<String> returned = details.returned();
+        Set<String> recurrenceFailed = details.recurrenceFailed();
         int unidentifiable = details.unidentifiable();
 
         // The tally is a pure function of the id sets, extracted for the same reason coverCaveat
