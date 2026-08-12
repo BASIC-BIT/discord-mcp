@@ -468,7 +468,7 @@ public class ScheduledEventService {
             @ToolParam(description = RECURRENCE_PARAM, required = false) String recurrenceRule) {
 
         Guild guild = getGuild(guildId);
-        ScheduledEvent event = getEventForCover(guild, eventId);
+        ScheduledEvent event = getEvent(guild, eventId);
 
         // Read the live event before touching it: JDA cannot tell us whether this is a recurring
         // series, and that changes what a start-time edit means.
@@ -661,10 +661,11 @@ public class ScheduledEventService {
         // Cheap checks first, matching download_attachment: it resolves its root before spending
         // any network call so a misconfigured root fails immediately rather than after 50 MB.
         // Same shape here — a mistyped eventId should not cost a 5 MB transfer. Both are cache
-        // lookups, so this costs no request of its own, and it does not weaken the guards below:
-        // they are what confine the source, and nothing here can route around them.
+        // reads, except on a cache miss, where getEventForCover spends one GET to tell "does not
+        // exist" from "not here yet". It does not weaken the guards below: they are what confine
+        // the source, and nothing here can route around them.
         Guild guild = getGuild(guildId);
-        ScheduledEvent event = getEvent(guild, eventId);
+        ScheduledEvent event = getEventForCover(guild, eventId);
         // Resolved before the read for the same reason, so an unset or bad root is reported
         // without having opened anything.
         Path root = hasPath
@@ -857,10 +858,12 @@ public class ScheduledEventService {
      * @param unreadable listed events Discord returned but whose details would not parse
      * @param absent     listed events Discord did not return at all
      * @param unlisted   events Discord returned that are not in the listing
+     * @param unidentifiable entries Discord returned with no usable id, which cannot be matched
+     *                       to any listed event in either direction
      * @param rawKnown   whether the live read succeeded at all
      */
     static String coverCaveat(int described, int coverless, int unreadable, int absent,
-                              int unlisted, boolean rawKnown) {
+                              int unlisted, int unidentifiable, boolean rawKnown) {
         if (!rawKnown) {
             return "\n(Recurrence and cover images could not be read, so no event below is marked as"
                     + " recurring or as having a cover even if it is.)";
@@ -896,6 +899,15 @@ public class ScheduledEventService {
             join(sb).append("Discord returned ").append(unlisted).append(" event")
                     .append(unlisted == 1 ? "" : "s").append(" not in this list, so the list is")
                     .append(" incomplete — the cache has not caught up");
+        }
+        if (unidentifiable > 0) {
+            // Its own clause because it belongs to no event. Folding it into `unreadable` would
+            // name an event that cannot be named, and letting it fall through to `absent` would
+            // blame the cache for a malformed response.
+            join(sb).append(unidentifiable).append(unidentifiable == 1 ? " entry" : " entries")
+                    .append(" could not be read at all, so ")
+                    .append(unidentifiable == 1 ? "it is" : "they are")
+                    .append(" not counted above either way");
         }
         return sb.length() == 0 ? "" : "\n(" + sb + ".)";
     }
@@ -1050,6 +1062,9 @@ public class ScheduledEventService {
         // and the caveat states them differently — collapsing them made a returned-but-unreadable
         // event report as a cache lag that had not happened.
         java.util.Set<String> returned = new java.util.HashSet<>();
+        // Entries with no usable id. They cannot be attributed to any listed event, so they
+        // cannot be counted as unreadable-but-identified — they get their own line or none.
+        int unidentifiable = 0;
         boolean rawKnown = false;
         try {
             Route.CompiledRoute route = Route.custom(Method.GET, "guilds/{guild_id}/scheduled-events")
@@ -1065,6 +1080,7 @@ public class ScheduledEventService {
                     // defence: recurrenceOf and coverUrlOf can throw on the same entry, land in
                     // the outer catch, and drop recurrence and covers for every other event —
                     // the exact cost the id guard exists to avoid.
+                    unidentifiable++;
                     continue;
                 }
                 // Defaulted rather than demanded. This loop now runs for every event rather than
@@ -1072,7 +1088,14 @@ public class ScheduledEventService {
                 // catch would report the whole listing as unreadable, losing recurrence and covers
                 // for every other event too.
                 String id = o.getString("id", null);
-                if (id == null) continue;
+                if (id == null) {
+                    // Counted, not silently dropped. Discord did return this event; without an id
+                    // there is no way to say which, so a listed copy of it would otherwise fall
+                    // into "not in the live read" — the mislabelling the rest of this exists to
+                    // avoid — and nothing would mention it at all.
+                    unidentifiable++;
+                    continue;
+                }
                 // Recorded before the details are parsed: Discord did return this event, whatever
                 // happens to the rest of it.
                 returned.add(id);
@@ -1121,6 +1144,7 @@ public class ScheduledEventService {
             covers.clear();
             described.clear();
             returned.clear();
+            unidentifiable = 0;
         }
 
         int describedCount = (int) events.stream().filter(e -> described.contains(e.getId())).count();
@@ -1136,7 +1160,7 @@ public class ScheduledEventService {
         int unlistedCount = returned.size()
                 - (int) events.stream().filter(e -> returned.contains(e.getId())).count();
         String caveat = coverCaveat(describedCount, coverlessCount, unreadableCount,
-                absentCount, unlistedCount, rawKnown);
+                absentCount, unlistedCount, unidentifiable, rawKnown);
         return "Retrieved " + events.size() + " scheduled events:" + caveat + "\n" +
                 events.stream()
                         .map(e -> {
