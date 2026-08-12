@@ -202,7 +202,7 @@ public class MessageService {
      * <p>Unset means local filePath uploads are refused entirely. That is the safe default:
      * callers can still use fileUrl or base64 fileData.
      */
-    private Path allowedRoot() {
+    private LocalFileGuard.Root allowedRoot() {
         if (fileRoot == null || fileRoot.isBlank()) {
             throw new IllegalArgumentException(
                     "Local filePath uploads are disabled. Set DISCORD_MCP_FILE_ROOT to an "
@@ -211,7 +211,7 @@ public class MessageService {
         return LocalFileGuard.resolveRoot(fileRoot, "DISCORD_MCP_FILE_ROOT");
     }
 
-    private Path allowedDownloadRoot() {
+    private LocalFileGuard.Root allowedDownloadRoot() {
         if (downloadRoot == null || downloadRoot.isBlank()) {
             throw new IllegalArgumentException(
                     "Attachment downloads are disabled. Set DISCORD_MCP_DOWNLOAD_ROOT to the "
@@ -219,7 +219,8 @@ public class MessageService {
                             + "from DISCORD_MCP_FILE_ROOT on purpose: read and write are "
                             + "different grants.");
         }
-        Path root = LocalFileGuard.resolveRoot(downloadRoot, "DISCORD_MCP_DOWNLOAD_ROOT");
+        LocalFileGuard.Root resolved = LocalFileGuard.resolveRoot(downloadRoot, "DISCORD_MCP_DOWNLOAD_ROOT");
+        Path root = resolved.path();
         // Existing and writable are different things, and a read-only bind mount is a common
         // way to get the first without the second. Without this probe the failure surfaces only
         // at createTempFile, by which point the whole 100 MB budget may already have been pulled
@@ -255,7 +256,7 @@ public class MessageService {
             // which the probe above establishes directly.
             deleteQuietly(probe);
         }
-        return root;
+        return resolved;
     }
 
     /** Best-effort removal of a scratch file, where failing to clean up is not worth an error. */
@@ -597,7 +598,7 @@ public class MessageService {
 
         // Resolve the root before spending any network calls, so a misconfigured
         // root fails immediately instead of after downloading 50 MB.
-        Path root = allowedDownloadRoot();
+        Path root = allowedDownloadRoot().path();
 
         MessageChannel channel = getMessageChannelById(channelId);
         if (channel == null) {

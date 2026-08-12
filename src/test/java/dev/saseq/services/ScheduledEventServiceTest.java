@@ -267,8 +267,8 @@ class ScheduledEventServiceTest {
 
     @Test
     void anUnreadableCoverDoesNotAlsoSuppressTheRecurrence() {
-        // The mirror of the test above, and the direction that was broken three times running:
-        // recurrence read fine, cover did not. The event is counted as unreadable-for-covers and
+        // The mirror of the test above: recurrence read fine, cover did not. The event is
+        // counted as unreadable-for-covers and
         // nothing claims anything about its schedule — in particular `recurrenceUnreadable` stays
         // 0, because the recurrence was read. Only its cover is unknown.
         assertThat(ScheduledEventService.coverCaveat(2, 0, 1, 0, 0, 0, 0, true))
@@ -297,7 +297,9 @@ class ScheduledEventServiceTest {
         // two absent, it asserted something about two events it never saw — in the same sentence
         // that then called those two unknown.
         assertThat(ScheduledEventService.coverCaveat(1, 1, 0, 2, 0, 0, 0, true))
-                .isEqualTo("\n(1 of 1 events has no cover image; 2 events were not in the live"
+                // "1 of 1 event", singular on both. Reachable precisely because the shorthand
+                // above also requires nothing unreadable, absent or unidentifiable.
+                .isEqualTo("\n(1 of 1 event has no cover image; 2 events were not in the live"
                         + " read, so their covers are unknown.)")
                 .doesNotContain("no event here");
         // Nothing missing, so the claim is supported and the shorthand stands.

@@ -670,7 +670,7 @@ public class ScheduledEventService {
         ScheduledEvent event = getEventForCover(guild, eventId);
         // Resolved before the read for the same reason, so an unset or bad root is reported
         // without having opened anything.
-        Path root = hasPath
+        LocalFileGuard.Root root = hasPath
                 ? LocalFileGuard.resolveRoot(requireCoverFileRoot(), "DISCORD_MCP_FILE_ROOT")
                 : null;
 
@@ -885,12 +885,15 @@ public class ScheduledEventService {
             if (coverless == described && unreadable == 0 && absent == 0 && unidentifiable == 0) {
                 sb.append("no event here has a cover image");
             } else {
-                // The noun counts `described` and the verb agrees with `coverless`: "1 of 3
-                // events has no cover image". Taking both from one number gets one of them wrong,
-                // and taking both from `described` is what produced "1 of 3 events have". The
-                // arm for described == 1 that used to be here was unreachable anyway — reaching
-                // it needs coverless < described == 1, so coverless == 0, which skips the block.
-                sb.append(coverless).append(" of ").append(described).append(" events")
+                // Three numbers, three agreements, and they are not the same number. The noun
+                // counts `described`, the verb agrees with `coverless`. Taking both from one gets
+                // one of them wrong.
+                //
+                // `described == 1` is reachable: the shorthand above also requires nothing
+                // unreadable, absent or unidentifiable, so one described-and-coverless event
+                // beside two absent ones lands here and would otherwise read "1 of 1 events".
+                sb.append(coverless).append(" of ").append(described)
+                        .append(described == 1 ? " event" : " events")
                         .append(coverless == 1 ? " has" : " have").append(" no cover image");
             }
         }
@@ -1118,12 +1121,10 @@ public class ScheduledEventService {
             var raw = new RestActionImpl<net.dv8tion.jda.api.utils.data.DataArray>(jda, route,
                     (response, request) -> response.getArray()).complete();
             for (int i = 0; i < raw.length(); i++) {
-                // The element AND its id are read inside the guard. Pulling the id out below it
-                // left getString("id", null) exposed: the default covers an absent key, not a
-                // non-string one, which throws and reaches the outer catch — discarding every
-                // cover and recurrence already parsed and reporting the whole live read as
-                // failed. That is the cost this per-entry guard exists to avoid, one line outside
-                // the guard.
+                // The element AND its id are read inside the guard. getString("id", null)
+                // defaults an absent key, not a non-string one, so an id of the wrong type throws
+                // — and outside this guard that reaches the outer catch, discarding every cover
+                // and recurrence already parsed and reporting the whole live read as failed.
                 DataObject o;
                 String id;
                 try {
@@ -1169,13 +1170,12 @@ public class ScheduledEventService {
                 } catch (RuntimeException malformed) {
                     // Likewise in reverse.
                 }
-                // Recorded before the cover gate, not after. Separate try blocks and separate
-                // flags stopped a malformed field discarding its neighbour's value and vouching
-                // for its neighbour's success; this is the third face of the same invariant, and
-                // it was still broken: `continue` on an unreadable cover skipped rules.put, so a
-                // perfectly good recurrence vanished and the caveat blamed only the cover. That
-                // is the silent "does not recur" this counter exists to prevent, reached from the
-                // other side. Each field's knowledge is committed on its own terms.
+                // Before the cover gate, not after. One invariant in three parts: separate try
+                // blocks stop a malformed field discarding its neighbour's value, separate flags
+                // stop one field's success vouching for the other's, and committing before the
+                // gate stops an unreadable cover taking a good recurrence down with it. Skipping
+                // rules.put here would drop the rule while the caveat blamed only the cover — the
+                // silent "does not recur" this counter exists to prevent.
                 if (rule != null) {
                     rules.put(id, rule);
                 }

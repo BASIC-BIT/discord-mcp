@@ -25,10 +25,11 @@ class LocalFileGuardTest {
 
     @Test
     void aPathInsideTheRootResolvesToItsRealLocation(@TempDir Path dir) throws IOException {
-        Path root = Files.createDirectory(dir.resolve("root"));
-        Path file = Files.writeString(root.resolve("poster.png"), "x");
+        Path dirRoot = Files.createDirectory(dir.resolve("root"));
+        Path file = Files.writeString(dirRoot.resolve("poster.png"), "x");
+        LocalFileGuard.Root root = LocalFileGuard.resolveRoot(dirRoot.toString(), "VAR");
 
-        assertThat(LocalFileGuard.resolveWithinRoot(file.toString(), root.toRealPath(), "filePath", "upload"))
+        assertThat(LocalFileGuard.resolveWithinRoot(file.toString(), root, "filePath", "upload"))
                 .extracting(LocalFileGuard.ConfinedPath::path).isEqualTo(file.toRealPath());
     }
 
@@ -36,7 +37,8 @@ class LocalFileGuardTest {
     void aSiblingSharingTheRootsNamePrefixIsNotInsideIt(@TempDir Path dir) throws IOException {
         // The reason the check is Path.startsWith and not String.startsWith: "/x/rootX" has
         // "/x/root" as a string prefix but is a different directory.
-        Path root = Files.createDirectory(dir.resolve("root")).toRealPath();
+        LocalFileGuard.Root root = LocalFileGuard.resolveRoot(
+                Files.createDirectory(dir.resolve("root")).toString(), "VAR");
         Path sibling = Files.createDirectory(dir.resolve("rootX"));
         Path outside = Files.writeString(sibling.resolve("secret"), "x");
 
@@ -47,9 +49,10 @@ class LocalFileGuardTest {
 
     @Test
     void aSymlinkOutOfTheRootIsRejectedOnItsResolvedTarget(@TempDir Path dir) throws IOException {
-        Path root = Files.createDirectory(dir.resolve("root")).toRealPath();
+        LocalFileGuard.Root root = LocalFileGuard.resolveRoot(
+                Files.createDirectory(dir.resolve("root")).toString(), "VAR");
         Path secret = Files.writeString(dir.resolve("secret"), "token");
-        Path link = root.resolve("innocent.png");
+        Path link = root.path().resolve("innocent.png");
         try {
             Files.createSymbolicLink(link, secret);
         } catch (IOException | UnsupportedOperationException e) {
@@ -63,7 +66,8 @@ class LocalFileGuardTest {
 
     @Test
     void theRootItselfIsNotAFileInsideIt(@TempDir Path dir) throws IOException {
-        Path root = Files.createDirectory(dir.resolve("root")).toRealPath();
+        LocalFileGuard.Root root = LocalFileGuard.resolveRoot(
+                Files.createDirectory(dir.resolve("root")).toString(), "VAR");
 
         assertThatThrownBy(() -> LocalFileGuard.resolveWithinRoot(root.toString(), root, "filePath", "upload"))
                 .isInstanceOf(IllegalArgumentException.class);
@@ -71,8 +75,9 @@ class LocalFileGuardTest {
 
     @Test
     void aDirectoryInsideTheRootIsNotARegularFile(@TempDir Path dir) throws IOException {
-        Path root = Files.createDirectory(dir.resolve("root")).toRealPath();
-        Path sub = Files.createDirectory(root.resolve("sub"));
+        LocalFileGuard.Root root = LocalFileGuard.resolveRoot(
+                Files.createDirectory(dir.resolve("root")).toString(), "VAR");
+        Path sub = Files.createDirectory(root.path().resolve("sub"));
 
         assertThatThrownBy(() -> LocalFileGuard.resolveWithinRoot(sub.toString(), root, "filePath", "upload"))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -80,15 +85,32 @@ class LocalFileGuardTest {
     }
 
     @Test
-    void onlyResolveWithinRootCanProduceWhatReadBoundedAccepts() {
-        // The confinement is in the type, not in a javadoc line. readBounded used to take a bare
-        // Path, so the next tool could hand it Paths.get(filePath) — an unconfined read with this
-        // class's name on the call site. This asserts the wrapper is the only way in, which is
-        // what a comment saying "already resolved" could never do.
+    void neitherWrapperCanBeMintedOutsideItsFactory() {
+        // The confinement is in the types, not in a javadoc line — but a type only holds if the
+        // wrapper cannot be built around something unchecked. Asserting the parameter types alone
+        // would not show that: `new ConfinedPath(Paths.get("/etc/shadow"))` type-checks perfectly.
+        // The constructors are what has to hold.
+        //
+        // Both wrappers, because both sides matter. A bare Path root skips toRealPath,
+        // is-a-directory and is-not-a-filesystem-root, and "/" is the fail-open one: every path on
+        // the host starts with it, so the guard would confine nothing while carrying its name.
+        assertThat(LocalFileGuard.ConfinedPath.class.getDeclaredConstructors())
+                .allSatisfy(c -> assertThat(java.lang.reflect.Modifier.isPrivate(c.getModifiers()))
+                        .as("ConfinedPath constructor must be private, or the wrapper guarantees nothing")
+                        .isTrue());
+        assertThat(LocalFileGuard.Root.class.getDeclaredConstructors())
+                .allSatisfy(c -> assertThat(java.lang.reflect.Modifier.isPrivate(c.getModifiers()))
+                        .as("Root constructor must be private, or resolveRoot's checks are optional")
+                        .isTrue());
+
         assertThat(LocalFileGuard.class.getDeclaredMethods())
                 .filteredOn(m -> m.getName().equals("readBounded"))
                 .allSatisfy(m -> assertThat(m.getParameterTypes()[0])
                         .isEqualTo(LocalFileGuard.ConfinedPath.class));
+        assertThat(LocalFileGuard.class.getDeclaredMethods())
+                .filteredOn(m -> m.getName().equals("resolveWithinRoot"))
+                .allSatisfy(m -> assertThat(m.getParameterTypes()[1])
+                        .isEqualTo(LocalFileGuard.Root.class));
     }
 
     @Test
@@ -113,10 +135,11 @@ class LocalFileGuardTest {
     @Test
     void readingStopsOneBytePastTheLimitRatherThanTrustingTheFileSize(@TempDir Path dir) throws IOException {
         // Through the factory, because there is no other way to make one — which is the point.
-        Path root = Files.createDirectory(dir.resolve("root")).toRealPath();
-        Files.write(root.resolve("f"), new byte[64]);
+        LocalFileGuard.Root root = LocalFileGuard.resolveRoot(
+                Files.createDirectory(dir.resolve("root")).toString(), "VAR");
+        Files.write(root.path().resolve("f"), new byte[64]);
         LocalFileGuard.ConfinedPath file = LocalFileGuard.resolveWithinRoot(
-                root.resolve("f").toString(), root, "filePath", "upload");
+                root.path().resolve("f").toString(), root, "filePath", "upload");
 
         assertThat(LocalFileGuard.readBounded(file, 64, "file")).hasSize(64);
         assertThatThrownBy(() -> LocalFileGuard.readBounded(file, 63, "cover image"))
@@ -130,11 +153,12 @@ class LocalFileGuardTest {
     void anUnreadableFileFailsWithTheNounInMidSentenceForm(@TempDir Path dir) throws IOException {
         // Confined when resolved, then removed — the only honest way to reach the IO failure now
         // that a ConfinedPath cannot be minted around a path that was never checked.
-        Path root = Files.createDirectory(dir.resolve("root")).toRealPath();
-        Files.write(root.resolve("gone"), new byte[1]);
+        LocalFileGuard.Root root = LocalFileGuard.resolveRoot(
+                Files.createDirectory(dir.resolve("root")).toString(), "VAR");
+        Files.write(root.path().resolve("gone"), new byte[1]);
         LocalFileGuard.ConfinedPath vanishing = LocalFileGuard.resolveWithinRoot(
-                root.resolve("gone").toString(), root, "filePath", "upload");
-        Files.delete(root.resolve("gone"));
+                root.path().resolve("gone").toString(), root, "filePath", "upload");
+        Files.delete(root.path().resolve("gone"));
 
         assertThatThrownBy(() -> LocalFileGuard.readBounded(vanishing, 10, "cover image"))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -147,11 +171,12 @@ class LocalFileGuardTest {
         // Deliberately one message. Two would let any caller ask "does /etc/shadow exist?" and
         // read the answer off which refusal came back — an existence oracle over the whole host,
         // one tool call at a time. Both still name the parameter, which is what an operator needs.
-        Path root = Files.createDirectory(dir.resolve("root")).toRealPath();
+        LocalFileGuard.Root root = LocalFileGuard.resolveRoot(
+                Files.createDirectory(dir.resolve("root")).toString(), "VAR");
         Path outside = Files.writeString(dir.resolve("real-but-outside"), "x");
 
         String missing = catchThrowable(() -> LocalFileGuard.resolveWithinRoot(
-                root.resolve("nope").toString(), root, "filePath", "upload")).getMessage();
+                root.path().resolve("nope").toString(), root, "filePath", "upload")).getMessage();
         String elsewhere = catchThrowable(() -> LocalFileGuard.resolveWithinRoot(
                 outside.toString(), root, "filePath", "upload")).getMessage();
 
@@ -161,10 +186,11 @@ class LocalFileGuardTest {
 
     @Test
     void theBytesReadAreTheFilesOwn(@TempDir Path dir) throws IOException {
-        Path root = Files.createDirectory(dir.resolve("root")).toRealPath();
-        Files.writeString(root.resolve("f"), "hello");
+        LocalFileGuard.Root root = LocalFileGuard.resolveRoot(
+                Files.createDirectory(dir.resolve("root")).toString(), "VAR");
+        Files.writeString(root.path().resolve("f"), "hello");
         LocalFileGuard.ConfinedPath file = LocalFileGuard.resolveWithinRoot(
-                root.resolve("f").toString(), root, "filePath", "upload");
+                root.path().resolve("f").toString(), root, "filePath", "upload");
 
         assertThat(new String(LocalFileGuard.readBounded(file, 1024, "file"), StandardCharsets.UTF_8))
                 .isEqualTo("hello");

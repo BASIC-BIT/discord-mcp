@@ -64,7 +64,7 @@ public final class LocalFileGuard {
      * @param variableName the environment variable it came from, for error messages
      * @return the fully resolved real path of the root
      */
-    public static Path resolveRoot(String configured, String variableName) {
+    public static Root resolveRoot(String configured, String variableName) {
         Path root;
         try {
             root = Paths.get(configured).toRealPath();
@@ -80,7 +80,35 @@ public final class LocalFileGuard {
         if (root.getNameCount() == 0) {
             throw new IllegalArgumentException(variableName + " must not be a filesystem root");
         }
-        return root;
+        return new Root(root);
+    }
+
+    /**
+     * A directory that has been through {@link #resolveRoot}.
+     *
+     * <p>Symmetric to {@link ConfinedPath}, and for the same reason. {@code resolveWithinRoot}
+     * took a bare {@code Path} for its root, so nothing required that root to have been through
+     * the checks that make it one — {@code toRealPath()}, is-a-directory, and is-not-a-filesystem
+     * root. A caller passing {@code Paths.get(System.getenv("SOME_ROOT"))} compiled, read
+     * correctly in review, and skipped all three. The {@code /} case is the dangerous one: every
+     * path on the host starts with it, so the guard would confine nothing while carrying its name
+     * on the call site.
+     */
+    public static final class Root {
+        private final Path path;
+
+        private Root(Path path) {
+            this.path = path;
+        }
+
+        public Path path() {
+            return path;
+        }
+
+        @Override
+        public String toString() {
+            return path.toString();
+        }
     }
 
     /**
@@ -98,10 +126,9 @@ public final class LocalFileGuard {
 
         // Private, and a class rather than a record for that reason alone: a record cannot narrow
         // its canonical constructor below the record's own visibility, so `public record
-        // ConfinedPath(Path)` left anyone free to write
+        // ConfinedPath(Path)` would let anyone write
         // `readBounded(new ConfinedPath(Paths.get(filePath)), ...)` — an unconfined read with this
-        // class's name on it, which is the exact bypass the wrapper was introduced to close. The
-        // first version of this shipped with that hole and four tests that demonstrated it.
+        // class's name on it, which is the bypass the wrapper exists to close.
         private ConfinedPath(Path path) {
             this.path = path;
         }
@@ -123,7 +150,7 @@ public final class LocalFileGuard {
      * would defeat the check entirely: the whole point is that the two can differ.
      *
      * @param filePath  the caller-supplied path
-     * @param allowed   the resolved root, from {@link #resolveRoot}
+     * @param allowed   the root, which only {@link #resolveRoot} can produce
      * @param paramName the tool parameter the path came from, for error messages
      * @param rootName  what the root is for, naming the grant an operator would have to widen.
      *                  Both callers pass "upload" today, correctly: they read from the same
@@ -132,7 +159,7 @@ public final class LocalFileGuard {
      *                  the upload directory.
      * @return the fully resolved real path
      */
-    public static ConfinedPath resolveWithinRoot(String filePath, Path allowed, String paramName,
+    public static ConfinedPath resolveWithinRoot(String filePath, Root allowed, String paramName,
                                                  String rootName) {
         Path real;
         try {
@@ -151,7 +178,7 @@ public final class LocalFileGuard {
             // legitimate operator than it is to someone probing.
             throw new IllegalArgumentException(refusal(paramName, rootName));
         }
-        if (!real.startsWith(allowed) || real.equals(allowed)) {
+        if (!real.startsWith(allowed.path()) || real.equals(allowed.path())) {
             throw new IllegalArgumentException(refusal(paramName, rootName));
         }
         if (!Files.isRegularFile(real, LinkOption.NOFOLLOW_LINKS)) {
@@ -202,8 +229,7 @@ public final class LocalFileGuard {
             // onward into a channel.
             // The class name, not e.getMessage(). For the exceptions this catch actually sees —
             // NoSuchFileException, AccessDeniedException, FileSystemException — getMessage() IS
-            // the absolute path, so appending it put back exactly what the file name was chosen to
-            // withhold. The comment and the code disagreed; the comment was right.
+            // the absolute path, which would put back exactly what naming only the file withholds.
             throw new IllegalArgumentException("Failed to read " + what + " " + real.getFileName()
                     + ": " + e.getClass().getSimpleName());
         }
