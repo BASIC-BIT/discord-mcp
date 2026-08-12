@@ -742,7 +742,7 @@ public class ScheduledEventService {
                 outcome = " Could not read the event back, so whether the cover was applied is"
                         + " unknown — check the event before retrying.";
             }
-            throw new IllegalArgumentException("Setting the cover image failed: " + e.getMessage()
+            throw new IllegalArgumentException("Setting the cover image failed" + reason(e)
                     + ". Sent " + FileSizes.format(bytes.length) + " of " + type.name() + " from "
                     + source + "." + outcome, e);
         }
@@ -757,8 +757,8 @@ public class ScheduledEventService {
             after = coverUrlOf(fetchRaw(guild.getId(), event.getId()), event.getId());
         } catch (RuntimeException e) {
             return "Set the cover image on " + event.getName() + " (ID: " + event.getId() + ") from "
-                    + source + ", but could not read the event back to confirm it ("
-                    + e.getMessage() + "). Check the event before uploading again.";
+                    + source + ", but could not read the event back to confirm it"
+                    + reason(e) + ". Check the event before uploading again.";
         }
 
         StringBuilder result = new StringBuilder("Set the cover image on ")
@@ -884,6 +884,17 @@ public class ScheduledEventService {
         return sb.length() == 0 ? "" : "\n(" + sb + ".)";
     }
 
+    /**
+     * An exception's message as a trailing clause, or nothing when it has none.
+     *
+     * <p>{@code getMessage()} can be null, and concatenating it renders the word "null" into a
+     * sentence. {@code editScheduledEvent} already guards this, and a null message once made a
+     * whole note vanish elsewhere in this file.
+     */
+    private static String reason(RuntimeException e) {
+        return e.getMessage() == null ? "" : ": " + e.getMessage();
+    }
+
     /** The cover image URL from a raw event object, or null if it has no cover. */
     // Package-private for the same reason as resolveEndTime and coverType: testable without a
     // live event.
@@ -988,18 +999,35 @@ public class ScheduledEventService {
             var raw = new RestActionImpl<net.dv8tion.jda.api.utils.data.DataArray>(jda, route,
                     (response, request) -> response.getArray()).complete();
             for (int i = 0; i < raw.length(); i++) {
-                DataObject o = raw.getObject(i);
-                // Defaulted rather than demanded. Discord always sends id, but this loop now runs
-                // for every event rather than only recurring ones, so one malformed entry would
-                // throw ParsingException and the catch below would report the whole listing as
-                // unreadable — losing recurrence and covers for every other event too.
+                DataObject o;
+                try {
+                    o = raw.getObject(i);
+                } catch (RuntimeException malformed) {
+                    // Per entry, not per response. Defaulting `id` below without this was half a
+                    // defence: recurrenceOf and coverUrlOf can throw on the same entry, land in
+                    // the outer catch, and drop recurrence and covers for every other event —
+                    // the exact cost the id guard exists to avoid.
+                    continue;
+                }
+                // Defaulted rather than demanded. This loop now runs for every event rather than
+                // only recurring ones, so one malformed entry would otherwise throw and the outer
+                // catch would report the whole listing as unreadable, losing recurrence and covers
+                // for every other event too.
                 String id = o.getString("id", null);
                 if (id == null) continue;
-                // Counted after the guard, not from raw.length(): an unparseable entry would
-                // otherwise inflate "Discord returned N events not in this list", which is a
-                // different problem from the one that number names.
+                DataObject rule;
+                String cover;
+                try {
+                    rule = recurrenceOf(o);
+                    cover = coverUrlOf(o, id);
+                } catch (RuntimeException malformed) {
+                    continue;
+                }
+                // Counted here, not from raw.length() and not before the parse: an entry that was
+                // returned but could not be read is neither "described" nor "returned but missing
+                // from the list", and counting it as the latter would report a cache lag that did
+                // not happen. Dropping it from both understates; it never misstates.
                 liveCount++;
-                DataObject rule = recurrenceOf(o);
                 if (rule != null) {
                     rules.put(id, rule);
                 }
@@ -1011,7 +1039,6 @@ public class ScheduledEventService {
                 described.add(id);
                 // Same helper the write path uses, so "read the cover from a raw event" has one
                 // spelling rather than two that can drift apart.
-                String cover = coverUrlOf(o, id);
                 if (cover != null) {
                     covers.put(id, cover);
                 }

@@ -65,27 +65,33 @@ docker run -d -i \
   -e DISCORD_TOKEN \
   -e DISCORD_GUILD_ID \
   -e DISCORD_MCP_DOWNLOAD_ROOT \
-  -e DISCORD_MCP_FILE_ROOT \
   -v discord-mcp-downloads:/var/lib/discord-mcp/downloads \
-  -v "$PWD/uploads":/var/lib/discord-mcp/uploads:ro \
   saseq/discord-mcp:latest
 ```
 
 > [!TIP]
 > `-e DISCORD_MCP_DOWNLOAD_ROOT` and the downloads `-v` are only needed for
-> `download_attachment`; `-e DISCORD_MCP_FILE_ROOT` and the uploads `-v` only for local-path
-> uploads (`send_file`'s `filePath`, and `set_guild_scheduled_event_image` when you are not
-> using its `imageUrl`). Leave either pair off and those tools refuse; nothing else changes.
+> `download_attachment`; leave them off and that tool refuses, and nothing else changes.
 >
-> The two are different shapes on purpose. Downloads are a **named volume**, because the app
-> writes them and they should survive `docker rm`. Uploads are a **read-only bind mount**,
-> because the operator puts files there and the app only reads them — a named volume cannot be
-> written from the host without `docker cp`, which makes "put the file there" impossible to
-> act on, and `:ro` enforces at the mount what the docs describe.
+> **For local-path uploads** — `send_file`'s `filePath`, and `set_guild_scheduled_event_image`
+> when you are not using its `imageUrl` — run `mkdir -p uploads` first, then add these two
+> lines to the command above:
 >
-> Run `mkdir -p uploads` before the first start. Docker creates a missing bind-mount source
-> as `root:root`, which leaves you a directory needing `sudo` to write into — the opposite of
-> the point.
+> ```
+>   -e DISCORD_MCP_FILE_ROOT \
+>   -v "$PWD/uploads":/var/lib/discord-mcp/uploads:ro \
+> ```
+>
+> Kept out of the block rather than shipped inert, so pasting it does not leave a root-owned
+> `./uploads` behind for a feature you did not enable — Docker creates a missing bind-mount
+> source as `root:root`. `docker-compose.yml` ships the same pair commented, for the same
+> reason.
+>
+> The two mounts are different shapes on purpose. Downloads are a **named volume**, because
+> the app writes them and they should survive `docker rm`. Uploads are a **read-only bind
+> mount**, because the operator puts files there and the app only reads them — a named volume
+> cannot be written from the host without `docker cp`, which makes "put the file there"
+> impossible to act on, and `:ro` enforces at the mount what the docs describe.
 
 Default MCP endpoint URL (HTTP profile): `http://localhost:8085/mcp`
 
@@ -249,6 +255,13 @@ that read local paths. It is a real widening: `send_file` can then read anything
 `download_attachment` saved, and what it saved was chosen by whoever got the agent to call
 it. Since `imageUrl` covers the case that used to motivate it, treat this as something to do
 only when you have a reason beyond convenience.
+
+It also cancels the format argument made above. That reasoning holds only because an upload
+root contains what the operator put there; once the two roots are one directory, the bytes
+were chosen by whoever caused the download, and making them begin with a PNG signature is
+free. A deployment that has already chained them should read the upgrade note as granting a
+real new capability — pinning attacker-chosen content to a permanent public URL — rather
+than a bounded one.
 
 ### `DISCORD_MCP_DOWNLOAD_ROOT`
 
