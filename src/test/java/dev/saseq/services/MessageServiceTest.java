@@ -321,8 +321,8 @@ class MessageServiceTest {
 
         try (MockedStatic<RemoteFetchGuard> guard = mockStatic(RemoteFetchGuard.class)) {
             // Honour the guard's real contract: it never returns more than maxBytes, it throws.
-            // The previous version of this test returned 60 MB for a 40 MB allowance, which the
-            // real guard cannot do — so it was asserting behaviour production could not reach.
+            // A stub that hands back 60 MB for a 40 MB allowance asserts behaviour production
+            // cannot reach.
             guard.when(() -> RemoteFetchGuard.fetch(any(), anyInt(), any()))
                     .thenThrow(new RemoteFetchGuard.TooLargeException("attachment exceeds the maximum allowed size"));
 

@@ -5,11 +5,8 @@ import java.util.Locale;
 /**
  * One spelling of "how big is this file" for messages a caller reads.
  *
- * <p>{@code MessageService} and {@code UserService} each carried a private copy, and a third was
- * nearly added alongside them. Its own class rather than a method on {@link LocalFileGuard}: that
- * class confines caller-supplied filesystem reads, most of its callers here touch no filesystem at
- * all, and a security guard is the one place where unrelated helpers should not accumulate — what
- * it does has to stay answerable in a sentence.
+ * <p>Its own class rather than a method on {@link LocalFileGuard}, which confines caller-supplied
+ * filesystem reads: a security guard is the one place unrelated helpers should not accumulate.
  */
 final class FileSizes {
 

@@ -52,9 +52,9 @@ record LiveEventDetails(Map<String, String> rules, Map<String, String> covers,
                 unidentifiable++;
                 continue;
             }
-            // Guarded, though not for the reason once claimed here: DataObject.getString coerces
-            // via toString rather than throwing, so nothing in this read is expected to fail. The
-            // try costs nothing and this method's contract is that one entry cannot cost the rest.
+            // Guarded, though nothing in this read is expected to fail: DataObject.getString
+            // coerces via toString rather than throwing. The try costs nothing and this method's
+            // contract is that one entry cannot cost the rest.
             String id;
             try {
                 id = o.getString("id", null);

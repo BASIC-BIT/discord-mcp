@@ -819,15 +819,14 @@ public class ScheduledEventService {
         // fails on null arguments, unreachable here — but inside the try it would produce a
         // message claiming bytes left the process that never did.
         Icon icon = Icon.from(bytes, type);
-        String after;
+        DataObject applied;
         try {
             // patchRaw, not the manager. The PATCH response carries the updated event, so the
             // new cover comes back with the write rather than costing a third request — and
             // nothing here needs JDA's cache, which is what made an event created moments ago
             // impossible to cover until the gateway caught up.
-            after = coverUrlOf(
-                    patchRaw(resolvedGuild, eventId, DataObject.empty().put("image", icon.getEncoding())),
-                    eventId);
+            applied = patchRaw(resolvedGuild, eventId,
+                    DataObject.empty().put("image", icon.getEncoding()));
         } catch (RuntimeException e) {
             // Same rule as patchRecurrence above: a thrown request does not prove the change did
             // not happen, since a lost response after Discord applied the image looks identical
@@ -855,6 +854,19 @@ public class ScheduledEventService {
                     + source + "." + outcome, e);
         }
 
+        // Parsed outside the try above, for the same reason Icon.from sits outside it: the write
+        // returned, so the change landed, and a response this cannot read is not a failed write —
+        // but the catch's first sentence says one. The read before the write has its own
+        // ParsingException catch to avoid exactly that claim; this is the same bar on the other
+        // side. Both are practically unreachable, since Discord returns the hash it just stored.
+        String after = null;
+        boolean afterKnown = true;
+        try {
+            after = coverUrlOf(applied, eventId);
+        } catch (ParsingException unreadable) {
+            afterKnown = false;
+        }
+
         // `after` came from the PATCH response itself, so it is what Discord stored rather than
         // what was sent — no separate read-back, and no window in which someone else's change
         // could be reported as this call's result.
@@ -869,7 +881,12 @@ public class ScheduledEventService {
                 // prompt a retry that could overwrite a deliberate change — the same
                 // over-attribution the failure path above stopped making.
                 .append("\n  • Now: ")
-                .append(after == null ? "no cover image — check the event before re-uploading" : after);
+                .append(!afterKnown
+                        // Not "no cover image": the response said something this could not read,
+                        // which establishes nothing about what the event now has.
+                        ? "applied, but Discord's response did not carry a readable cover — check"
+                        + " the event"
+                        : after == null ? "no cover image — check the event before re-uploading" : after);
         if (after != null && after.equals(before)) {
             // An unchanged hash is worth saying out loud: the likeliest cause is uploading the
             // file that was already there, and the call would otherwise read as a successful
@@ -1213,8 +1230,7 @@ public class ScheduledEventService {
         // case: with nothing listed, every event Discord returned lands in `unlisted`, whose
         // clause says the list is incomplete because the cache has not caught up. A branch of its
         // own meant a second renderer with its own field set, its own failure policy and no
-        // accounting for the entries it skipped — review found it missing a different thing in
-        // each of three rounds. One renderer cannot drift from itself.
+        // accounting for the entries it skipped. One renderer cannot drift from itself.
         //
         // "None" is still a claim, so it is only made when the live read agreed there are none.
         // unidentifiable too: entries that came back with no usable id are not in `returned`, so
@@ -1225,24 +1241,35 @@ public class ScheduledEventService {
         }
         return "Retrieved " + events.size() + " scheduled events:" + caveat + "\n" +
                 events.stream()
-                        .map(e -> {
-                            StringBuilder sb = new StringBuilder();
-                            sb.append("- **").append(e.getName()).append("** (ID: ").append(e.getId()).append(")\n");
-                            sb.append("  • Type: ").append(e.getType()).append(" | Status: ").append(e.getStatus()).append("\n");
-                            sb.append("  • Start: ").append(e.getStartTime());
-                            if (e.getEndTime() != null) sb.append(" | End: ").append(e.getEndTime());
-                            String rule = rules.get(e.getId());
-                            if (rule != null) sb.append("\n  • Recurs: ").append(rule);
-                            // Only the URL, and only when there is one. A per-event "none" would
-                            // be a line of nothing per coverless event on a listing with no result
-                            // cap; the header count carries that once instead. The recurrence line
-                            // above omits itself for the same reason.
-                            String cover = covers.get(e.getId());
-                            if (cover != null) sb.append("\n  • Cover image: ").append(cover);
-                            if (includeUserCount) sb.append("\n  • Interested: ").append(e.getInterestedUserCount()).append(" users");
-                            return sb.toString();
-                        })
+                        .map(e -> renderEvent(e, rules, covers, includeUserCount))
                         .collect(Collectors.joining("\n"));
+    }
+
+    /**
+     * One event's block in the listing.
+     *
+     * <p>Package-private because this is the last hop of the live read: the counts and the caveat
+     * are pinned clause by clause and the parse has its own tests, but both sets build their input
+     * by hand, so nothing but this reaches {@code covers.get(id)}. Keying a line off the wrong id
+     * prints one event's cover under another's name with every other test still green, and a
+     * {@code ScheduledEvent} — unlike {@code RestActionImpl} — is something a test can mock.
+     */
+    static String renderEvent(ScheduledEvent e, Map<String, String> rules,
+                              Map<String, String> covers, boolean includeUserCount) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("- **").append(e.getName()).append("** (ID: ").append(e.getId()).append(")\n");
+        sb.append("  • Type: ").append(e.getType()).append(" | Status: ").append(e.getStatus()).append("\n");
+        sb.append("  • Start: ").append(e.getStartTime());
+        if (e.getEndTime() != null) sb.append(" | End: ").append(e.getEndTime());
+        String rule = rules.get(e.getId());
+        if (rule != null) sb.append("\n  • Recurs: ").append(rule);
+        // Only the URL, and only when there is one. A per-event "none" would be a line of nothing
+        // per coverless event on a listing with no result cap; the header count carries that once
+        // instead. The recurrence line above omits itself for the same reason.
+        String cover = covers.get(e.getId());
+        if (cover != null) sb.append("\n  • Cover image: ").append(cover);
+        if (includeUserCount) sb.append("\n  • Interested: ").append(e.getInterestedUserCount()).append(" users");
+        return sb.toString();
     }
 
     @Tool(name = "get_guild_scheduled_event_users", description = "Get list of users interested in a scheduled event")

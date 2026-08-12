@@ -7,12 +7,11 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The half of the listing that had no coverage.
+ * The code that fills the collections the caveat is computed from.
  *
  * <p>{@code CoverCounts} and {@code coverCaveat} are pinned clause by clause, but every one of
- * those tests builds its input by hand — so a mistake in the code that fills these collections
- * leaves them all green while the caveat says something confidently wrong. Three of the cases
- * below are specifically argued for in comments and none of them was reachable by a test before.
+ * those tests builds its input by hand — so a mistake here leaves them all green while the caveat
+ * says something confidently wrong.
  */
 class LiveEventDetailsTest {
 
@@ -106,7 +105,7 @@ class LiveEventDetailsTest {
     }
 
     @Test
-    void aNumericIdIsTheOneCoercionWorthKeeping() {
+    void aNumericIdIsTheCoercionWorthKeeping() {
         // 123 and "123" address the same event, so this one is not a malformed field — and it is
         // the reason the guard above tests the shape rather than the JSON type.
         LiveEventDetails d = LiveEventDetails.read(live(

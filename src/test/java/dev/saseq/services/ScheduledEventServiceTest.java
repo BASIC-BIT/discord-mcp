@@ -17,6 +17,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.OffsetDateTime;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -209,9 +210,9 @@ class ScheduledEventServiceTest {
 
     @Test
     void anEventMissingFromTheLiveReadIsSaidSoEvenWhenEveryOtherCoverIsPresent() {
-        // The case that made the earlier version wrong: with no coverless events the caveat went
-        // empty, so an undescribed event rendered with no cover line and no explanation — exactly
-        // "this event has no cover", the claim the described set exists to avoid.
+        // A caveat gated on coverless events alone goes empty here, and an undescribed event then
+        // renders with no cover line and no explanation — exactly "this event has no cover", the
+        // claim the described set exists to avoid.
         assertThat(ScheduledEventService.coverCaveat(new CoverCounts(3, 0, 0, 1, 0, 0, 0, 0), true))
                 .isEqualTo("\n(1 event was not in the live read, so its cover is unknown.)");
     }
@@ -388,6 +389,49 @@ class ScheduledEventServiceTest {
         assertThatThrownBy(() -> ScheduledEventService.coverUrlOf(
                 DataObject.empty().put("image", ""), "1"))
                 .isInstanceOf(ParsingException.class);
+    }
+
+    @Test
+    void eachEventGetsItsOwnCoverAndItsOwnSchedule() {
+        // The last hop of the live read, and the one thing the parse and count tests cannot reach:
+        // both build their input by hand, so a line keyed off the wrong id prints one event's
+        // cover under another's name with every other test still green. Two events with a cover
+        // and a rule apiece, crossed over, so a swapped map or a shared key fails here.
+        ScheduledEvent night = liveEvent("11", "Community Night");
+        ScheduledEvent chess = liveEvent("22", "Chess Club");
+        Map<String, String> rules = Map.of("22", "Weekly on Monday");
+        Map<String, String> covers = Map.of(
+                "11", "https://cdn.discordapp.com/guild-events/11/aaa.png");
+
+        assertThat(ScheduledEventService.renderEvent(night, rules, covers, false))
+                .contains("Community Night")
+                .contains("• Cover image: https://cdn.discordapp.com/guild-events/11/aaa.png")
+                .doesNotContain("Recurs:")
+                .doesNotContain("Interested:");
+        assertThat(ScheduledEventService.renderEvent(chess, rules, covers, true))
+                .contains("Chess Club")
+                .contains("• Recurs: Weekly on Monday")
+                .doesNotContain("Cover image")
+                .contains("• Interested: 7 users");
+    }
+
+    @Test
+    void anEventWithNeitherPrintsNeitherLine() {
+        // A per-event "no cover image" would be a line of nothing on every coverless event in a
+        // listing with no result cap; the header caveat carries that fact once instead.
+        assertThat(ScheduledEventService.renderEvent(
+                liveEvent("11", "Community Night"), Map.of(), Map.of(), false))
+                .doesNotContain("Cover image")
+                .doesNotContain("Recurs:");
+    }
+
+    private static ScheduledEvent liveEvent(String id, String name) {
+        ScheduledEvent e = mock(ScheduledEvent.class);
+        lenient().when(e.getId()).thenReturn(id);
+        lenient().when(e.getName()).thenReturn(name);
+        lenient().when(e.getStartTime()).thenReturn(OffsetDateTime.parse("2026-08-05T20:00:00Z"));
+        lenient().when(e.getInterestedUserCount()).thenReturn(7);
+        return e;
     }
 
     @Test
