@@ -32,6 +32,18 @@ record LiveEventDetails(Map<String, String> rules, Map<String, String> covers,
                         Set<String> described, Set<String> returned,
                         Set<String> recurrenceFailed, int unidentifiable) {
 
+    LiveEventDetails {
+        // Copied, so this is a value rather than five live handles into read()'s working state.
+        // Set.copyOf preserves the iteration order it is given, which matters for `returned`:
+        // the caveat names those ids, and the order Discord returned them in is the only order
+        // they have any claim to.
+        rules = Map.copyOf(rules);
+        covers = Map.copyOf(covers);
+        described = Set.copyOf(described);
+        returned = Set.copyOf(returned);
+        recurrenceFailed = Set.copyOf(recurrenceFailed);
+    }
+
     static LiveEventDetails read(DataArray entries) {
         Map<String, String> rules = new HashMap<>();
         Map<String, String> covers = new HashMap<>();

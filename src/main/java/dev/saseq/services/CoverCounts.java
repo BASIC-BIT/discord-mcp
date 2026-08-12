@@ -32,10 +32,10 @@ import java.util.Set;
  *                   below it, and this one had nothing to point at.
  * @param unidentifiable entries Discord returned with no usable id, which cannot be matched to a
  *                       listed event in either direction
- * @param recurrenceUnreadable listed events whose recurrence is not known and which no other
- *                             clause accounts for: it would not parse, or Discord did not return
- *                             the event and it is not one of the terminal ones, whose clause
- *                             already covers both their missing lines
+ * @param recurrenceUnreadable listed events Discord returned whose recurrence would not parse,
+ *                             so a missing "Recurs:" line means unknown rather than absent. An
+ *                             event Discord did not return at all has an unknown schedule too,
+ *                             but its own clause — absent or terminal — names both missing lines
  */
 record CoverCounts(int described, int coverless, int unreadable, int absent, int terminal,
                    List<String> unlistedIds, int unidentifiable, int recurrenceUnreadable) {
@@ -85,18 +85,14 @@ record CoverCounts(int described, int coverless, int unreadable, int absent, int
             } else {
                 absent++;
             }
-            // Not only the parse failures: an absent event had no recurrence read either, and
-            // its row renders exactly like a one-off — no "Recurs:" line — while the clause about
-            // it discusses only its cover. Treating a schedule that was never read as "does not
-            // recur" is the confusion this whole recurrence read exists to remove.
-            //
-            // Terminal events are the exception, and not because their schedule is known. Their
-            // own clause already says nothing below was read for them, so counting them here
-            // gave every guild that has ever run an event a second clause saying the recurrence
-            // "could not be read" — which reads as a parse failure — about the event the line
-            // before had just explained was never returned.
-            if (recurrenceFailed.contains(id)
-                    || (!returned.contains(id) && !terminalIds.contains(id))) {
+            // Only the parse failures. An event Discord did not return had no recurrence read
+            // either — and its row renders exactly like a one-off, which is the confusion this
+            // recurrence read exists to remove — but its own clause is where that is said. Both
+            // the absent and the terminal clause name the cover and the schedule together, so
+            // counting those events here as well would give one event two accounts, the second
+            // saying its recurrence "could not be read": a parse failure, about an event the
+            // line before had just explained never arrived.
+            if (recurrenceFailed.contains(id)) {
                 recurrenceUnreadable++;
             }
         }

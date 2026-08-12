@@ -212,7 +212,7 @@ class ScheduledEventServiceTest {
         // when only one does.
         assertThat(ScheduledEventService.coverCaveat(new CoverCounts(3, 2, 0, 2, 0, unlistedIds(0), 0, 0), true))
                 .isEqualTo("\n(2 of 3 events have no cover image; 2 events were not in the live"
-                        + " read, so their covers are unknown.)");
+                        + " read, so their covers and schedules are unknown.)");
     }
 
     @Test
@@ -221,7 +221,7 @@ class ScheduledEventServiceTest {
         // renders with no cover line and no explanation — exactly "this event has no cover", the
         // claim the described set exists to avoid.
         assertThat(ScheduledEventService.coverCaveat(new CoverCounts(3, 0, 0, 1, 0, unlistedIds(0), 0, 0), true))
-                .isEqualTo("\n(1 event was not in the live read, so its cover is unknown.)");
+                .isEqualTo("\n(1 event was not in the live read, so its cover and schedule are unknown.)");
     }
 
     @Test
@@ -266,7 +266,7 @@ class ScheduledEventServiceTest {
                 // the coverless one. Taking both from the same number gets one of them wrong.
                 .isEqualTo("\n(1 of 2 events has no cover image; 1 event was returned but could"
                         + " not be read, so its cover is unknown; 1 event was not in the live read,"
-                        + " so its cover is unknown.)");
+                        + " so its cover and schedule are unknown.)");
     }
 
     @Test
@@ -352,7 +352,7 @@ class ScheduledEventServiceTest {
                 // "1 of 1 event", singular on both. Reachable precisely because the shorthand
                 // above also requires nothing unreadable, absent or unidentifiable.
                 .isEqualTo("\n(1 of 1 event has no cover image; 2 events were not in the live"
-                        + " read, so their covers are unknown.)")
+                        + " read, so their covers and schedules are unknown.)")
                 .doesNotContain("no event here");
         // Nothing missing, so the claim is supported and the shorthand stands.
         assertThat(ScheduledEventService.coverCaveat(new CoverCounts(3, 3, 0, 0, 0, unlistedIds(0), 0, 0), true))

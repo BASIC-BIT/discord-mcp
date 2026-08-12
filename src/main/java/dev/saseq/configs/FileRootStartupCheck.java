@@ -63,6 +63,10 @@ public class FileRootStartupCheck implements ApplicationRunner {
         }
     }
 
+    private static boolean isSet(String configured) {
+        return configured != null && !configured.isBlank();
+    }
+
     /**
      * A configured root, or null with a warning naming why it did not resolve.
      *
@@ -71,10 +75,6 @@ public class FileRootStartupCheck implements ApplicationRunner {
      * commented produces exactly it — and it has the same property this class exists for: the
      * only signal is a tool refusal, which reaches the model and not the operator.
      */
-    private static boolean isSet(String configured) {
-        return configured != null && !configured.isBlank();
-    }
-
     private LocalFileGuard.Root resolved(String configured, String variableName) {
         try {
             return LocalFileGuard.resolveRoot(configured, variableName);

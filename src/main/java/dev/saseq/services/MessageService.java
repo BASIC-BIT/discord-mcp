@@ -655,9 +655,12 @@ public class MessageService {
                 // — that would fail with its generic "exceeds the maximum allowed size", which
                 // blames the file when the call budget is what ran out.
                 failed.append("- ").append(attachments.size() - index + 1)
+                        // FileSizes here too. This was the one size left in the method spelled by
+                        // integer division, and it re-arms "0 MB" the moment the constant stops
+                        // being a whole number of megabytes.
                         .append(" further attachment(s): not attempted, the call's ")
-                        .append(MAX_DOWNLOAD_BUDGET_BYTES / (1024 * 1024))
-                        .append(" MB total was already spent.\n");
+                        .append(FileSizes.format(MAX_DOWNLOAD_BUDGET_BYTES))
+                        .append(" total was already spent.\n");
                 break;
             }
             int allowance = (int) Math.min(MAX_DOWNLOAD_FILE_BYTES, remainingBudget);
@@ -675,8 +678,8 @@ public class MessageService {
                 attempted += allowance;
                 failed.append("- `").append(attachment.getFileName()).append("` (ID ")
                         .append(attachment.getId()).append("): body exceeded the ")
-                        // formatFileSize, not integer MB: the remainder of a budget is routinely
-                        // under a megabyte, and "exceeded the 0 MB allowed for it" reads as a bug.
+                        // FileSizes, not integer MB: the remainder of a budget is routinely under
+                        // a megabyte, and "exceeded the 0 MB allowed for it" reads as a bug.
                         .append(FileSizes.format(allowance)).append(" allowed for it")
                         .append(allowance < MAX_DOWNLOAD_FILE_BYTES
                                 ? " — all that was left of this call's budget. Fetch it on its own."

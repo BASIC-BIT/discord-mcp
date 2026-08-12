@@ -1100,7 +1100,12 @@ public class ScheduledEventService {
                             + (c.unidentifiable() == 1 ? "entry" : "entries") + " with no id may be"
                             + (c.absent() == 1 ? " that one" : " among them") + ", so "
                             : " not in the live read, so ")
-                    .append(c.absent() == 1 ? "its cover is" : "their covers are").append(" unknown");
+                    // Cover and schedule, for the reason the terminal clause states: nothing was
+                    // read for these events, so a second clause saying their recurrence "could
+                    // not be read" would be two accounts of one event, and the wording reads as a
+                    // parse failure rather than as the event never arriving.
+                    .append(c.absent() == 1 ? "its cover and schedule are" : "their covers and schedules are")
+                    .append(" unknown");
         }
         if (c.terminal() > 0) {
             join(sb).append(c.terminal()).append(c.terminal() == 1 ? " event has" : " events have")
