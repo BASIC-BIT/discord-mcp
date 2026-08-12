@@ -647,8 +647,10 @@ public class ScheduledEventService {
             @ToolParam(description = "ID of the scheduled event") String eventId,
             @ToolParam(description = "Direct URL to a PNG or JPEG, e.g. an attachment's CDN link. Needs no filesystem access.", required = false) String imageUrl,
             @ToolParam(description = "Absolute path to a local PNG or JPEG, which must be under DISCORD_MCP_FILE_ROOT", required = false) String filePath) {
-        boolean hasUrl = imageUrl != null && !imageUrl.isEmpty();
-        boolean hasPath = filePath != null && !filePath.isEmpty();
+        // isBlank, not isEmpty: "   " is not a supplied argument, and treating it as one
+        // fails later with "File not found at filePath:    ". Matches requireCoverFileRoot below.
+        boolean hasUrl = imageUrl != null && !imageUrl.isBlank();
+        boolean hasPath = filePath != null && !filePath.isBlank();
         if (hasUrl == hasPath) {
             throw new IllegalArgumentException(hasUrl
                     ? "Supply imageUrl or filePath, not both."
@@ -721,8 +723,12 @@ public class ScheduledEventService {
             // event, and a failed read cannot support it.
         }
 
+        // Built before the try, whose catch reports "Sent 1.2 MB of PNG from x" and reads the
+        // event back. Icon.from only fails on null arguments, unreachable here — but inside the
+        // try it would produce a message claiming bytes left the process that never did.
+        Icon icon = Icon.from(bytes, type);
         try {
-            event.getManager().setImage(Icon.from(bytes, type)).complete();
+            event.getManager().setImage(icon).complete();
         } catch (RuntimeException e) {
             // Same rule as patchRecurrence above: a thrown request does not prove the change did
             // not happen, since a lost response after Discord applied the image looks identical
@@ -835,25 +841,26 @@ public class ScheduledEventService {
      * cover" from "not reported" — but it does not need a line each on a listing with no result
      * cap.
      *
-     * <p>The counts are kept apart because they support different claims. Events come from JDA's
-     * cache and covers from a live REST read, so an event can be listed and yet absent from that
-     * response — deleted out of band, or a stale cache. Such an event has no cover line, and
-     * without a word here that is indistinguishable from having no cover, which is the claim the
-     * whole {@code described} set exists to avoid making. Counting it in the denominator would
-     * make the same mistake more quietly: "2 of 5 have no cover" implies three URLs follow when
-     * only one does.
+     * <p>Every count is separate because each supports a different claim, and merging any two
+     * makes the line assert something it does not know. Events come from JDA's cache and covers
+     * from a live REST read, so the two can disagree in both directions and an entry can also be
+     * returned without being parseable. Saying "not in the live read" about an event Discord did
+     * return, or leaving an event Discord returned out of the incomplete-list count, are each a
+     * quiet version of the mistake this whole structure exists to prevent.
      *
      * <p>Extracted and tested for the same reason as {@code describeOutcome}: every clause is a
      * claim about what the reader is looking at, and testing it in place would mean mocking JDA's
      * request construction.
      *
-     * @param total          events being listed, from the cache
-     * @param described      how many of those the live response actually described
-     * @param coverless      how many described events have no cover
-     * @param liveTotal      how many events the live response held in all
-     * @param rawKnown       whether the live read succeeded at all
+     * @param described  listed events the live response described in full
+     * @param coverless  how many of those have no cover
+     * @param unreadable listed events Discord returned but whose details would not parse
+     * @param absent     listed events Discord did not return at all
+     * @param unlisted   events Discord returned that are not in the listing
+     * @param rawKnown   whether the live read succeeded at all
      */
-    static String coverCaveat(int total, int described, int coverless, int liveTotal, boolean rawKnown) {
+    static String coverCaveat(int described, int coverless, int unreadable, int absent,
+                              int unlisted, boolean rawKnown) {
         if (!rawKnown) {
             return "\n(Recurrence and cover images could not be read, so no event below is marked as"
                     + " recurring or as having a cover even if it is.)";
@@ -863,25 +870,26 @@ public class ScheduledEventService {
             sb.append(coverless).append(" of ").append(described)
                     .append(described == 1 ? " event has" : " events have").append(" no cover image");
         }
-        int missing = total - described;
-        if (missing > 0) {
-            sb.append(sb.length() == 0 ? "" : "; ")
-                    .append(missing).append(missing == 1 ? " event was" : " events were")
-                    .append(" not in the live read, so ")
-                    .append(missing == 1 ? "its cover is" : "their covers are").append(" unknown");
+        if (unreadable > 0) {
+            join(sb).append(unreadable).append(unreadable == 1 ? " event was" : " events were")
+                    .append(" returned but could not be read, so ")
+                    .append(unreadable == 1 ? "its cover is" : "their covers are").append(" unknown");
         }
-        // The opposite skew, and the stronger one: an event Discord returned that JDA's cache does
-        // not hold is absent from the listing entirely, with nothing to mark its absence. Not
-        // caveating that would let a listing read as complete when it is not — a worse version of
-        // the case above, since there is not even a row to attach a caveat to.
-        int unlisted = liveTotal - described;
+        if (absent > 0) {
+            join(sb).append(absent).append(absent == 1 ? " event was" : " events were")
+                    .append(" not in the live read, so ")
+                    .append(absent == 1 ? "its cover is" : "their covers are").append(" unknown");
+        }
         if (unlisted > 0) {
-            sb.append(sb.length() == 0 ? "" : "; ")
-                    .append("Discord returned ").append(unlisted).append(" event")
+            join(sb).append("Discord returned ").append(unlisted).append(" event")
                     .append(unlisted == 1 ? "" : "s").append(" not in this list, so the list is")
                     .append(" incomplete — the cache has not caught up");
         }
         return sb.length() == 0 ? "" : "\n(" + sb + ".)";
+    }
+
+    private static StringBuilder join(StringBuilder sb) {
+        return sb.length() == 0 ? sb : sb.append("; ");
     }
 
     /**
@@ -991,7 +999,11 @@ public class ScheduledEventService {
         java.util.Map<String, DataObject> rules = new java.util.HashMap<>();
         java.util.Map<String, String> covers = new java.util.HashMap<>();
         java.util.Set<String> described = new java.util.HashSet<>();
-        int liveCount = 0;
+        // Every id Discord returned, whether or not its details parsed. Kept apart from
+        // `described` because "not returned" and "returned but unreadable" are different facts
+        // and the caveat states them differently — collapsing them made a returned-but-unreadable
+        // event report as a cache lag that had not happened.
+        java.util.Set<String> returned = new java.util.HashSet<>();
         boolean rawKnown = false;
         try {
             Route.CompiledRoute route = Route.custom(Method.GET, "guilds/{guild_id}/scheduled-events")
@@ -1015,6 +1027,9 @@ public class ScheduledEventService {
                 // for every other event too.
                 String id = o.getString("id", null);
                 if (id == null) continue;
+                // Recorded before the details are parsed: Discord did return this event, whatever
+                // happens to the rest of it.
+                returned.add(id);
                 DataObject rule;
                 String cover;
                 try {
@@ -1023,11 +1038,6 @@ public class ScheduledEventService {
                 } catch (RuntimeException malformed) {
                     continue;
                 }
-                // Counted here, not from raw.length() and not before the parse: an entry that was
-                // returned but could not be read is neither "described" nor "returned but missing
-                // from the list", and counting it as the latter would report a cache lag that did
-                // not happen. Dropping it from both understates; it never misstates.
-                liveCount++;
                 if (rule != null) {
                     rules.put(id, rule);
                 }
@@ -1053,15 +1063,23 @@ public class ScheduledEventService {
             rules.clear();
             covers.clear();
             described.clear();
-            liveCount = 0;
+            returned.clear();
         }
 
-        final int liveTotal = liveCount;
         int describedCount = (int) events.stream().filter(e -> described.contains(e.getId())).count();
         int coverlessCount = (int) events.stream()
                 .filter(e -> described.contains(e.getId()) && !covers.containsKey(e.getId()))
                 .count();
-        String caveat = coverCaveat(events.size(), describedCount, coverlessCount, liveTotal, rawKnown);
+        // Listed events Discord returned but could not be read, and listed events it did not
+        // return at all. Different facts, counted separately so neither is described as the other.
+        int unreadableCount = (int) events.stream()
+                .filter(e -> returned.contains(e.getId()) && !described.contains(e.getId()))
+                .count();
+        int absentCount = (int) events.stream().filter(e -> !returned.contains(e.getId())).count();
+        int unlistedCount = returned.size()
+                - (int) events.stream().filter(e -> returned.contains(e.getId())).count();
+        String caveat = coverCaveat(describedCount, coverlessCount, unreadableCount,
+                absentCount, unlistedCount, rawKnown);
         return "Retrieved " + events.size() + " scheduled events:" + caveat + "\n" +
                 events.stream()
                         .map(e -> {

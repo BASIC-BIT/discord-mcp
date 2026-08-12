@@ -4,6 +4,7 @@ import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.Icon;
 import net.dv8tion.jda.api.entities.ScheduledEvent;
+import net.dv8tion.jda.api.managers.ScheduledEventManager;
 import net.dv8tion.jda.api.utils.data.DataObject;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -18,8 +19,10 @@ import java.time.OffsetDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 class ScheduledEventServiceTest {
 
@@ -36,11 +39,16 @@ class ScheduledEventServiceTest {
     private static final String GUILD = "480695542155051010";
     private static final String EVENT = "1385996249957662770";
 
+    private ScheduledEventManager manager;
+
     @BeforeEach
     void setUp() {
         JDA jda = mock(JDA.class);
         Guild guild = mock(Guild.class);
         ScheduledEvent event = mock(ScheduledEvent.class);
+        manager = mock(ScheduledEventManager.class);
+        lenient().when(event.getManager()).thenReturn(manager);
+        lenient().when(manager.setImage(any())).thenReturn(manager);
         lenient().when(jda.getGuildById(GUILD)).thenReturn(guild);
         lenient().when(guild.getId()).thenReturn(GUILD);
         lenient().when(guild.getScheduledEventById(EVENT)).thenReturn(event);
@@ -193,7 +201,7 @@ class ScheduledEventServiceTest {
         // The denominator is described events, not listed ones. Events come from JDA's cache and
         // covers from a live REST read, so "2 of 5 have no cover" would imply three URLs follow
         // when only one does.
-        assertThat(ScheduledEventService.coverCaveat(5, 3, 2, 3, true))
+        assertThat(ScheduledEventService.coverCaveat(3, 2, 0, 2, 0, true))
                 .isEqualTo("\n(2 of 3 events have no cover image; 2 events were not in the live"
                         + " read, so their covers are unknown.)");
     }
@@ -203,7 +211,7 @@ class ScheduledEventServiceTest {
         // The case that made the earlier version wrong: with no coverless events the caveat went
         // empty, so an undescribed event rendered with no cover line and no explanation — exactly
         // "this event has no cover", the claim the described set exists to avoid.
-        assertThat(ScheduledEventService.coverCaveat(4, 3, 0, 3, true))
+        assertThat(ScheduledEventService.coverCaveat(3, 0, 0, 1, 0, true))
                 .isEqualTo("\n(1 event was not in the live read, so its cover is unknown.)");
     }
 
@@ -211,21 +219,35 @@ class ScheduledEventServiceTest {
     void anEventDiscordReturnedButTheCacheLacksIsSaidToBeMissingFromTheList() {
         // The stronger skew: such an event has no row at all, so there is nowhere to hang a
         // per-event caveat and the list would otherwise read as complete.
-        assertThat(ScheduledEventService.coverCaveat(3, 3, 0, 5, true))
+        assertThat(ScheduledEventService.coverCaveat(3, 0, 0, 0, 2, true))
                 .isEqualTo("\n(Discord returned 2 events not in this list, so the list is"
                         + " incomplete — the cache has not caught up.)");
     }
 
     @Test
+    void anEntryReturnedButUnreadableIsNotCalledAbsent() {
+        // The distinction this set of counters exists for. Discord DID return the event; its
+        // details would not parse. Reporting that as "not in the live read" describes a cache lag
+        // that did not happen, and sends whoever reads it to look in the wrong place.
+        assertThat(ScheduledEventService.coverCaveat(2, 0, 1, 0, 0, true))
+                .isEqualTo("\n(1 event was returned but could not be read, so its cover is unknown.)");
+        // Both at once, each named as itself.
+        assertThat(ScheduledEventService.coverCaveat(2, 1, 1, 1, 0, true))
+                .isEqualTo("\n(1 of 2 events have no cover image; 1 event was returned but could"
+                        + " not be read, so its cover is unknown; 1 event was not in the live read,"
+                        + " so its cover is unknown.)");
+    }
+
+    @Test
     void aFullyDescribedListingWithEveryCoverPresentSaysNothing() {
-        assertThat(ScheduledEventService.coverCaveat(3, 3, 0, 3, true)).isEmpty();
+        assertThat(ScheduledEventService.coverCaveat(3, 0, 0, 0, 0, true)).isEmpty();
     }
 
     @Test
     void aFailedLiveReadCaveatsEverythingRatherThanCounting() {
         // Counts drawn from a read that did not happen are all zero, which would render as "every
         // event has a cover" — the failure mode the caveat exists for.
-        assertThat(ScheduledEventService.coverCaveat(5, 0, 0, 0, false))
+        assertThat(ScheduledEventService.coverCaveat(0, 0, 0, 0, 0, false))
                 .contains("could not be read")
                 .contains("as having a cover even if it is");
     }
@@ -267,6 +289,34 @@ class ScheduledEventServiceTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> ScheduledEventService.coverType(new byte[0], "filePath"))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void aValidLocalCoverIsAcceptedAndHandedToDiscordAsTheRightFormat() {
+        // Everything from the guard to the upload had no coverage: that a file inside the root is
+        // accepted at all, and that setImage is called with an Icon built from the sniffed type
+        // rather than the extension. The read-back afterwards has no JDA behind it and throws,
+        // which exercises the could-not-confirm path — the one that must not claim success it
+        // cannot see.
+        Path root = tempRoot();
+        Path file = write(root, "poster.png", png());
+        service.coverFileRoot = root.toString();
+
+        String result = service.setScheduledEventImage(GUILD, EVENT, null, file.toString());
+
+        verify(manager).setImage(any(Icon.class));
+        assertThat(result)
+                .contains("Set the cover image on Community Night")
+                .contains("could not read the event back to confirm it");
+    }
+
+    @Test
+    void aWhitespaceOnlyArgumentIsNotASuppliedOne() {
+        // isEmpty would treat "   " as supplied and fail later with "File not found at filePath:
+        // ", naming a parameter the caller did fill in with nothing.
+        assertThatThrownBy(() -> service.setScheduledEventImage(GUILD, EVENT, "  ", "	"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Supply either imageUrl");
     }
 
     @Test
@@ -387,6 +437,22 @@ class ScheduledEventServiceTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Cover image exceeds the 5.0 MB limit.")
                 .hasMessageContaining("Crop it to 5:2");
+    }
+
+    private static Path tempRoot() {
+        try {
+            return Files.createTempDirectory("covers").toRealPath();
+        } catch (IOException e) {
+            throw new AssertionError(e);
+        }
+    }
+
+    private static Path write(Path root, String name, byte[] bytes) {
+        try {
+            return Files.write(root.resolve(name), bytes);
+        } catch (IOException e) {
+            throw new AssertionError(e);
+        }
     }
 
     private static byte[] png() {

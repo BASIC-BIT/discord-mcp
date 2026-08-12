@@ -148,11 +148,13 @@ public final class LocalFileGuard {
         try (InputStream in = Files.newInputStream(real, LinkOption.NOFOLLOW_LINKS)) {
             bytes = in.readNBytes(maxBytes + 1);
         } catch (IOException e) {
-            // Names the resolved path, not just the noun. The extraction dropped send_file's
-            // "at filePath", and for a tool taking both a URL and a path the noun alone does not
-            // say which argument to fix — the path says it and locates the file besides.
+            // The file name, not just the noun and not the absolute path. The extraction dropped
+            // send_file's "at filePath", and for a tool taking both a URL and a path the noun
+            // alone does not identify what failed. The name does; the full path would put the
+            // deployment's directory layout into a string that goes back to the model and often
+            // onward into a channel.
             throw new IllegalArgumentException(
-                    "Failed to read " + what + " at " + real + ": " + e.getMessage());
+                    "Failed to read " + what + " " + real.getFileName() + ": " + e.getMessage());
         }
         if (bytes.length > maxBytes) {
             throw new TooLargeException(capitalize(what)
