@@ -6,6 +6,8 @@ import net.dv8tion.jda.api.entities.Icon;
 import net.dv8tion.jda.api.entities.Member;
 import net.dv8tion.jda.api.entities.ScheduledEvent;
 import net.dv8tion.jda.api.entities.channel.middleman.GuildChannel;
+import net.dv8tion.jda.api.exceptions.ErrorResponseException;
+import net.dv8tion.jda.api.requests.ErrorResponse;
 import net.dv8tion.jda.api.requests.Method;
 import net.dv8tion.jda.api.requests.Route;
 import net.dv8tion.jda.api.utils.data.DataObject;
@@ -860,10 +862,13 @@ public class ScheduledEventService {
      * @param unlisted   events Discord returned that are not in the listing
      * @param unidentifiable entries Discord returned with no usable id, which cannot be matched
      *                       to any listed event in either direction
+     * @param recurrenceUnreadable events whose recurrence would not parse, so a missing
+     *                             "Recurs:" line below means unknown rather than absent
      * @param rawKnown   whether the live read succeeded at all
      */
     static String coverCaveat(int described, int coverless, int unreadable, int absent,
-                              int unlisted, int unidentifiable, boolean rawKnown) {
+                              int unlisted, int unidentifiable, int recurrenceUnreadable,
+                              boolean rawKnown) {
         if (!rawKnown) {
             return "\n(Recurrence and cover images could not be read, so no event below is marked as"
                     + " recurring or as having a cover even if it is.)";
@@ -899,6 +904,14 @@ public class ScheduledEventService {
             join(sb).append("Discord returned ").append(unlisted).append(" event")
                     .append(unlisted == 1 ? "" : "s").append(" not in this list, so the list is")
                     .append(" incomplete — the cache has not caught up");
+        }
+        if (recurrenceUnreadable > 0) {
+            join(sb).append(recurrenceUnreadable)
+                    .append(recurrenceUnreadable == 1 ? " event's recurrence" : " events' recurrences")
+                    .append(" could not be read, so ")
+                    .append(recurrenceUnreadable == 1 ? "it shows" : "they show")
+                    .append(" no schedule below even if ")
+                    .append(recurrenceUnreadable == 1 ? "it recurs" : "they recur");
         }
         if (unidentifiable > 0) {
             // Its own clause because it belongs to no event. Folding it into `unreadable` would
@@ -1001,8 +1014,22 @@ public class ScheduledEventService {
         }
         try {
             fetchRaw(guild.getId(), eventId);
-        } catch (RuntimeException notThere) {
-            throw new IllegalArgumentException("Scheduled event not found by eventId");
+        } catch (ErrorResponseException discordSaidNo) {
+            // Only Discord saying "no such event" establishes that. A 500, a timeout or an
+            // exhausted rate limit says nothing about whether the event exists, and reporting
+            // those as "not found" sends the caller to check an id that may be correct — the
+            // same over-attribution describeOutcome refuses to make two hundred lines up.
+            if (discordSaidNo.getErrorResponse() == ErrorResponse.UNKNOWN_SCHEDULED_EVENT) {
+                throw new IllegalArgumentException("Scheduled event not found by eventId");
+            }
+            throw new IllegalArgumentException("Could not confirm whether that event exists"
+                    + reason(discordSaidNo) + ". It is not in this server's cache, which is normal"
+                    + " for an event created moments ago. Retry before assuming the id is wrong.");
+        } catch (RuntimeException unreachable) {
+            throw new IllegalArgumentException("Could not reach Discord to confirm whether that"
+                    + " event exists" + reason(unreachable) + ". It is not in this server's cache,"
+                    + " which is normal for an event created moments ago. Retry before assuming"
+                    + " the id is wrong.");
         }
         throw new IllegalArgumentException(
                 "That event exists at Discord but has not reached this server's cache yet, so its "
@@ -1065,6 +1092,10 @@ public class ScheduledEventService {
         // Entries with no usable id. They cannot be attributed to any listed event, so they
         // cannot be counted as unreadable-but-identified — they get their own line or none.
         int unidentifiable = 0;
+        // Entries whose recurrence_rule would not parse. Their cover may still be fine, so they
+        // are listed and counted for covers — but a missing "Recurs:" line has to be explained
+        // rather than left to read as "this event does not recur".
+        int recurrenceUnreadable = 0;
         boolean rawKnown = false;
         try {
             Route.CompiledRoute route = Route.custom(Method.GET, "guilds/{guild_id}/scheduled-events")
@@ -1099,25 +1130,35 @@ public class ScheduledEventService {
                 // Recorded before the details are parsed: Discord did return this event, whatever
                 // happens to the rest of it.
                 returned.add(id);
-                // Parsed independently. A shared try would let a malformed `image` discard a
-                // perfectly good recurrence rule, and vice versa — reporting one field as unknown
-                // is the cost of that field being unreadable, not of its neighbour being so.
+                // Parsed independently, and tracked independently. Separate try blocks stop one
+                // malformed field discarding the other; separate flags stop one field's success
+                // standing in as proof the other was read. OR-ing them into a single "readable"
+                // did the second thing: a malformed image beside a good recurrence rule still
+                // entered `described`, so the summary counted the event as having no cover — a
+                // positive claim drawn from a read that failed, which is exactly what the
+                // described/returned split exists to prevent.
                 DataObject rule = null;
                 String cover = null;
-                boolean readable = false;
+                boolean recurrenceRead = false;
+                boolean coverRead = false;
                 try {
                     rule = recurrenceOf(o);
-                    readable = true;
+                    recurrenceRead = true;
                 } catch (RuntimeException malformed) {
                     // Recurrence is lost for this event; its cover may still be readable.
                 }
                 try {
                     cover = coverUrlOf(o, id);
-                    readable = true;
+                    coverRead = true;
                 } catch (RuntimeException malformed) {
                     // Likewise in reverse.
                 }
-                if (!readable) continue;
+                if (!recurrenceRead) {
+                    // Otherwise this event renders with no "Recurs:" line and nothing to say why,
+                    // which is the silent "nothing recurs" the outer catch's comment forbids.
+                    recurrenceUnreadable++;
+                }
+                if (!coverRead) continue;
                 if (rule != null) {
                     rules.put(id, rule);
                 }
@@ -1145,6 +1186,7 @@ public class ScheduledEventService {
             described.clear();
             returned.clear();
             unidentifiable = 0;
+            recurrenceUnreadable = 0;
         }
 
         int describedCount = (int) events.stream().filter(e -> described.contains(e.getId())).count();
@@ -1160,7 +1202,7 @@ public class ScheduledEventService {
         int unlistedCount = returned.size()
                 - (int) events.stream().filter(e -> returned.contains(e.getId())).count();
         String caveat = coverCaveat(describedCount, coverlessCount, unreadableCount,
-                absentCount, unlistedCount, unidentifiable, rawKnown);
+                absentCount, unlistedCount, unidentifiable, recurrenceUnreadable, rawKnown);
         return "Retrieved " + events.size() + " scheduled events:" + caveat + "\n" +
                 events.stream()
                         .map(e -> {
