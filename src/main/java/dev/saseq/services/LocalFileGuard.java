@@ -3,6 +3,7 @@ package dev.saseq.services;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -68,7 +69,9 @@ public final class LocalFileGuard {
         Path root;
         try {
             root = Paths.get(configured).toRealPath();
-        } catch (IOException e) {
+        } catch (IOException | InvalidPathException e) {
+            // InvalidPathException too: a configured value the OS cannot parse at all should read
+            // as an unusable setting, not escape as an unchecked exception from Paths.get.
             throw new IllegalArgumentException(
                     variableName + " does not exist or cannot be resolved: " + configured);
         }
@@ -168,7 +171,12 @@ public final class LocalFileGuard {
             // normalized path. Both sides must be resolved for the comparison to mean
             // anything, and the resolved path is what gets opened.
             real = Paths.get(filePath).toRealPath();
-        } catch (IOException e) {
+        } catch (IOException | InvalidPathException e) {
+            // InvalidPathException as well as IOException: Paths.get throws it unchecked for a
+            // NUL byte, or an illegal character on Windows, and it would otherwise escape the one
+            // refusal this class exists to present. Nothing leaks — the message echoes the
+            // caller's own input — but the property is "one answer", not "one answer usually".
+            //
             // Same message as the outside-the-root case below, deliberately. Two distinguishable
             // answers would make this an existence oracle over the whole host: /etc/shadow
             // resolves and reports "outside the allowed directory", /etc/nope does not and

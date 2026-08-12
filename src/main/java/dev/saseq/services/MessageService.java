@@ -658,7 +658,7 @@ public class MessageService {
                 byte[] bytes = RemoteFetchGuard.fetch(attachment.getUrl(), allowance, "attachment");
                 attempted += bytes.length;
                 Path path = writeIntoAllowedRoot(root, attachment.getId(), attachment.getFileName(), bytes);
-                saved.append("- `").append(path).append("` (").append(formatFileSize(bytes.length)).append(")\n");
+                saved.append("- `").append(path).append("` (").append(FileSizes.format(bytes.length)).append(")\n");
                 savedCount++;
             } catch (RemoteFetchGuard.TooLargeException e) {
                 // The body was read up to the allowance before being rejected, so that bandwidth
@@ -670,7 +670,7 @@ public class MessageService {
                         .append(attachment.getId()).append("): body exceeded the ")
                         // formatFileSize, not integer MB: the remainder of a budget is routinely
                         // under a megabyte, and "exceeded the 0 MB allowed for it" reads as a bug.
-                        .append(formatFileSize(allowance)).append(" allowed for it")
+                        .append(FileSizes.format(allowance)).append(" allowed for it")
                         .append(allowance < MAX_DOWNLOAD_FILE_BYTES
                                 ? " — all that was left of this call's budget. Fetch it on its own."
                                 : ", the per-file limit. Its reported size understated the body.")
@@ -682,7 +682,7 @@ public class MessageService {
                 attempted += e.bytesConsumed();
                 failed.append("- `").append(attachment.getFileName()).append("` (ID ")
                         .append(attachment.getId()).append("): transfer failed after ")
-                        .append(formatFileSize(e.bytesConsumed())).append(".\n");
+                        .append(FileSizes.format(e.bytesConsumed())).append(".\n");
             } catch (RuntimeException e) {
                 // Everything else — unreachable host, 404, refused scheme — failed before any
                 // body arrived, so it does not charge the budget. Charging these would let a
@@ -722,7 +722,7 @@ public class MessageService {
             if (size > MAX_DOWNLOAD_FILE_BYTES) {
                 throw new IllegalArgumentException(String.format(
                         "Attachment `%s` (ID %s) is %s, over the %d MB per-file download limit.",
-                        attachment.getFileName(), attachment.getId(), formatFileSize(size),
+                        attachment.getFileName(), attachment.getId(), FileSizes.format(size),
                         MAX_DOWNLOAD_FILE_BYTES / (1024 * 1024)));
             }
             total += size;
@@ -731,7 +731,7 @@ public class MessageService {
             throw new IllegalArgumentException(String.format(
                     "The %d attachments total %s, over the %d MB per-call download limit. "
                             + "Pass attachmentId to fetch them one at a time.",
-                    attachments.size(), formatFileSize(total), MAX_DOWNLOAD_BUDGET_BYTES / (1024 * 1024)));
+                    attachments.size(), FileSizes.format(total), MAX_DOWNLOAD_BUDGET_BYTES / (1024 * 1024)));
         }
     }
 
@@ -982,7 +982,7 @@ public class MessageService {
                 "(Attachment ID: %s) `%s` (%s, %s) URL: %s",
                 attachment.getId(),
                 attachment.getFileName(),
-                formatFileSize(attachment.getSize()),
+                FileSizes.format(attachment.getSize()),
                 attachment.getContentType() != null ? attachment.getContentType() : "unknown",
                 attachment.getUrl()
         );
@@ -1021,7 +1021,4 @@ public class MessageService {
 
     // long rather than int: a per-call total can exceed Integer.MAX_VALUE even though
     // any single attachment cannot. Widening is source-compatible with the int callers.
-    private String formatFileSize(long bytes) {
-        return FileSizes.format(bytes);
-    }
 }

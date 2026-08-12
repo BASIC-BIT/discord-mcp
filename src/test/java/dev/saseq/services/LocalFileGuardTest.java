@@ -180,7 +180,16 @@ class LocalFileGuardTest {
         String elsewhere = catchThrowable(() -> LocalFileGuard.resolveWithinRoot(
                 outside.toString(), root, "filePath", "upload")).getMessage();
 
-        assertThat(missing).isEqualTo(elsewhere)
+        // A path the OS will not even parse. Paths.get throws InvalidPathException, which is
+        // unchecked, so it escaped this refusal entirely until it was caught alongside
+        // IOException. "One answer" has to mean one answer, not one answer usually.
+        //
+        // Built with a char cast rather than written as a literal, so the source file stays plain
+        // text and no editor or tool has to preserve an embedded control character.
+        String unparseable = catchThrowable(() -> LocalFileGuard.resolveWithinRoot(
+                String.valueOf((char) 0), root, "filePath", "upload")).getMessage();
+
+        assertThat(missing).isEqualTo(elsewhere).isEqualTo(unparseable)
                 .isEqualTo("filePath is not a readable file inside the allowed upload directory");
     }
 
