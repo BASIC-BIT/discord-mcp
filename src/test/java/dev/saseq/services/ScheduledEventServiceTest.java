@@ -9,6 +9,7 @@ import net.dv8tion.jda.api.utils.data.DataObject;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.MockedStatic;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -20,6 +21,8 @@ import java.time.OffsetDateTime;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -233,7 +236,9 @@ class ScheduledEventServiceTest {
                 .isEqualTo("\n(1 event was returned but could not be read, so its cover is unknown.)");
         // Both at once, each named as itself.
         assertThat(ScheduledEventService.coverCaveat(2, 1, 1, 1, 0, true))
-                .isEqualTo("\n(1 of 2 events have no cover image; 1 event was returned but could"
+                // "1 of 2 events HAS": the noun counts the described events, the verb agrees with
+                // the coverless one. Taking both from the same number gets one of them wrong.
+                .isEqualTo("\n(1 of 2 events has no cover image; 1 event was returned but could"
                         + " not be read, so its cover is unknown; 1 event was not in the live read,"
                         + " so its cover is unknown.)");
     }
@@ -317,6 +322,61 @@ class ScheduledEventServiceTest {
         assertThat(result)
                 .contains("Set the cover image on Community Night")
                 .contains("could not read the event back to confirm it");
+    }
+
+    @Test
+    void aCoverFetchedFromAUrlReachesDiscordWithoutAnyFilesystemGrant() {
+        // The imageUrl branch is the one that needs no configuration to reach, and until now
+        // nothing exercised it through the tool — only the guard it delegates to. FILE_ROOT is
+        // left unset on purpose: this path must work with no filesystem grant at all.
+        service.coverFileRoot = "";
+
+        String result;
+        try (MockedStatic<RemoteFetchGuard> guard = mockStatic(RemoteFetchGuard.class)) {
+            guard.when(() -> RemoteFetchGuard.fetch(any(), anyInt(), any())).thenReturn(png());
+            result = service.setScheduledEventImage(
+                    GUILD, EVENT, "https://cdn.discordapp.com/attachments/1/2/poster.png", null);
+        }
+
+        verify(manager).setImage(any(Icon.class));
+        assertThat(result).contains("Set the cover image on Community Night");
+    }
+
+    @Test
+    void aWebpFromACdnLinkIsRefusedByTheParameterItCameFrom() {
+        // Discord's own media proxy serves WebP, so this is an ordinary mistake rather than an
+        // exotic one — and the refusal has to name imageUrl, not the filePath the caller left
+        // empty. Only reachable through the tool, since coverType alone cannot pick the name.
+        service.coverFileRoot = "";
+        byte[] webp = {'R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'E', 'B', 'P'};
+
+        try (MockedStatic<RemoteFetchGuard> guard = mockStatic(RemoteFetchGuard.class)) {
+            guard.when(() -> RemoteFetchGuard.fetch(any(), anyInt(), any())).thenReturn(webp);
+
+            assertThatThrownBy(() -> service.setScheduledEventImage(
+                    GUILD, EVENT, "https://media.discordapp.net/x.webp", null))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("imageUrl is not a PNG or JPEG");
+        }
+    }
+
+    @Test
+    void anOversizedUrlAndAnOversizedFileFailIdentically() {
+        // The multi-catch exists so both guards' size refusals read the same way. RemoteFetchGuard
+        // says only "exceeds the maximum allowed size" — no limit, no capital, no period — so
+        // without this the two branches diverged for the same mistake.
+        service.coverFileRoot = "";
+
+        try (MockedStatic<RemoteFetchGuard> guard = mockStatic(RemoteFetchGuard.class)) {
+            guard.when(() -> RemoteFetchGuard.fetch(any(), anyInt(), any())).thenThrow(
+                    new RemoteFetchGuard.TooLargeException("cover image exceeds the maximum allowed size"));
+
+            assertThatThrownBy(() -> service.setScheduledEventImage(
+                    GUILD, EVENT, "https://cdn.discordapp.com/big.png", null))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("Cover image exceeds the 5.0 MB limit.")
+                    .hasMessageContaining("Crop it to 5:2");
+        }
     }
 
     @Test

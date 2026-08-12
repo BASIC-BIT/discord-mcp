@@ -52,7 +52,7 @@ public final class LocalFileGuard {
      * {@link IllegalArgumentException}, so callers that do not care are unaffected.
      */
     public static class TooLargeException extends IllegalArgumentException {
-        public TooLargeException(String message) {
+        TooLargeException(String message) {
             super(message);
         }
     }

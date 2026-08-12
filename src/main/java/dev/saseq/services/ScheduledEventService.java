@@ -468,7 +468,7 @@ public class ScheduledEventService {
             @ToolParam(description = RECURRENCE_PARAM, required = false) String recurrenceRule) {
 
         Guild guild = getGuild(guildId);
-        ScheduledEvent event = getEvent(guild, eventId);
+        ScheduledEvent event = getEventForCover(guild, eventId);
 
         // Read the live event before touching it: JDA cannot tell us whether this is a recurring
         // series, and that changes what a start-time edit means.
@@ -873,8 +873,13 @@ public class ScheduledEventService {
             if (coverless == described) {
                 sb.append("no event here has a cover image");
             } else {
-                sb.append(coverless).append(" of ").append(described)
-                        .append(described == 1 ? " event has" : " events have").append(" no cover image");
+                // The noun counts `described` and the verb agrees with `coverless`: "1 of 3
+                // events has no cover image". Taking both from one number gets one of them wrong,
+                // and taking both from `described` is what produced "1 of 3 events have". The
+                // arm for described == 1 that used to be here was unreachable anyway — reaching
+                // it needs coverless < described == 1, so coverless == 0, which skips the block.
+                sb.append(coverless).append(" of ").append(described).append(" events")
+                        .append(coverless == 1 ? " has" : " have").append(" no cover image");
             }
         }
         if (unreadable > 0) {
@@ -959,6 +964,40 @@ public class ScheduledEventService {
                 + " is not a PNG or JPEG. Discord accepts only those for event covers.");
     }
 
+    /**
+     * Like {@link #getEvent}, but does not report a cache miss as a missing event.
+     *
+     * <p>{@code getScheduledEventById} reads JDA's cache, which is filled from the gateway. An
+     * event created seconds earlier — by {@code create_guild_scheduled_event}, or by a human in
+     * the Discord UI — exists at Discord before it exists here, and "not found by eventId" sends
+     * the caller to check an id that is correct. The listing already reports this state from the
+     * other side, as an event Discord returned that the cache does not hold.
+     *
+     * <p>A live read distinguishes the two. It does not fix the underlying limitation: the write
+     * below needs a cached entity for its manager, so a valid-but-uncached event still cannot be
+     * given a cover. Routing the write through {@code patchRaw} with {@code Icon#getEncoding}
+     * would remove the cache from this path entirely and drop a request besides; that is a change
+     * to how the write works and belongs in its own review, not appended to this one.
+     */
+    private ScheduledEvent getEventForCover(Guild guild, String eventId) {
+        if (eventId == null || eventId.isEmpty()) {
+            throw new IllegalArgumentException("eventId cannot be null");
+        }
+        ScheduledEvent event = guild.getScheduledEventById(eventId);
+        if (event != null) {
+            return event;
+        }
+        try {
+            fetchRaw(guild.getId(), eventId);
+        } catch (RuntimeException notThere) {
+            throw new IllegalArgumentException("Scheduled event not found by eventId");
+        }
+        throw new IllegalArgumentException(
+                "That event exists at Discord but has not reached this server's cache yet, so its "
+                        + "cover cannot be set. This usually clears within seconds of the event "
+                        + "being created — retry shortly.");
+    }
+
     /** The upload root, or a refusal that points at the parameter which needs no filesystem. */
     private String requireCoverFileRoot() {
         if (coverFileRoot == null || coverFileRoot.isBlank()) {
@@ -1037,14 +1076,25 @@ public class ScheduledEventService {
                 // Recorded before the details are parsed: Discord did return this event, whatever
                 // happens to the rest of it.
                 returned.add(id);
-                DataObject rule;
-                String cover;
+                // Parsed independently. A shared try would let a malformed `image` discard a
+                // perfectly good recurrence rule, and vice versa — reporting one field as unknown
+                // is the cost of that field being unreadable, not of its neighbour being so.
+                DataObject rule = null;
+                String cover = null;
+                boolean readable = false;
                 try {
                     rule = recurrenceOf(o);
-                    cover = coverUrlOf(o, id);
+                    readable = true;
                 } catch (RuntimeException malformed) {
-                    continue;
+                    // Recurrence is lost for this event; its cover may still be readable.
                 }
+                try {
+                    cover = coverUrlOf(o, id);
+                    readable = true;
+                } catch (RuntimeException malformed) {
+                    // Likewise in reverse.
+                }
+                if (!readable) continue;
                 if (rule != null) {
                     rules.put(id, rule);
                 }
