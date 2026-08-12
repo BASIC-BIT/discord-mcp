@@ -688,14 +688,6 @@ public class ScheduledEventService {
                 bytes = RemoteFetchGuard.fetch(imageUrl, MAX_COVER_BYTES, "cover image");
                 source = imageUrl;
             } else {
-                // The upload root specifically. Root is a type, but every root has the same
-                // type, so passing the download root here would compile — and that is the
-                // chained configuration the security notes argue against, arrived at by
-                // accident rather than by an operator deciding on it.
-                if (!"DISCORD_MCP_FILE_ROOT".equals(root.variableName())) {
-                    throw new IllegalStateException("Cover images must be read from "
-                            + "DISCORD_MCP_FILE_ROOT, not " + root.variableName());
-                }
                 LocalFileGuard.ConfinedPath path =
                         LocalFileGuard.resolveWithinRoot(filePath, root, "filePath", "upload");
                 bytes = LocalFileGuard.readBounded(path, MAX_COVER_BYTES, "cover image");

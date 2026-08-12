@@ -211,7 +211,16 @@ public class MessageService {
         return LocalFileGuard.resolveRoot(fileRoot, "DISCORD_MCP_FILE_ROOT");
     }
 
-    private LocalFileGuard.Root allowedDownloadRoot() {
+    /**
+     * Deliberately a {@link Path}, not a {@link LocalFileGuard.Root}.
+     *
+     * <p>{@code Root} is what {@code resolveWithinRoot} confines a caller-supplied path against.
+     * This directory is written to, never read from by path, so it has no business being one —
+     * and if it were, {@code resolveWithinRoot(filePath, allowedDownloadRoot(), ...)} would
+     * type-check, which is the chained read-and-write configuration the security notes argue
+     * against, reachable by accident. The compiler refuses it now.
+     */
+    private Path allowedDownloadRoot() {
         if (downloadRoot == null || downloadRoot.isBlank()) {
             throw new IllegalArgumentException(
                     "Attachment downloads are disabled. Set DISCORD_MCP_DOWNLOAD_ROOT to the "
@@ -219,8 +228,7 @@ public class MessageService {
                             + "from DISCORD_MCP_FILE_ROOT on purpose: read and write are "
                             + "different grants.");
         }
-        LocalFileGuard.Root resolved = LocalFileGuard.resolveRoot(downloadRoot, "DISCORD_MCP_DOWNLOAD_ROOT");
-        Path root = resolved.path();
+        Path root = LocalFileGuard.resolveRoot(downloadRoot, "DISCORD_MCP_DOWNLOAD_ROOT").path();
         // Existing and writable are different things, and a read-only bind mount is a common
         // way to get the first without the second. Without this probe the failure surfaces only
         // at createTempFile, by which point the whole 100 MB budget may already have been pulled
@@ -256,7 +264,7 @@ public class MessageService {
             // which the probe above establishes directly.
             deleteQuietly(probe);
         }
-        return resolved;
+        return root;
     }
 
     /** Best-effort removal of a scratch file, where failing to clean up is not worth an error. */
@@ -598,7 +606,7 @@ public class MessageService {
 
         // Resolve the root before spending any network calls, so a misconfigured
         // root fails immediately instead of after downloading 50 MB.
-        Path root = allowedDownloadRoot().path();
+        Path root = allowedDownloadRoot();
 
         MessageChannel channel = getMessageChannelById(channelId);
         if (channel == null) {

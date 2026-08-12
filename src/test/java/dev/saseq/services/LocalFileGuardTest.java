@@ -114,15 +114,20 @@ class LocalFileGuardTest {
     }
 
     @Test
-    void aRootRemembersWhichSettingProducedIt(@TempDir Path dir) throws IOException {
-        // Every root has the same type, so passing the download root where the upload root belongs
-        // compiles — and that is the chained read-and-write configuration the security notes argue
-        // against, reached by accident rather than by an operator deciding on it. The name is what
-        // lets a caller that must read from one specific root say so.
-        LocalFileGuard.Root root = LocalFileGuard.resolveRoot(
-                Files.createDirectory(dir.resolve("uploads")).toString(), "DISCORD_MCP_FILE_ROOT");
-
-        assertThat(root.variableName()).isEqualTo("DISCORD_MCP_FILE_ROOT");
+    void onlyADirectoryMeantToBeReadFromBecomesARoot() throws NoSuchMethodException {
+        // resolveWithinRoot confines against a Root, so a directory that is written to must not be
+        // one — otherwise passing the download root there compiles, which is the chained
+        // read-and-write configuration the security notes argue against, reached by accident.
+        //
+        // A runtime check inside the cover tool could not carry this: it compared the root's own
+        // name against the literal it had just been built from, three statements above, in the
+        // same method. Tautologies read like guards. The compiler does not.
+        assertThat(MessageService.class.getDeclaredMethod("allowedDownloadRoot").getReturnType())
+                .as("the download root is written to, so it must not be usable as a read root")
+                .isEqualTo(Path.class);
+        assertThat(MessageService.class.getDeclaredMethod("allowedRoot").getReturnType())
+                .as("the upload root is read from by caller-supplied path, so it is a Root")
+                .isEqualTo(LocalFileGuard.Root.class);
     }
 
     @Test

@@ -83,17 +83,18 @@ public final class LocalFileGuard {
         if (root.getNameCount() == 0) {
             throw new IllegalArgumentException(variableName + " must not be a filesystem root");
         }
-        return new Root(root, variableName);
+        return new Root(root);
     }
 
     /**
      * A directory that has been through {@link #resolveRoot}.
      *
-     * <p>Carries the variable it came from, because the type alone does not say which grant a
-     * root represents: {@code resolveWithinRoot(filePath, allowedDownloadRoot(), ...)} type-checks
-     * perfectly, and that is the chained read-and-write root the README spends four paragraphs
-     * arguing against. A caller that must read from one specific root can now check, rather than
-     * relying on having passed the right accessor.
+     * <p>This type is what {@code resolveWithinRoot} confines against, so only a directory
+     * intended to be <em>read from by caller-supplied path</em> should ever become one. A root
+     * that is written to — {@code DISCORD_MCP_DOWNLOAD_ROOT} — stays a plain {@link Path} at its
+     * accessor for exactly that reason: were it a {@code Root}, passing it here would compile,
+     * and that is the chained read-and-write configuration the README argues against, reached by
+     * accident rather than by decision.
      *
      * <p>Symmetric to {@link ConfinedPath}, and for the same reason. {@code resolveWithinRoot}
      * took a bare {@code Path} for its root, so nothing required that root to have been through
@@ -105,16 +106,9 @@ public final class LocalFileGuard {
      */
     public static final class Root {
         private final Path path;
-        private final String variableName;
 
-        private Root(Path path, String variableName) {
+        private Root(Path path) {
             this.path = path;
-            this.variableName = variableName;
-        }
-
-        /** The setting this root came from, so a caller can say which grant it is relying on. */
-        public String variableName() {
-            return variableName;
         }
 
         public Path path() {
