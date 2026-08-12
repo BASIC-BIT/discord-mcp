@@ -236,6 +236,12 @@ permission-gated channel. Anything that does reach a cover is more durable and m
 than the same bytes posted to a channel. Deployments that filter tools by name do not
 acquire this one at all until they list it.
 
+**Compose deployments, specifically:** `docker-compose.yml` did not declare
+`DISCORD_MCP_FILE_ROOT` before, so a value in `.env` never reached the container and local
+paths stayed refused whatever it said. It is declared now, but commented out, so that an
+upgrade cannot activate a setting an operator left behind after it appeared to do nothing.
+Uncomment it and the uploads volume together.
+
 **The `imageUrl` path needs no configuration**, so it is worth naming what it permits by
 default: a model that has been talked into it can fetch any public HTTPS image under 5 MB and
 pin it to a permanent, unauthenticated `discordapp.com` URL. That is bounded — two formats,

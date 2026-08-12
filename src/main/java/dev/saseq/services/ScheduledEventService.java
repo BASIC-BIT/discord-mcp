@@ -867,8 +867,15 @@ public class ScheduledEventService {
         }
         StringBuilder sb = new StringBuilder();
         if (coverless > 0) {
-            sb.append(coverless).append(" of ").append(described)
-                    .append(described == 1 ? " event has" : " events have").append(" no cover image");
+            // Covers are rare, so "N of N" is the ordinary case and its arithmetic says nothing.
+            // Kept rather than suppressed: this line is why a stale or absent cover stops being
+            // invisible, which is the whole reason the listing reads them.
+            if (coverless == described) {
+                sb.append("no event here has a cover image");
+            } else {
+                sb.append(coverless).append(" of ").append(described)
+                        .append(described == 1 ? " event has" : " events have").append(" no cover image");
+            }
         }
         if (unreadable > 0) {
             join(sb).append(unreadable).append(unreadable == 1 ? " event was" : " events were")

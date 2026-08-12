@@ -107,7 +107,7 @@ class MessageServiceTest {
         String traversal = root.resolve("..").resolve(secret.getFileName()).toString();
         assertThatThrownBy(() -> messageService.sendFile(CHANNEL_ID, traversal, null, null, null, null))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("outside the allowed upload directory");
+                .hasMessageContaining("not a readable file inside the allowed upload directory");
     }
 
     @Test
@@ -126,7 +126,7 @@ class MessageServiceTest {
         // A lexical normalize() would see uploads/innocent.txt and allow this.
         assertThatThrownBy(() -> messageService.sendFile(CHANNEL_ID, link.toString(), null, null, null, null))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("outside the allowed upload directory");
+                .hasMessageContaining("not a readable file inside the allowed upload directory");
     }
 
     @Test

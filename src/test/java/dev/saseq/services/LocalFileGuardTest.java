@@ -11,6 +11,7 @@ import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
  * Direct coverage for the shared guard.
@@ -41,7 +42,7 @@ class LocalFileGuardTest {
 
         assertThatThrownBy(() -> LocalFileGuard.resolveWithinRoot(outside.toString(), root, "filePath", "upload"))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("outside the allowed upload directory");
+                .hasMessageContaining("not a readable file inside the allowed upload directory");
     }
 
     @Test
@@ -57,7 +58,7 @@ class LocalFileGuardTest {
 
         assertThatThrownBy(() -> LocalFileGuard.resolveWithinRoot(link.toString(), root, "filePath", "upload"))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("outside the allowed upload directory");
+                .hasMessageContaining("not a readable file inside the allowed upload directory");
     }
 
     @Test
@@ -120,13 +121,20 @@ class LocalFileGuardTest {
     }
 
     @Test
-    void aMissingPathNamesTheParameterItCameFrom(@TempDir Path dir) throws IOException {
+    void aMissingPathAndAnOutsidePathAreIndistinguishable(@TempDir Path dir) throws IOException {
+        // Deliberately one message. Two would let any caller ask "does /etc/shadow exist?" and
+        // read the answer off which refusal came back — an existence oracle over the whole host,
+        // one tool call at a time. Both still name the parameter, which is what an operator needs.
         Path root = Files.createDirectory(dir.resolve("root")).toRealPath();
+        Path outside = Files.writeString(dir.resolve("real-but-outside"), "x");
 
-        assertThatThrownBy(() -> LocalFileGuard.resolveWithinRoot(
-                root.resolve("nope").toString(), root, "filePath", "upload"))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("File not found at filePath");
+        String missing = catchThrowable(() -> LocalFileGuard.resolveWithinRoot(
+                root.resolve("nope").toString(), root, "filePath", "upload")).getMessage();
+        String elsewhere = catchThrowable(() -> LocalFileGuard.resolveWithinRoot(
+                outside.toString(), root, "filePath", "upload")).getMessage();
+
+        assertThat(missing).isEqualTo(elsewhere)
+                .isEqualTo("filePath is not a readable file inside the allowed upload directory");
     }
 
     @Test

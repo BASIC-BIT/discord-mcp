@@ -244,6 +244,14 @@ class ScheduledEventServiceTest {
     }
 
     @Test
+    void theOrdinaryCaseOfNoCoversAtAllSkipsTheArithmetic() {
+        // Covers are rare, so "3 of 3 events have no cover image" is what most listings would
+        // carry, and the numbers in it say nothing a reader can use.
+        assertThat(ScheduledEventService.coverCaveat(3, 3, 0, 0, 0, true))
+                .isEqualTo("\n(no event here has a cover image.)");
+    }
+
+    @Test
     void aFailedLiveReadCaveatsEverythingRatherThanCounting() {
         // Counts drawn from a read that did not happen are all zero, which would render as "every
         // event has a cover" — the failure mode the caveat exists for.
@@ -292,14 +300,15 @@ class ScheduledEventServiceTest {
     }
 
     @Test
-    void aValidLocalCoverIsAcceptedAndHandedToDiscordAsTheRightFormat() {
+    void aValidLocalCoverIsAcceptedAndHandedToDiscordAsTheRightFormat(@TempDir Path dir)
+            throws IOException {
         // Everything from the guard to the upload had no coverage: that a file inside the root is
         // accepted at all, and that setImage is called with an Icon built from the sniffed type
         // rather than the extension. The read-back afterwards has no JDA behind it and throws,
         // which exercises the could-not-confirm path — the one that must not claim success it
         // cannot see.
-        Path root = tempRoot();
-        Path file = write(root, "poster.png", png());
+        Path root = Files.createDirectory(dir.resolve("uploads"));
+        Path file = Files.write(root.resolve("poster.png"), png());
         service.coverFileRoot = root.toString();
 
         String result = service.setScheduledEventImage(GUILD, EVENT, null, file.toString());
@@ -420,7 +429,7 @@ class ScheduledEventServiceTest {
 
         assertThatThrownBy(() -> service.setScheduledEventImage(GUILD, EVENT, null, outside.toString()))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("outside the allowed upload directory");
+                .hasMessageContaining("not a readable file inside the allowed upload directory");
     }
 
     @Test
@@ -437,22 +446,6 @@ class ScheduledEventServiceTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Cover image exceeds the 5.0 MB limit.")
                 .hasMessageContaining("Crop it to 5:2");
-    }
-
-    private static Path tempRoot() {
-        try {
-            return Files.createTempDirectory("covers").toRealPath();
-        } catch (IOException e) {
-            throw new AssertionError(e);
-        }
-    }
-
-    private static Path write(Path root, String name, byte[] bytes) {
-        try {
-            return Files.write(root.resolve(name), bytes);
-        } catch (IOException e) {
-            throw new AssertionError(e);
-        }
     }
 
     private static byte[] png() {

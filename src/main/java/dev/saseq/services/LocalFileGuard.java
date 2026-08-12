@@ -108,16 +108,27 @@ public final class LocalFileGuard {
             // anything, and the resolved path is what gets opened.
             real = Paths.get(filePath).toRealPath();
         } catch (IOException e) {
-            throw new IllegalArgumentException("File not found at " + paramName + ": " + filePath);
+            // Same message as the outside-the-root case below, deliberately. Two distinguishable
+            // answers would make this an existence oracle over the whole host: /etc/shadow
+            // resolves and reports "outside the allowed directory", /etc/nope does not and
+            // reports "not found", so any caller could map the filesystem one tool call at a
+            // time. No content leaks either way, so the cost is reconnaissance rather than
+            // exfiltration — but this is shared code now, and the distinction is worth less to a
+            // legitimate operator than it is to someone probing.
+            throw new IllegalArgumentException(refusal(paramName, rootName));
         }
         if (!real.startsWith(allowed) || real.equals(allowed)) {
-            throw new IllegalArgumentException(
-                    paramName + " is outside the allowed " + rootName + " directory");
+            throw new IllegalArgumentException(refusal(paramName, rootName));
         }
         if (!Files.isRegularFile(real, LinkOption.NOFOLLOW_LINKS)) {
             throw new IllegalArgumentException(paramName + " is not a regular file: " + filePath);
         }
         return real;
+    }
+
+    /** One answer for "no such file" and "not inside the root", so the pair cannot be probed. */
+    private static String refusal(String paramName, String rootName) {
+        return paramName + " is not a readable file inside the allowed " + rootName + " directory";
     }
 
     /**
