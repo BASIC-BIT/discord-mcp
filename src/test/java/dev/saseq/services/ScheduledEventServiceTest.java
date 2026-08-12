@@ -411,6 +411,18 @@ class ScheduledEventServiceTest {
         assertThatThrownBy(() -> ScheduledEventService.coverUrlOf(
                 DataObject.empty().put("image", ""), "1"))
                 .isInstanceOf(ParsingException.class);
+        // A fifth, and the reason the id beside it gets isSnowflake: this value is printed into a
+        // URL. A slash or a newline in it does not make a broken hash, it makes a different URL.
+        assertThatThrownBy(() -> ScheduledEventService.coverUrlOf(
+                DataObject.empty().put("image", "aaa/../../evil"), "1"))
+                .isInstanceOf(ParsingException.class);
+        assertThatThrownBy(() -> ScheduledEventService.coverUrlOf(
+                DataObject.empty().put("image", "aaa bbb"), "1"))
+                .isInstanceOf(ParsingException.class);
+        // The animated prefix stays legal: it is the one format variation Discord already uses.
+        assertThat(ScheduledEventService.coverUrlOf(
+                DataObject.empty().put("image", "a_8210694c9d4d01a72fafbdc9012675d1"), "1"))
+                .endsWith(".gif");
     }
 
     private static final String COVER_URL = "https://cdn.discordapp.com/guild-events/11/aaa.png";

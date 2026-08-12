@@ -80,20 +80,30 @@ class FileRootStartupCheckTest {
     }
 
     @Test
-    void anUnsetOrUnresolvableRootIsSilent(@TempDir Path dir) throws IOException {
-        Path uploads = Files.createDirectory(dir.resolve("uploads"));
-
+    void anUnsetRootIsSilent(@TempDir Path dir) throws IOException {
         // Unset is the common case, and "" resolves to the process working directory — which is
         // how this check would otherwise warn about every deployment whose uploads sit under it.
-        check.fileRoot = uploads.toString();
+        check.fileRoot = Files.createDirectory(dir.resolve("uploads")).toString();
         check.downloadRoot = "";
-        check.run(null);
 
-        // Set but missing: whichever tool needs it will say so, with the parameter its caller
-        // used. Half a comparison establishes nothing, so nothing is claimed from it.
-        check.downloadRoot = dir.resolve("nope").toString();
         check.run(null);
 
         assertThat(appender.list).isEmpty();
+    }
+
+    @Test
+    void aRootThatIsSetButUnusableIsWorthSayingOnItsOwn(@TempDir Path dir) throws IOException {
+        // The more common misconfiguration of the two — the compose bind mount left commented
+        // produces exactly it — and it has the property this class exists for: the only other
+        // signal is a tool refusal, which the model reads and the operator never does.
+        check.fileRoot = Files.createDirectory(dir.resolve("uploads")).toString();
+        check.downloadRoot = dir.resolve("nope").toString();
+
+        check.run(null);
+
+        assertThat(warnings())
+                .contains("DISCORD_MCP_DOWNLOAD_ROOT is set but unusable")
+                // Half a comparison establishes nothing about overlap, so nothing is claimed.
+                .doesNotContain("overlap");
     }
 }

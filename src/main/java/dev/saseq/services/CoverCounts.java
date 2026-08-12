@@ -32,7 +32,8 @@ import java.util.Set;
  *                   below it, and this one had nothing to point at.
  * @param unidentifiable entries Discord returned with no usable id, which cannot be matched to a
  *                       listed event in either direction
- * @param recurrenceUnreadable listed events whose recurrence would not parse, so a missing
+ * @param recurrenceUnreadable listed events whose recurrence is not known — it would not parse,
+ *                             or Discord did not return the event at all — so a missing
  *                             "Recurs:" line means unknown rather than absent
  */
 record CoverCounts(int described, int coverless, int unreadable, int absent, int terminal,
@@ -83,7 +84,12 @@ record CoverCounts(int described, int coverless, int unreadable, int absent, int
             } else {
                 absent++;
             }
-            if (recurrenceFailed.contains(id)) {
+            // Not only the parse failures. An event Discord did not return — absent, or over —
+            // had no recurrence read either, and its row renders exactly like a one-off: no
+            // "Recurs:" line, and the clause about it talking only about its cover. Treating a
+            // schedule that was never read as "does not recur" is the confusion this whole
+            // recurrence read exists to remove, so both ways of not knowing count the same.
+            if (recurrenceFailed.contains(id) || !returned.contains(id)) {
                 recurrenceUnreadable++;
             }
         }

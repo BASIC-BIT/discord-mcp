@@ -102,6 +102,11 @@ public final class LocalFileGuard {
      * <p>Shared because two places need the same answer — the cover tool, which refuses the
      * overlap, and the startup check, which warns about it — and a second copy of "is one path
      * inside the other" is how the two would come to disagree about what overlap means.
+     *
+     * <p>Path-based, so it sees only the arrangements that are visible as paths. Two bind mounts
+     * of the same host directory are the same directory with no shared prefix, and this answers
+     * false for them. That is the shape of the guarantee everywhere it is used: reaching the
+     * chained configuration by accident is what gets caught, not every way of arriving there.
      */
     public static boolean overlaps(Root a, Root b) {
         return a.path().startsWith(b.path()) || b.path().startsWith(a.path());

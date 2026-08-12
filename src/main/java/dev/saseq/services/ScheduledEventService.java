@@ -1242,6 +1242,15 @@ public class ScheduledEventService {
         if (hash.isBlank()) {
             throw new ParsingException("image is blank for event " + eventId);
         }
+        // The same reasoning as isSnowflake on the id beside it: this value is printed into a URL
+        // that goes back to a caller, so a slash, a space or a newline in it would not be a broken
+        // hash, it would be a different URL. Deliberately looser than "32 hex characters" — the
+        // check is against a value that cannot be a hash, not a pin on Discord's current format,
+        // which an "a_" prefix already varies.
+        if (!hash.chars().allMatch(c -> c == '_' || (c >= '0' && c <= '9')
+                || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))) {
+            throw new ParsingException("image is not a hash for event " + eventId);
+        }
         return coverUrl(eventId, hash);
     }
 

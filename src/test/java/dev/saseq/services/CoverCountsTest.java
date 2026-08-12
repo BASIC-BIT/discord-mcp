@@ -114,6 +114,27 @@ class CoverCountsTest {
     }
 
     @Test
+    void anEventDiscordDidNotReturnHasAnUnknownScheduleToo() {
+        // Absent and terminal events are usually discussed for their covers, but nothing read
+        // their recurrence either — and their row renders exactly like a one-off: no "Recurs:"
+        // line at all. Counting only the parse failures let a weekly event that Discord did not
+        // return read as a one-off, which is the confusion this recurrence read exists to remove.
+        CoverCounts absent = CoverCounts.tally(List.of("a", "gone"), NONE, Set.of("a"), Set.of("a"),
+                Set.of("a"), Set.of(), 0);
+        assertThat(absent.absent()).isEqualTo(1);
+        assertThat(absent.recurrenceUnreadable()).isEqualTo(1);
+
+        CoverCounts over = CoverCounts.tally(List.of("a", "done"), Set.of("done"), Set.of("a"),
+                Set.of("a"), Set.of("a"), Set.of(), 0);
+        assertThat(over.terminal()).isEqualTo(1);
+        assertThat(over.recurrenceUnreadable()).isEqualTo(1);
+
+        // And an event that was read is not counted twice or wrongly: its schedule is known.
+        assertThat(CoverCounts.tally(List.of("a"), NONE, Set.of("a"), Set.of("a"), Set.of("a"),
+                Set.of(), 0).recurrenceUnreadable()).isZero();
+    }
+
+    @Test
     void unidentifiableEntriesPassThroughUncounted() {
         // They belong to no event in either direction, so they cannot be folded into any of the
         // per-event tallies — the caveat states them on their own.

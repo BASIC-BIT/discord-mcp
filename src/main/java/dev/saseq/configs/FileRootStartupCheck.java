@@ -36,15 +36,11 @@ public class FileRootStartupCheck implements ApplicationRunner {
         if (fileRoot == null || fileRoot.isBlank() || downloadRoot == null || downloadRoot.isBlank()) {
             return;
         }
-        LocalFileGuard.Root uploads;
-        LocalFileGuard.Root downloads;
-        try {
-            uploads = LocalFileGuard.resolveRoot(fileRoot, "DISCORD_MCP_FILE_ROOT");
-            downloads = LocalFileGuard.resolveRoot(downloadRoot, "DISCORD_MCP_DOWNLOAD_ROOT");
-        } catch (RuntimeException unresolvable) {
-            // A root that does not resolve is the tools' problem to report when they are called,
-            // with the parameter names their caller used. Startup is not the place to relitigate
-            // it, and half a comparison establishes nothing.
+        LocalFileGuard.Root uploads = resolved(fileRoot, "DISCORD_MCP_FILE_ROOT");
+        LocalFileGuard.Root downloads = resolved(downloadRoot, "DISCORD_MCP_DOWNLOAD_ROOT");
+        if (uploads == null || downloads == null) {
+            // Half a comparison establishes nothing about overlap, so nothing is claimed from it.
+            // The failure itself was already reported by resolved().
             return;
         }
         if (LocalFileGuard.overlaps(uploads, downloads)) {
@@ -55,6 +51,24 @@ public class FileRootStartupCheck implements ApplicationRunner {
                             + " this configuration; send_file does not. Point them at separate"
                             + " directories unless this is deliberate.",
                     uploads.path(), downloads.path());
+        }
+    }
+
+    /**
+     * A configured root, or null with a warning naming why it did not resolve.
+     *
+     * <p>Worth its own warning rather than a silent return. A root set to a directory that is not
+     * there is the more common misconfiguration of the two — the compose bind mount left
+     * commented produces exactly it — and it has the same property this class exists for: the
+     * only signal is a tool refusal, which reaches the model and not the operator.
+     */
+    private LocalFileGuard.Root resolved(String configured, String variableName) {
+        try {
+            return LocalFileGuard.resolveRoot(configured, variableName);
+        } catch (RuntimeException unresolvable) {
+            log.warn("{} is set but unusable, so the tools that need it will refuse: {}",
+                    variableName, unresolvable.getMessage());
+            return null;
         }
     }
 }
