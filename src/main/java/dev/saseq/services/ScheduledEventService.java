@@ -792,6 +792,10 @@ public class ScheduledEventService {
             // MANAGE_EVENTS, and a completed or cancelled event all arrive as the same exception,
             // and naming one of them points the caller at the wrong fix. The size and format are
             // context, not a diagnosis.
+            //
+            // This makes the failure path cost two requests: if the PATCH failed to a rate limit,
+            // the read-back goes into the same bucket. Kept anyway — reporting what is true beats
+            // guessing, and the alternative is a message that cannot say whether the write took.
             String outcome;
             try {
                 outcome = describeOutcome(
@@ -1086,63 +1090,6 @@ public class ScheduledEventService {
         Guild guild = getGuild(guildId);
         List<ScheduledEvent> events = guild.getScheduledEvents();
 
-        if (events.isEmpty()) {
-            // "None" is a claim, and an empty cache does not support it. This is the all-events
-            // form of the lag `unlistedCount` reports below: an event created out of band exists
-            // at Discord before the gateway delivers it here, and answering "no scheduled events"
-            // then is the same mistake as calling an uncached event missing — just total.
-            net.dv8tion.jda.api.utils.data.DataArray live;
-            try {
-                live = fetchRawList(guild.getId());
-            } catch (RuntimeException e) {
-                // Thrown, not returned. "Whether there are none is unconfirmed" reads as a result
-                // while carrying none, and a permissions failure produces it identically on every
-                // retry. An error at least says the call did not answer the question.
-                throw new IllegalArgumentException("This server's cache holds no scheduled events,"
-                        + " and the live list could not be read" + reason(e) + ", so whether there"
-                        + " are none is unconfirmed.");
-            }
-            if (live.length() == 0) {
-                return "No scheduled events found on this server.";
-            }
-            // The response is in hand, so render it rather than only counting it. A caller told
-            // "the cache has not caught up" and nothing else has no id to act on — and the flow
-            // the cover tool recommends is exactly create-then-cover, which needs one.
-            StringBuilder ahead = new StringBuilder("This server's cache holds no scheduled events,"
-                    + " but Discord returned " + live.length() + ". The cache has not caught up;"
-                    + " these came from the live read and can be acted on by ID:\n");
-            for (int i = 0; i < live.length(); i++) {
-                // Every field inside the guard, not just the id. A non-string `name` throws from
-                // getString exactly as a malformed `image` does, and leaving any one of them
-                // outside means a single bad entry takes down the whole response — the thing this
-                // loop is shaped to prevent.
-                String entry;
-                try {
-                    DataObject o = live.getObject(i);
-                    String id = o.getString("id", null);
-                    if (id == null || id.isBlank()) continue;
-                    StringBuilder row = new StringBuilder("- **")
-                            .append(o.getString("name", "(unnamed)"))
-                            .append("** (ID: ").append(id).append(")");
-                    // Recurrence too: without it a series created moments ago reads as a one-off,
-                    // the same misreading the main listing carries a caveat to avoid.
-                    DataObject rule = recurrenceOf(o);
-                    if (rule != null) {
-                        row.append("\n  • Recurs: ").append(RecurrenceRule.describe(rule));
-                    }
-                    String cover = coverUrlOf(o, id);
-                    if (cover != null) {
-                        row.append("\n  • Cover image: ").append(cover);
-                    }
-                    entry = row.toString();
-                } catch (RuntimeException malformed) {
-                    continue;
-                }
-                ahead.append(entry).append("\n");
-            }
-            return ahead.toString().stripTrailing();
-        }
-
         boolean includeUserCount = withUserCount == null || withUserCount.isEmpty() || Boolean.parseBoolean(withUserCount);
 
         // One raw list call so recurrence is visible here. Without it a weekly class and a one-off
@@ -1282,6 +1229,17 @@ public class ScheduledEventService {
                         .map(ScheduledEvent::getId).collect(Collectors.toSet()),
                 returned, described, covers.keySet(), recurrenceFailed, unidentifiable);
         String caveat = coverCaveat(counts, rawKnown);
+        // An empty cache is no longer an early return. The main path already reports exactly that
+        // case: with nothing listed, every event Discord returned lands in `unlisted`, whose
+        // clause says the list is incomplete because the cache has not caught up. A branch of its
+        // own meant a second renderer with its own field set, its own failure policy and no
+        // accounting for the entries it skipped — review found it missing a different thing in
+        // each of three rounds. One renderer cannot drift from itself.
+        //
+        // "None" is still a claim, so it is only made when the live read agreed there are none.
+        if (events.isEmpty() && rawKnown && returned.isEmpty()) {
+            return "No scheduled events found on this server.";
+        }
         return "Retrieved " + events.size() + " scheduled events:" + caveat + "\n" +
                 events.stream()
                         .map(e -> {

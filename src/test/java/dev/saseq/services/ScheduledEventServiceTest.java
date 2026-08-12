@@ -416,7 +416,10 @@ class ScheduledEventServiceTest {
         // The source is read first — deliberately, so a path out of the root or a URL aimed at a
         // link-local address is refused before any Discord request is formed. A file inside the
         // root therefore passes the guard and is read, and the call then stops at the event read,
-        // which the mocked JDA cannot serve. What is asserted is the message, not the absence of a
+        // which the mocked JDA cannot serve — RestActionImpl casts its JDA argument to JDAImpl and
+        // a Mockito proxy is not one. So the exact string pinned below is an artifact of the mock,
+        // not something production produces; what the test establishes is the ordering in its
+        // name. If a JDA upgrade validates earlier, this fails loudly rather than passing wrongly. What is asserted is the message, not the absence of a
         // write — nothing here could observe a PATCH, since the same mock that fails the read
         // would fail it too.
         Path root = Files.createDirectory(dir.resolve("uploads"));
@@ -471,19 +474,20 @@ class ScheduledEventServiceTest {
     }
 
     @Test
-    void anEmptyCacheDoesNotAnswerNoEventsWhenTheLiveReadFailed() {
+    void anEmptyCacheWithAnUnreadableLiveListDoesNotClaimThereAreNone() {
         // "No scheduled events found" is a claim, and an empty cache alone does not support it —
-        // an event created out of band exists at Discord before the gateway delivers it here.
-        // The mocked JDA cannot complete the live list, so this reaches the unconfirmed arm; the
+        // an event created out of band exists at Discord before the gateway delivers it here. The
+        // mocked JDA cannot complete the live list, so nothing confirms it either way, and the
         // property is that a failed confirmation is never reported as an answer.
         when(guild.getScheduledEvents()).thenReturn(java.util.List.of());
 
-        // Thrown rather than returned: a string saying the question went unanswered still reads
-        // as an answer, and a permissions failure would produce it identically forever.
-        assertThatThrownBy(() -> service.listScheduledEvents(GUILD, "false"))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("whether there are none is unconfirmed")
-                .hasMessageNotContaining("No scheduled events found");
+        // The failed live read degrades the same way it does with a warm cache — one policy, not
+        // two — and "no scheduled events" is withheld because nothing established it.
+        String result = service.listScheduledEvents(GUILD, "false");
+
+        assertThat(result)
+                .contains("could not be read")
+                .doesNotContain("No scheduled events found");
     }
 
     @Test
