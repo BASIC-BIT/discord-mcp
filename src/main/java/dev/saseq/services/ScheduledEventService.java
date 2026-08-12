@@ -172,11 +172,40 @@ public class ScheduledEventService {
      * cannot reintroduce the gap by forgetting it.
      */
     private static String requireSnowflake(String id, String paramName) {
-        if (id == null || id.isBlank() || !id.chars().allMatch(Character::isDigit)) {
+        if (!isSnowflake(id)) {
             throw new IllegalArgumentException(paramName
-                    + " must be a Discord snowflake (digits only)");
+                    + " must be a Discord snowflake (ASCII digits only)");
         }
         return id;
+    }
+
+    /**
+     * Whether a string is a Discord id: ASCII digits, and a value a snowflake can hold.
+     *
+     * <p>{@code Character.isDigit} is not this check — it is true for every Unicode decimal digit,
+     * so Arabic-Indic numerals would pass a test whose message says digits. Neither is
+     * {@code MiscUtil.parseSnowflake} on its own, which accepts a leading sign. Nothing here is a
+     * traversal defence, {@code /} and {@code .} are excluded either way; it is about the promise
+     * the name makes being the promise the code keeps.
+     *
+     * <p>The range matters for the same reason: 20 digits is a legal length and still overflows,
+     * and JDA's own parse of such a value throws rather than addressing the event the caller meant.
+     *
+     * <p>Package-private because {@link LiveEventDetails} needs the predicate rather than the
+     * refusal — an id that is not a snowflake cannot match a listed event, whose ids come from JDA
+     * entities, so recording one would manufacture a "Discord has an event this list does not"
+     * claim out of a malformed field.
+     */
+    static boolean isSnowflake(String id) {
+        if (id == null || id.isEmpty() || !id.chars().allMatch(c -> c >= '0' && c <= '9')) {
+            return false;
+        }
+        try {
+            Long.parseUnsignedLong(id);
+            return true;
+        } catch (NumberFormatException tooLargeForASnowflake) {
+            return false;
+        }
     }
 
     /**
@@ -1038,7 +1067,16 @@ public class ScheduledEventService {
             throw new ParsingException("image is not a string for event " + eventId);
         }
         String hash = raw.getString("image", null);
-        return hash == null ? null : coverUrl(eventId, hash);
+        if (hash == null) {
+            return null;
+        }
+        // Absent means no cover; blank means neither. It is not a hash, so no URL can be built from
+        // it — .../{eventId}/.png resolves to nothing — and calling it "no cover image" would be a
+        // claim about the event drawn from a field that says nothing.
+        if (hash.isBlank()) {
+            throw new ParsingException("image is blank for event " + eventId);
+        }
+        return coverUrl(eventId, hash);
     }
 
     private static String coverUrl(String eventId, String hash) {

@@ -1,6 +1,7 @@
 package dev.saseq.services;
 
 import java.util.Collection;
+import java.util.LinkedHashSet;
 import java.util.Set;
 
 /**
@@ -49,7 +50,7 @@ record CoverCounts(int described, int coverless, int unreadable, int absent, int
         // listing would make listedAndReturned outrun a Set and render "Discord returned -1
         // events not in this list" — nonsense from a function whose whole purpose is not making
         // claims it cannot support. Nothing in Collection<String> stops a caller passing one.
-        listed = new java.util.LinkedHashSet<>(listed);
+        Set<String> unique = new LinkedHashSet<>(listed);
         int describedCount = 0;
         int coverless = 0;
         int unreadable = 0;
@@ -57,7 +58,7 @@ record CoverCounts(int described, int coverless, int unreadable, int absent, int
         int terminal = 0;
         int listedAndReturned = 0;
         int recurrenceUnreadable = 0;
-        for (String id : listed) {
+        for (String id : unique) {
             if (returned.contains(id)) {
                 listedAndReturned++;
             }

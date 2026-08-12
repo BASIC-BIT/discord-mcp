@@ -383,6 +383,11 @@ class ScheduledEventServiceTest {
         assertThatThrownBy(() -> ScheduledEventService.coverUrlOf(
                 DataObject.empty().put("image", DataObject.empty()), "1"))
                 .isInstanceOf(ParsingException.class);
+        // And a fourth: a string, but not a hash. Building a URL from it gives .../1/.png, which
+        // resolves to nothing and would be printed as this event's cover.
+        assertThatThrownBy(() -> ScheduledEventService.coverUrlOf(
+                DataObject.empty().put("image", ""), "1"))
+                .isInstanceOf(ParsingException.class);
     }
 
     @Test
@@ -553,6 +558,21 @@ class ScheduledEventServiceTest {
         // "   " used to fail with "eventId cannot be null", naming a condition that did not fire.
         assertThatThrownBy(() -> service.setScheduledEventImage(
                 GUILD, "   ", "https://example.com/x.png", null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("eventId must be a Discord snowflake");
+        // Arabic-Indic "123", written as escapes so this cannot quietly become an ASCII string in
+        // some other encoding and pass for the wrong reason. Character.isDigit is true for every
+        // Unicode decimal digit, and so is Long.parseUnsignedLong, so both halves of the check
+        // would let it reach the route. Not a traversal — the worst case is a 404 — but a check
+        // whose name promises more than it delivers is the shape this file keeps getting wrong.
+        assertThatThrownBy(() -> service.setScheduledEventImage(
+                GUILD, "\u0661\u0662\u0663", "https://example.com/x.png", null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("eventId must be a Discord snowflake");
+        // 20 digits is a legal snowflake length and this one still overflows 64 bits, so JDA's own
+        // parse of it would throw rather than address the event the caller meant.
+        assertThatThrownBy(() -> service.setScheduledEventImage(
+                GUILD, "99999999999999999999", "https://example.com/x.png", null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("eventId must be a Discord snowflake");
     }

@@ -411,17 +411,6 @@ public final class RecurrenceRule {
     }
 
     /**
-     * Rebuild a rule Discord sent us into one we are allowed to send back.
-     *
-     * <p>A GET returns the server-owned fields too — {@code count}, {@code end},
-     * {@code by_year_day} — and echoing them on a PATCH is rejected. That matters most in the one
-     * case this class exists for: moving a recurring event's anchor starts from the existing rule.
-     *
-     * @param serverRule a recurrence rule as returned by Discord
-     * @param start      the new anchor
-     * @return a validated, writable rule
-     */
-    /**
      * A scheduled event's recurrence rule, or null if it is not a recurring event.
      *
      * <p>Tolerates an absent key as well as an explicit null, so it is safe to call with the empty
@@ -440,6 +429,17 @@ public final class RecurrenceRule {
                 : event.getObject("recurrence_rule");
     }
 
+    /**
+     * Rebuild a rule Discord sent us into one we are allowed to send back.
+     *
+     * <p>A GET returns the server-owned fields too — {@code count}, {@code end},
+     * {@code by_year_day} — and echoing them on a PATCH is rejected. That matters most in the one
+     * case this class exists for: moving a recurring event's anchor starts from the existing rule.
+     *
+     * @param serverRule a recurrence rule as returned by Discord
+     * @param start      the new anchor
+     * @return a validated, writable rule
+     */
     public static DataObject withStart(DataObject serverRule, String start) {
         DataObject writable = DataObject.empty();
         for (String field : WRITABLE) {

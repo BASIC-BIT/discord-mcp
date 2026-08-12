@@ -52,12 +52,9 @@ record LiveEventDetails(Map<String, String> rules, Map<String, String> covers,
                 unidentifiable++;
                 continue;
             }
-            // Guarded, though not for the reason once claimed here:
-            // DataObject.getString coerces via toString rather than throwing, so a numeric or
-            // object id arrives as a usable string and only a missing or blank one is unusable.
-            // The try stays because it costs
-            // nothing and this method's contract is that one entry cannot cost the rest — but the
-            // failure that actually throws here is the recurrence read below, not this.
+            // Guarded, though not for the reason once claimed here: DataObject.getString coerces
+            // via toString rather than throwing, so nothing in this read is expected to fail. The
+            // try costs nothing and this method's contract is that one entry cannot cost the rest.
             String id;
             try {
                 id = o.getString("id", null);
@@ -65,11 +62,18 @@ record LiveEventDetails(Map<String, String> rules, Map<String, String> covers,
                 unidentifiable++;
                 continue;
             }
-            if (id == null || id.isBlank()) {
+            if (!ScheduledEventService.isSnowflake(id)) {
                 // Counted, not silently dropped. Discord did return this event; without a usable
                 // id there is no way to say which, so a listed copy of it would otherwise fall
-                // into "not in the live read" and nothing would mention it at all. Blank as well
-                // as null, since a blank id matches no listed event either.
+                // into "not in the live read" and nothing would mention it at all.
+                //
+                // A snowflake, not merely a non-blank string, precisely because of the coercion
+                // above: an object or array id arrives here as its toString, which is a string
+                // that matches no listed event — every listed id comes from a JDA entity. Recorded,
+                // it would land in `unlisted` and manufacture "Discord returned an event this list
+                // does not have" out of a malformed field, while the real event it belongs to
+                // reads as absent. A numeric id survives, which is the coercion doing something
+                // useful: 123 and "123" address the same event.
                 unidentifiable++;
                 continue;
             }
