@@ -17,7 +17,6 @@ import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import java.nio.file.Path;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
@@ -662,17 +661,19 @@ public class ScheduledEventService {
 
         // Cheap checks first, matching download_attachment: it resolves its root before spending
         // any network call so a misconfigured root fails immediately rather than after 50 MB.
-        // Same shape here — a mistyped eventId should not cost a 5 MB transfer. Both are cache
-        // reads, except on a cache miss, where getEventForCover spends one GET to tell "does not
-        // exist" from "not here yet". It does not weaken the guards below: they are what confine
-        // the source, and nothing here can route around them.
-        Guild guild = getGuild(guildId);
-        ScheduledEvent event = getEventForCover(guild, eventId);
-        // Resolved before the read for the same reason, so an unset or bad root is reported
-        // without having opened anything.
+        //
+        // The root goes first of all, because it is the only check here that costs nothing at
+        // all. getEventForCover spends a GET on a cache miss, so looking the event up first meant
+        // a filePath call on a deployment with no upload root could burn a request before
+        // refusing with "Local paths are disabled" — a refusal that needs no I/O to reach.
         LocalFileGuard.Root root = hasPath
                 ? LocalFileGuard.resolveRoot(requireCoverFileRoot(), "DISCORD_MCP_FILE_ROOT")
                 : null;
+        // Then the event, still before the source is fetched: a mistyped eventId should not cost
+        // a 5 MB transfer. Neither weakens the guards below — those are what confine the source,
+        // and nothing here can route around them.
+        Guild guild = getGuild(guildId);
+        ScheduledEvent event = getEventForCover(guild, eventId);
 
         String source;
         byte[] bytes;
@@ -910,8 +911,12 @@ public class ScheduledEventService {
                     // claim these counters were split apart to avoid, made about the one case
                     // where the split cannot help.
                     .append(unidentifiable > 0
-                            ? " not matched to anything in the live read, though the unreadable"
-                            + " entries below may be among them, so "
+                            // "entries with no id", not "the unreadable entries": the neighbouring
+                            // clause about unreadable *events* is one word away in a sentence that
+                            // already carries four numbers, and the events/entries distinction is
+                            // too thin to carry the reference on its own.
+                            ? " not matched to anything in the live read, and the entries with no"
+                            + " id may be among them, so "
                             : " not in the live read, so ")
                     .append(absent == 1 ? "its cover is" : "their covers are").append(" unknown");
         }
@@ -1220,7 +1225,17 @@ public class ScheduledEventService {
         int unreadableCount = (int) events.stream()
                 .filter(e -> returned.contains(e.getId()) && !described.contains(e.getId()))
                 .count();
-        int absentCount = (int) events.stream().filter(e -> !returned.contains(e.getId())).count();
+        // Only events that could still be in the live read. GET /guilds/{id}/scheduled-events
+        // returns scheduled and active events, so a completed or cancelled one is legitimately
+        // absent from it — counting those would put "N events were not in the live read, so their
+        // covers are unknown" on most listings, attributing to a read gap what is really just an
+        // event being over. A caveat that fires routinely stops being read, which costs more than
+        // the case it was meant to catch.
+        int absentCount = (int) events.stream()
+                .filter(e -> e.getStatus() == ScheduledEvent.Status.SCHEDULED
+                        || e.getStatus() == ScheduledEvent.Status.ACTIVE)
+                .filter(e -> !returned.contains(e.getId()))
+                .count();
         int unlistedCount = returned.size()
                 - (int) events.stream().filter(e -> returned.contains(e.getId())).count();
         int recurrenceUnreadable = (int) events.stream()

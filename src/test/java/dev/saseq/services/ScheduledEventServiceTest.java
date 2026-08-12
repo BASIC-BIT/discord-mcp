@@ -283,7 +283,7 @@ class ScheduledEventServiceTest {
         // the one place the wording has to.
         assertThat(ScheduledEventService.coverCaveat(1, 0, 0, 1, 0, 1, 0, true))
                 .contains("not matched to anything in the live read")
-                .contains("may be among them")
+                .contains("the entries with no id may be among them")
                 .doesNotContain("not in the live read, so");
         // With nothing unidentifiable, the flat claim is supported and stays.
         assertThat(ScheduledEventService.coverCaveat(1, 0, 0, 1, 0, 0, 0, true))
