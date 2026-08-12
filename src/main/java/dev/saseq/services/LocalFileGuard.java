@@ -92,9 +92,14 @@ public final class LocalFileGuard {
      * <p>This type is what {@code resolveWithinRoot} confines against, so only a directory
      * intended to be <em>read from by caller-supplied path</em> should ever become one. A root
      * that is written to — {@code DISCORD_MCP_DOWNLOAD_ROOT} — stays a plain {@link Path} at its
-     * accessor for exactly that reason: were it a {@code Root}, passing it here would compile,
-     * and that is the chained read-and-write configuration the README argues against, reached by
-     * accident rather than by decision.
+     * accessor for exactly that reason.
+     *
+     * <p>Be precise about how strong that is. {@code resolveRoot} will build a {@code Root} over
+     * any directory, the download one included, so this does not make the chained read-and-write
+     * configuration unrepresentable. What it removes is the shape in which it happens by accident:
+     * passing {@code allowedDownloadRoot()} where an upload root belongs no longer compiles.
+     * Reaching it now takes writing {@code resolveRoot(downloadRoot, …)} at the call site, which
+     * is a decision rather than a slip.
      *
      * <p>Symmetric to {@link ConfinedPath}, and for the same reason. {@code resolveWithinRoot}
      * took a bare {@code Path} for its root, so nothing required that root to have been through

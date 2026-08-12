@@ -218,7 +218,12 @@ public class MessageService {
      * This directory is written to, never read from by path, so it has no business being one —
      * and if it were, {@code resolveWithinRoot(filePath, allowedDownloadRoot(), ...)} would
      * type-check, which is the chained read-and-write configuration the security notes argue
-     * against, reachable by accident. The compiler refuses it now.
+     * against, reachable by accident.
+     *
+     * <p>This does not make that configuration impossible — {@code resolveRoot} will build a
+     * {@code Root} over this directory for anyone who asks. It removes the accidental route: the
+     * chained version now has to be written out deliberately at the call site rather than
+     * arriving by passing the wrong accessor.
      */
     private Path allowedDownloadRoot() {
         if (downloadRoot == null || downloadRoot.isBlank()) {

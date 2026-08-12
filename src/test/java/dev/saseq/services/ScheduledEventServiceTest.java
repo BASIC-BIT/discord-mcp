@@ -416,8 +416,9 @@ class ScheduledEventServiceTest {
         // The source is read first — deliberately, so a path out of the root or a URL aimed at a
         // link-local address is refused before any Discord request is formed. A file inside the
         // root therefore passes the guard and is read, and the call then stops at the event read,
-        // which the mocked JDA cannot serve. The claim worth pinning is the last one: nothing was
-        // written.
+        // which the mocked JDA cannot serve. What is asserted is the message, not the absence of a
+        // write — nothing here could observe a PATCH, since the same mock that fails the read
+        // would fail it too.
         Path root = Files.createDirectory(dir.resolve("uploads"));
         Files.write(root.resolve("poster.png"), png());
         service.coverFileRoot = root.toString();
@@ -477,11 +478,12 @@ class ScheduledEventServiceTest {
         // property is that a failed confirmation is never reported as an answer.
         when(guild.getScheduledEvents()).thenReturn(java.util.List.of());
 
-        String result = service.listScheduledEvents(GUILD, "false");
-
-        assertThat(result)
-                .contains("whether there are none is unconfirmed")
-                .doesNotContain("No scheduled events found");
+        // Thrown rather than returned: a string saying the question went unanswered still reads
+        // as an answer, and a permissions failure would produce it identically forever.
+        assertThatThrownBy(() -> service.listScheduledEvents(GUILD, "false"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("whether there are none is unconfirmed")
+                .hasMessageNotContaining("No scheduled events found");
     }
 
     @Test

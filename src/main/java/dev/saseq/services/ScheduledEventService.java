@@ -643,6 +643,12 @@ public class ScheduledEventService {
      * acquire a local-file read. Splitting it keeps the two decisions separate: a deployment can
      * allow event edits and refuse cover uploads.
      *
+     * <p>Unverified for recurring events. REVIEW.md records that editing one changes a single
+     * occurrence while the series re-anchors, and this PATCHes the same endpoint — so if that
+     * applies to {@code image} too, the read-back would show a hash that looks right for a cover
+     * that landed somewhere the caller did not mean. Nobody has checked; saying so is cheaper
+     * than the reader assuming it was.
+     *
      * <p>Takes {@code imageUrl} as well as {@code filePath} for a related reason. With only a
      * local path, the ordinary job — put a poster that is already in Discord onto an event —
      * requires a filesystem grant, and the shortest route to one is pointing
@@ -1089,8 +1095,12 @@ public class ScheduledEventService {
             try {
                 live = fetchRawList(guild.getId());
             } catch (RuntimeException e) {
-                return "This server's cache holds no scheduled events, and the live list could not"
-                        + " be read" + reason(e) + ", so whether there are none is unconfirmed.";
+                // Thrown, not returned. "Whether there are none is unconfirmed" reads as a result
+                // while carrying none, and a permissions failure produces it identically on every
+                // retry. An error at least says the call did not answer the question.
+                throw new IllegalArgumentException("This server's cache holds no scheduled events,"
+                        + " and the live list could not be read" + reason(e) + ", so whether there"
+                        + " are none is unconfirmed.");
             }
             if (live.length() == 0) {
                 return "No scheduled events found on this server.";
@@ -1102,25 +1112,33 @@ public class ScheduledEventService {
                     + " but Discord returned " + live.length() + ". The cache has not caught up;"
                     + " these came from the live read and can be acted on by ID:\n");
             for (int i = 0; i < live.length(); i++) {
-                DataObject o;
-                String id;
+                // Every field inside the guard, not just the id. A non-string `name` throws from
+                // getString exactly as a malformed `image` does, and leaving any one of them
+                // outside means a single bad entry takes down the whole response — the thing this
+                // loop is shaped to prevent.
+                String entry;
                 try {
-                    o = live.getObject(i);
-                    id = o.getString("id", null);
+                    DataObject o = live.getObject(i);
+                    String id = o.getString("id", null);
+                    if (id == null || id.isBlank()) continue;
+                    StringBuilder row = new StringBuilder("- **")
+                            .append(o.getString("name", "(unnamed)"))
+                            .append("** (ID: ").append(id).append(")");
+                    // Recurrence too: without it a series created moments ago reads as a one-off,
+                    // the same misreading the main listing carries a caveat to avoid.
+                    DataObject rule = recurrenceOf(o);
+                    if (rule != null) {
+                        row.append("\n  • Recurs: ").append(RecurrenceRule.describe(rule));
+                    }
+                    String cover = coverUrlOf(o, id);
+                    if (cover != null) {
+                        row.append("\n  • Cover image: ").append(cover);
+                    }
+                    entry = row.toString();
                 } catch (RuntimeException malformed) {
                     continue;
                 }
-                if (id == null || id.isBlank()) continue;
-                ahead.append("- **").append(o.getString("name", "(unnamed)"))
-                        .append("** (ID: ").append(id).append(")");
-                String cover = null;
-                try {
-                    cover = coverUrlOf(o, id);
-                } catch (RuntimeException malformed) {
-                    // Its cover is unreadable; its id still is not.
-                }
-                if (cover != null) ahead.append("\n  • Cover image: ").append(cover);
-                ahead.append("\n");
+                ahead.append(entry).append("\n");
             }
             return ahead.toString().stripTrailing();
         }
