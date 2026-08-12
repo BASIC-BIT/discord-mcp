@@ -83,11 +83,17 @@ public final class LocalFileGuard {
         if (root.getNameCount() == 0) {
             throw new IllegalArgumentException(variableName + " must not be a filesystem root");
         }
-        return new Root(root);
+        return new Root(root, variableName);
     }
 
     /**
      * A directory that has been through {@link #resolveRoot}.
+     *
+     * <p>Carries the variable it came from, because the type alone does not say which grant a
+     * root represents: {@code resolveWithinRoot(filePath, allowedDownloadRoot(), ...)} type-checks
+     * perfectly, and that is the chained read-and-write root the README spends four paragraphs
+     * arguing against. A caller that must read from one specific root can now check, rather than
+     * relying on having passed the right accessor.
      *
      * <p>Symmetric to {@link ConfinedPath}, and for the same reason. {@code resolveWithinRoot}
      * took a bare {@code Path} for its root, so nothing required that root to have been through
@@ -99,9 +105,16 @@ public final class LocalFileGuard {
      */
     public static final class Root {
         private final Path path;
+        private final String variableName;
 
-        private Root(Path path) {
+        private Root(Path path, String variableName) {
             this.path = path;
+            this.variableName = variableName;
+        }
+
+        /** The setting this root came from, so a caller can say which grant it is relying on. */
+        public String variableName() {
+            return variableName;
         }
 
         public Path path() {
@@ -221,8 +234,9 @@ public final class LocalFileGuard {
         if (maxBytes < 0 || maxBytes == Integer.MAX_VALUE) {
             // maxBytes + 1 overflows to negative at MAX_VALUE, and readNBytes would throw
             // IllegalArgumentException from inside the try, where it would be reported as a read
-            // failure of the file rather than a caller mistake. RemoteFetchGuard.readBounded
-            // guards its own bound for the same reason; unreachable from either caller today.
+            // failure of the file rather than a caller mistake. RemoteFetchGuard.readBounded also
+            // rejects a negative bound, though it handles MAX_VALUE by widening in its loop rather
+            // than refusing it — the guards are not identical. Unreachable from either caller.
             throw new IllegalArgumentException("maxBytes must be between 0 and Integer.MAX_VALUE - 1,"
                     + " was " + maxBytes);
         }

@@ -688,6 +688,14 @@ public class ScheduledEventService {
                 bytes = RemoteFetchGuard.fetch(imageUrl, MAX_COVER_BYTES, "cover image");
                 source = imageUrl;
             } else {
+                // The upload root specifically. Root is a type, but every root has the same
+                // type, so passing the download root here would compile — and that is the
+                // chained configuration the security notes argue against, arrived at by
+                // accident rather than by an operator deciding on it.
+                if (!"DISCORD_MCP_FILE_ROOT".equals(root.variableName())) {
+                    throw new IllegalStateException("Cover images must be read from "
+                            + "DISCORD_MCP_FILE_ROOT, not " + root.variableName());
+                }
                 LocalFileGuard.ConfinedPath path =
                         LocalFileGuard.resolveWithinRoot(filePath, root, "filePath", "upload");
                 bytes = LocalFileGuard.readBounded(path, MAX_COVER_BYTES, "cover image");
@@ -861,6 +869,9 @@ public class ScheduledEventService {
      * @param coverless  how many of those have no cover
      * @param unreadable listed events Discord returned but whose details would not parse
      * @param absent     listed events Discord did not return at all
+     * @param terminal   listed events Discord did not return because they are over — a different
+     *                   fact from `absent`, and one that explains a missing cover line rather
+     *                   than reporting a gap
      * @param unlisted   events Discord returned that are not in the listing
      * @param unidentifiable entries Discord returned with no usable id, which cannot be matched
      *                       to any listed event in either direction
@@ -869,8 +880,8 @@ public class ScheduledEventService {
      * @param rawKnown   whether the live read succeeded at all
      */
     static String coverCaveat(int described, int coverless, int unreadable, int absent,
-                              int unlisted, int unidentifiable, int recurrenceUnreadable,
-                              boolean rawKnown) {
+                              int terminal, int unlisted, int unidentifiable,
+                              int recurrenceUnreadable, boolean rawKnown) {
         if (!rawKnown) {
             return "\n(Recurrence and cover images could not be read, so no event below is marked as"
                     + " recurring or as having a cover even if it is.)";
@@ -883,7 +894,8 @@ public class ScheduledEventService {
             // The absolute phrasing is only supportable when the live read described every listed
             // event. With 1 of 3 described and coverless, "no event here has a cover image" makes
             // a claim about the two it never saw — beside a clause that calls those two unknown.
-            if (coverless == described && unreadable == 0 && absent == 0 && unidentifiable == 0) {
+            if (coverless == described && unreadable == 0 && absent == 0 && terminal == 0
+                    && unidentifiable == 0) {
                 sb.append("no event here has a cover image");
             } else {
                 // Three numbers, three agreements, and they are not the same number. The noun
@@ -919,6 +931,13 @@ public class ScheduledEventService {
                             + " id may be among them, so "
                             : " not in the live read, so ")
                     .append(absent == 1 ? "its cover is" : "their covers are").append(" unknown");
+        }
+        if (terminal > 0) {
+            join(sb).append(terminal).append(terminal == 1 ? " event has" : " events have")
+                    .append(" finished, so Discord no longer returns ")
+                    .append(terminal == 1 ? "it" : "them")
+                    .append(" and no cover is shown below for ")
+                    .append(terminal == 1 ? "it" : "them");
         }
         if (unlisted > 0) {
             join(sb).append("Discord returned ").append(unlisted).append(" event")
@@ -958,6 +977,12 @@ public class ScheduledEventService {
      */
     private static String reason(RuntimeException e) {
         return e.getMessage() == null ? "" : ": " + e.getMessage();
+    }
+
+    /** Over, so the live listing no longer carries it and its cover cannot be read from there. */
+    private static boolean isTerminal(ScheduledEvent event) {
+        return event.getStatus() == ScheduledEvent.Status.COMPLETED
+                || event.getStatus() == ScheduledEvent.Status.CANCELED;
     }
 
     /** The cover image URL from a raw event object, or null if it has no cover. */
@@ -1080,7 +1105,7 @@ public class ScheduledEventService {
         return "Successfully deleted scheduled event: " + eventName + " (ID: " + eventId + ")";
     }
 
-    @Tool(name = "list_guild_scheduled_events", description = "List all active and scheduled events on the server")
+    @Tool(name = "list_guild_scheduled_events", description = "List all active and scheduled events on the server, with each one's recurrence and cover image URL. A header line says how many have no cover, and flags anything the live read could not account for.")
     public String listScheduledEvents(
             @ToolParam(description = "Discord server ID", required = false) String guildId,
             @ToolParam(description = "Whether to include interested user count (default true)", required = false) String withUserCount) {
@@ -1225,23 +1250,26 @@ public class ScheduledEventService {
         int unreadableCount = (int) events.stream()
                 .filter(e -> returned.contains(e.getId()) && !described.contains(e.getId()))
                 .count();
-        // Only events that could still be in the live read. GET /guilds/{id}/scheduled-events
-        // returns scheduled and active events, so a completed or cancelled one is legitimately
-        // absent from it — counting those would put "N events were not in the live read, so their
-        // covers are unknown" on most listings, attributing to a read gap what is really just an
-        // event being over. A caveat that fires routinely stops being read, which costs more than
-        // the case it was meant to catch.
+        // Split, not filtered away. GET /guilds/{id}/scheduled-events returns scheduled and
+        // active events, so a completed or cancelled one is legitimately missing from it, and
+        // counting those as "not in the live read" attributes to a read gap what is really an
+        // event being over. But dropping them entirely was the opposite error: the row still
+        // renders, with no cover URL and nothing to explain it, which reads as "this event has no
+        // cover" — the claim every other counter here exists to avoid making.
         int absentCount = (int) events.stream()
-                .filter(e -> e.getStatus() == ScheduledEvent.Status.SCHEDULED
-                        || e.getStatus() == ScheduledEvent.Status.ACTIVE)
+                .filter(e -> !isTerminal(e))
+                .filter(e -> !returned.contains(e.getId()))
+                .count();
+        int terminalCount = (int) events.stream()
+                .filter(ScheduledEventService::isTerminal)
                 .filter(e -> !returned.contains(e.getId()))
                 .count();
         int unlistedCount = returned.size()
                 - (int) events.stream().filter(e -> returned.contains(e.getId())).count();
         int recurrenceUnreadable = (int) events.stream()
                 .filter(e -> recurrenceFailed.contains(e.getId())).count();
-        String caveat = coverCaveat(describedCount, coverlessCount, unreadableCount,
-                absentCount, unlistedCount, unidentifiable, recurrenceUnreadable, rawKnown);
+        String caveat = coverCaveat(describedCount, coverlessCount, unreadableCount, absentCount,
+                terminalCount, unlistedCount, unidentifiable, recurrenceUnreadable, rawKnown);
         return "Retrieved " + events.size() + " scheduled events:" + caveat + "\n" +
                 events.stream()
                         .map(e -> {

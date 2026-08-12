@@ -1019,6 +1019,4 @@ public class MessageService {
                 }).toList();
     }
 
-    // long rather than int: a per-call total can exceed Integer.MAX_VALUE even though
-    // any single attachment cannot. Widening is source-compatible with the int callers.
 }

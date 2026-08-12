@@ -114,6 +114,18 @@ class LocalFileGuardTest {
     }
 
     @Test
+    void aRootRemembersWhichSettingProducedIt(@TempDir Path dir) throws IOException {
+        // Every root has the same type, so passing the download root where the upload root belongs
+        // compiles — and that is the chained read-and-write configuration the security notes argue
+        // against, reached by accident rather than by an operator deciding on it. The name is what
+        // lets a caller that must read from one specific root say so.
+        LocalFileGuard.Root root = LocalFileGuard.resolveRoot(
+                Files.createDirectory(dir.resolve("uploads")).toString(), "DISCORD_MCP_FILE_ROOT");
+
+        assertThat(root.variableName()).isEqualTo("DISCORD_MCP_FILE_ROOT");
+    }
+
+    @Test
     void aFilesystemRootWouldConfineNothing(@TempDir Path dir) {
         assertThatThrownBy(() -> LocalFileGuard.resolveRoot(dir.getRoot().toString(), "VAR"))
                 .isInstanceOf(IllegalArgumentException.class)

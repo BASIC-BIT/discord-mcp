@@ -23,6 +23,10 @@ final class FileSizes {
      *
      * <p>{@link Locale#ROOT} because the default would render "5,0 MB" on a comma-decimal host,
      * making an error message vary by deployment and quietly breaking any assertion that pins it.
+     *
+     * <p>{@code long} rather than {@code int}: a per-call download total can exceed
+     * {@code Integer.MAX_VALUE} even though no single attachment can, and widening is
+     * source-compatible with the callers that pass an {@code int}.
      */
     static String format(long bytes) {
         if (bytes < 1024) return bytes + " B";
