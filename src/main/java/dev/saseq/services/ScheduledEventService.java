@@ -939,7 +939,7 @@ public class ScheduledEventService {
                     .append(c.unidentifiable() > 0
                             ? " not matched to anything in the live read, and the "
                             + (c.unidentifiable() == 1 ? "entry" : "entries") + " with no id may be"
-                            + " among " + (c.absent() == 1 ? "it" : "them") + ", so "
+                            + (c.absent() == 1 ? " that one" : " among them") + ", so "
                             : " not in the live read, so ")
                     .append(c.absent() == 1 ? "its cover is" : "their covers are").append(" unknown");
         }
@@ -1104,104 +1104,23 @@ public class ScheduledEventService {
         // used to run in the render lambda below, outside every per-entry catch, taking the whole
         // listing down. Describing inside the guard means such an event reaches the
         // recurrenceUnreadable caveat like any other unparseable one.
-        java.util.Map<String, String> rules = new java.util.HashMap<>();
-        java.util.Map<String, String> covers = new java.util.HashMap<>();
-        java.util.Set<String> described = new java.util.HashSet<>();
-        // Every id Discord returned, whether or not its details parsed. Kept apart from
-        // `described` because "not returned" and "returned but unreadable" are different facts
-        // and the caveat states them differently — collapsing them made a returned-but-unreadable
-        // event report as a cache lag that had not happened.
-        java.util.Set<String> returned = new java.util.HashSet<>();
-        // Entries with no usable id. They cannot be attributed to any listed event, so they
-        // cannot be counted as unreadable-but-identified — they get their own line or none.
-        int unidentifiable = 0;
-        // Ids whose recurrence_rule would not parse. A set rather than a counter because the
-        // clause it feeds says the event "shows no schedule below" — true only of events that
-        // have a row below. `described`, `unreadable` and `absent` are all narrowed to the listed
-        // events for the same reason; counting this one raw would describe an event Discord
-        // returned but the cache does not hold as showing nothing below, when it shows nothing
-        // at all.
-        java.util.Set<String> recurrenceFailed = new java.util.HashSet<>();
+        // One REST call per listing, including on a guild with nothing cached — where this used
+        // to return immediately. Deliberate, and worth naming against REVIEW.md's "no unmetered
+        // call patterns": it is one bounded call through JDA's limiter, and it buys the ability to
+        // say "none" only when something established it.
+        //
+        // The per-entry reading lives in LiveEventDetails so it can be tested without driving a
+        // RestActionImpl. That is the half where the mistakes were, and every test of the counts
+        // and the caveat builds its input by hand — so a wiring error here would leave them green.
+        LiveEventDetails details;
         boolean rawKnown = false;
         try {
             var raw = fetchRawList(guild.getId());
+            List<DataObject> entries = new java.util.ArrayList<>(raw.length());
             for (int i = 0; i < raw.length(); i++) {
-                // The element AND its id are read inside the guard. getString("id", null)
-                // defaults an absent key, not a non-string one, so an id of the wrong type throws
-                // — and outside this guard that reaches the outer catch, discarding every cover
-                // and recurrence already parsed and reporting the whole live read as failed.
-                DataObject o;
-                String id;
-                try {
-                    o = raw.getObject(i);
-                    id = o.getString("id", null);
-                } catch (RuntimeException malformed) {
-                    unidentifiable++;
-                    continue;
-                }
-                if (id == null || id.isBlank()) {
-                    // Counted, not silently dropped. Discord did return this event; without a
-                    // usable id there is no way to say which, so a listed copy of it would
-                    // otherwise fall into "not in the live read" — the mislabelling the rest of
-                    // this exists to avoid — and nothing would mention it at all. Blank as well as
-                    // null: a blank id matches no listed event, so it would otherwise enter
-                    // `returned` and be counted as a phantom event missing from the list.
-                    unidentifiable++;
-                    continue;
-                }
-                // Recorded before the details are parsed: Discord did return this event, whatever
-                // happens to the rest of it.
-                returned.add(id);
-                // Parsed independently, and tracked independently. Separate try blocks stop one
-                // malformed field discarding the other; separate flags stop one field's success
-                // standing in as proof the other was read. OR-ing them into a single "readable"
-                // did the second thing: a malformed image beside a good recurrence rule still
-                // entered `described`, so the summary counted the event as having no cover — a
-                // positive claim drawn from a read that failed, which is exactly what the
-                // described/returned split exists to prevent.
-                String rule = null;
-                String cover = null;
-                boolean recurrenceRead = false;
-                boolean coverRead = false;
-                try {
-                    DataObject parsed = recurrenceOf(o);
-                    rule = parsed == null ? null : RecurrenceRule.describe(parsed);
-                    recurrenceRead = true;
-                } catch (RuntimeException malformed) {
-                    // Recurrence is lost for this event; its cover may still be readable.
-                }
-                try {
-                    cover = coverUrlOf(o, id);
-                    coverRead = true;
-                } catch (RuntimeException malformed) {
-                    // Likewise in reverse.
-                }
-                // Before the cover gate, not after. One invariant in three parts: separate try
-                // blocks stop a malformed field discarding its neighbour's value, separate flags
-                // stop one field's success vouching for the other's, and committing before the
-                // gate stops an unreadable cover taking a good recurrence down with it. Skipping
-                // rules.put here would drop the rule while the caveat blamed only the cover — the
-                // silent "does not recur" this counter exists to prevent.
-                if (rule != null) {
-                    rules.put(id, rule);
-                }
-                if (!recurrenceRead) {
-                    // Otherwise this event renders with no "Recurs:" line and nothing to say why.
-                    recurrenceFailed.add(id);
-                }
-                if (!coverRead) continue;
-                // Every event the live response described, whether or not it has a cover. The
-                // events being listed come from JDA's cache, so one can be present there and
-                // absent here — deleted out of band, or a stale cache. Keying "none" off this set
-                // rather than off a missing map entry keeps that case from turning a response
-                // that said nothing about an event into a claim that it has no cover.
-                described.add(id);
-                // Same helper the write path uses, so "read the cover from a raw event" has one
-                // spelling rather than two that can drift apart.
-                if (cover != null) {
-                    covers.put(id, cover);
-                }
+                entries.add(raw.getObject(i));
             }
+            details = LiveEventDetails.read(entries);
             rawKnown = true;
         } catch (RuntimeException e) {
             // Recurrence and cover detail are enhancements to this listing, not its purpose, so
@@ -1209,13 +1128,14 @@ public class ScheduledEventService {
             // read as "nothing recurs" and "no covers" either — that is indistinguishable from the
             // real thing, and the whole point of reporting a missing cover is that its absence is
             // information.
-            rules.clear();
-            covers.clear();
-            described.clear();
-            returned.clear();
-            unidentifiable = 0;
-            recurrenceFailed.clear();
+            details = LiveEventDetails.unread();
         }
+        java.util.Map<String, String> rules = details.rules();
+        java.util.Map<String, String> covers = details.covers();
+        java.util.Set<String> described = details.described();
+        java.util.Set<String> returned = details.returned();
+        java.util.Set<String> recurrenceFailed = details.recurrenceFailed();
+        int unidentifiable = details.unidentifiable();
 
         // The tally is a pure function of the id sets, extracted for the same reason coverCaveat
         // was: it is where the subtle mistakes live — the absent/terminal split, and unlisted as
@@ -1237,7 +1157,10 @@ public class ScheduledEventService {
         // each of three rounds. One renderer cannot drift from itself.
         //
         // "None" is still a claim, so it is only made when the live read agreed there are none.
-        if (events.isEmpty() && rawKnown && returned.isEmpty()) {
+        // unidentifiable too: entries that came back with no usable id are not in `returned`, so
+        // without this an all-unreadable response reads as "there are none" and drops the very
+        // warning that says otherwise.
+        if (events.isEmpty() && rawKnown && returned.isEmpty() && unidentifiable == 0) {
             return "No scheduled events found on this server.";
         }
         return "Retrieved " + events.size() + " scheduled events:" + caveat + "\n" +
