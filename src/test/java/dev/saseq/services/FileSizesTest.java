@@ -20,7 +20,11 @@ class FileSizesTest {
         assertThat(FileSizes.format(0)).isEqualTo("0 B");
         assertThat(FileSizes.format(1023)).isEqualTo("1023 B");
         assertThat(FileSizes.format(1024)).isEqualTo("1.0 KB");
-        assertThat(FileSizes.format(1024L * 1024 - 1)).isEqualTo("1024.0 KB");
+        // Not "1024.0 KB": a value that rounds to a full unit is carried, since printing a
+        // thousand of a unit next to a limit quoted in the next one up is what this class exists
+        // to stop. The band is narrow — 52 bytes — and it is the band a 5 MB limit sits beside.
+        assertThat(FileSizes.format(1024L * 1024 - 1)).isEqualTo("1.0 MB");
+        assertThat(FileSizes.format(1024L * 1024 - 53)).isEqualTo("1023.9 KB");
         assertThat(FileSizes.format(1024L * 1024)).isEqualTo("1.0 MB");
         assertThat(FileSizes.format(1024L * 1024 * 1024)).isEqualTo("1.0 GB");
     }

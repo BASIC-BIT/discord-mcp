@@ -280,8 +280,9 @@ class ScheduledEventServiceTest {
     void theTwoUnidentifiableClausesDoNotContradictEachOther() {
         // Together the pair has to read as one account: the absent clause says an id-less entry
         // may be among those events, and the unidentifiable clause says which tallies exclude it.
-        // "Not counted either way" read as denying the first; "not counted as either of those"
-        // says the same thing without the contradiction. Only asserted separately before.
+        // "Not counted either way" would deny the first; the wording asserted below says the same
+        // thing without contradicting it. Asserted together, because each clause is defensible on
+        // its own and it is the pair that has to be read.
         assertThat(ScheduledEventService.coverCaveat(
                 new CoverCounts(1, 0, 0, 1, 0, 0, 1, 0), true))
                 .contains("may be that one")
@@ -400,8 +401,8 @@ class ScheduledEventServiceTest {
     @Test
     void onlyAResponseThatCarriedTheCoverSaysItWasSet() {
         // The headline and the "Now:" line answer the same question, and only one arrangement of
-        // them is honest in each case. An unconditional "Set the cover image on X" sat above
-        // "Now: no cover image" — a confirmation and a contradiction in the same message.
+        // them is honest in each case. An unconditional "Set the cover image on X" would sit
+        // above "Now: no cover image" — a confirmation and a contradiction in one message.
         assertThat(ScheduledEventService.describeCoverWrite("Community Night", "11", "poster.png",
                 Icon.IconType.PNG, 2048, none(), present(COVER_URL)))
                 .startsWith("Set the cover image on Community Night (ID: 11)")
@@ -606,7 +607,66 @@ class ScheduledEventServiceTest {
 
         assertThat(result)
                 .contains("could not be read")
-                .doesNotContain("No scheduled events found");
+                .doesNotContain("No scheduled events found")
+                // No rows, so no separator: the caveat used to sit above a blank line, which
+                // reads as an answer that got cut off rather than one with nothing to list.
+                .doesNotEndWith("\n");
+    }
+
+    @Test
+    void aCoverIsNotReadOutOfTheDirectoryDownloadsAreWrittenInto(@TempDir Path dir)
+            throws IOException {
+        // The README's case for reusing DISCORD_MCP_FILE_ROOT rests on the magic-byte check, and
+        // that argument is void when the upload root is also where download_attachment writes: a
+        // caller fetches a file it chose, with a PNG header it chose, and this pins it to a
+        // permanent unauthenticated URL. Two independently configured values, so unlike a check
+        // that compares a root against the literal it was built from, this one can fire.
+        Path shared = Files.createDirectory(dir.resolve("shared"));
+        Files.write(shared.resolve("poster.png"), png());
+        service.coverFileRoot = shared.toString();
+        service.downloadRoot = shared.toString();
+
+        assertThatThrownBy(() -> service.setScheduledEventImage(
+                GUILD, EVENT, null, shared.resolve("poster.png").toString()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("DISCORD_MCP_FILE_ROOT and DISCORD_MCP_DOWNLOAD_ROOT overlap");
+
+        // Nesting is the same arrangement: files written under the downloads directory are inside
+        // the upload root, so they are readable by path just as surely as if the two were equal.
+        Path uploads = Files.createDirectory(dir.resolve("uploads"));
+        service.coverFileRoot = uploads.toString();
+        service.downloadRoot = Files.createDirectory(uploads.resolve("downloads")).toString();
+        assertThatThrownBy(() -> service.setScheduledEventImage(
+                GUILD, EVENT, null, uploads.resolve("poster.png").toString()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("overlap");
+
+        // And imageUrl is untouched by any of it — it reads no files, so the collision cannot
+        // apply to it. This must not become a refusal that disables the whole tool.
+        service.coverFileRoot = shared.toString();
+        service.downloadRoot = shared.toString();
+        assertThatThrownBy(() -> service.setScheduledEventImage(
+                GUILD, EVENT, "https://169.254.169.254/x.png", null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("disallowed (internal) address");
+    }
+
+    @Test
+    void separateRootsAreNotRefused(@TempDir Path dir) throws IOException {
+        // The other half of the check: an ordinary two-directory deployment must reach the file.
+        // Without this, a comparison that refused everything would pass the test above.
+        Path uploads = Files.createDirectory(dir.resolve("uploads"));
+        Files.write(uploads.resolve("poster.png"), png());
+        service.coverFileRoot = uploads.toString();
+        service.downloadRoot = Files.createDirectory(dir.resolve("downloads")).toString();
+
+        assertThatThrownBy(() -> service.setScheduledEventImage(
+                GUILD, EVENT, null, uploads.resolve("poster.png").toString()))
+                .isInstanceOf(IllegalArgumentException.class)
+                // Past the roots, past the read, stopped at the event — which the mocked JDA
+                // cannot serve. Not "overlap", and not a refusal about the file.
+                .hasMessageContaining("Could not reach Discord")
+                .hasMessageNotContaining("overlap");
     }
 
     @Test

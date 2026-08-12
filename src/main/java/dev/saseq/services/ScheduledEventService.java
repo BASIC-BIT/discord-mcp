@@ -20,6 +20,7 @@ import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.nio.file.Path;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
@@ -62,6 +63,13 @@ public class ScheduledEventService {
      */
     @Value("${DISCORD_MCP_FILE_ROOT:}")
     String coverFileRoot;
+
+    /**
+     * Where {@code download_attachment} writes, read here only to refuse reading covers out of it.
+     * See {@link #coverRoot()}. Package-private for the same reason as {@link #coverFileRoot}.
+     */
+    @Value("${DISCORD_MCP_DOWNLOAD_ROOT:}")
+    String downloadRoot;
 
     /**
      * A local pre-check on cover size, set deliberately low.
@@ -731,15 +739,9 @@ public class ScheduledEventService {
         // The root goes first of all, because it is the only check here that costs nothing at
         // all: a filePath call on a deployment with no upload root should refuse with "Local
         // paths are disabled" without spending a request to get there.
-        LocalFileGuard.Root root = hasPath
-                ? LocalFileGuard.resolveRoot(requireCoverFileRoot(), "DISCORD_MCP_FILE_ROOT")
-                : null;
-        // Then the ids. The event itself is read further down, after the source — deliberately.
-        // The source checks are the ones that protect this host: confinement for a local path,
-        // the SSRF guard for a URL. Running them first means a path pointing out of the root, or
-        // a URL aimed at a link-local address, is refused before any request to Discord is formed
-        // at all. The cost is that a mistyped eventId can spend one fetch first, bounded at 5 MB
-        // by the same guard — the cheaper of the two things to get wrong.
+        LocalFileGuard.Root root = hasPath ? coverRoot() : null;
+        // Then the ids. The event itself is read further down, after the source; the trade that
+        // ordering makes is set out where the source is read.
         //
         // No cached entity is needed: the write below goes through patchRaw, the same raw route
         // this file already uses for every other scheduled-event field. Using JDA's manager here
@@ -920,9 +922,8 @@ public class ScheduledEventService {
      * What a cover write can be said to have achieved.
      *
      * <p>Separated from the call for the reason {@code describeOutcome} was: every line here is a
-     * claim, and no test can reach this through a live PATCH. "Set the cover image on X" above
-     * "Now: no cover image" is two answers to one question, which is what an unconditional
-     * headline produced.
+     * claim, and no test can reach this through a live PATCH. An unconditional headline gives
+     * "Set the cover image on X" above "Now: no cover image" — two answers to one question.
      */
     static String describeCoverWrite(String eventName, String eventId, String source,
                                      Icon.IconType type, int sentBytes, Cover before, Cover after) {
@@ -1226,15 +1227,51 @@ public class ScheduledEventService {
                 + " is not a PNG or JPEG. Discord accepts only those for event covers.");
     }
 
-    /** The upload root, or a refusal that points at the parameter which needs no filesystem. */
-    private String requireCoverFileRoot() {
+    /**
+     * The upload root, or a refusal that points at the parameter needing no filesystem.
+     *
+     * <p>Also the one place the chained configuration is refused. The README's argument for
+     * reusing {@code DISCORD_MCP_FILE_ROOT} rests on the magic-byte check, and that argument is
+     * void when the upload root is also the directory {@code download_attachment} writes into: a
+     * caller can then fetch a file it chose, PNG header and all, and pin it to a permanent
+     * unauthenticated URL. The type-level split between {@code Root} and {@code Path} stops the
+     * code confusing the two roots; only this stops the configuration doing it.
+     *
+     * <p>Refused here rather than at startup, and only on the {@code filePath} branch, so a
+     * deployment with the chained config keeps {@code send_file} and {@code imageUrl} working
+     * exactly as before — this closes the new capability, not the existing one.
+     */
+    private LocalFileGuard.Root coverRoot() {
         if (coverFileRoot == null || coverFileRoot.isBlank()) {
             throw new IllegalArgumentException(
                     "Local paths are disabled. Set DISCORD_MCP_FILE_ROOT to the directory this "
                             + "server may read uploads from, or supply imageUrl instead — that "
                             + "needs no filesystem access.");
         }
-        return coverFileRoot;
+        LocalFileGuard.Root root =
+                LocalFileGuard.resolveRoot(coverFileRoot, "DISCORD_MCP_FILE_ROOT");
+        Path downloads;
+        try {
+            downloads = LocalFileGuard.resolveRoot(downloadRoot == null ? "" : downloadRoot,
+                    "DISCORD_MCP_DOWNLOAD_ROOT").path();
+        } catch (RuntimeException downloadsNotConfigured) {
+            // Unset, or set to something that does not resolve. Either way it is not a directory
+            // this server writes into, so there is nothing to collide with. Downloads being
+            // misconfigured is download_attachment's problem to report, not this tool's.
+            return root;
+        }
+        // Containment either way, not equality: downloads written inside the upload root are
+        // readable from it just as surely, and an upload root inside the downloads directory is
+        // the same arrangement seen from the other end. Both sides are already toRealPath()d.
+        if (root.path().startsWith(downloads) || downloads.startsWith(root.path())) {
+            throw new IllegalArgumentException(
+                    "DISCORD_MCP_FILE_ROOT and DISCORD_MCP_DOWNLOAD_ROOT overlap, so this server "
+                            + "would read covers out of a directory it also writes downloads "
+                            + "into — a file a caller chose, with a PNG header it also chose, "
+                            + "pinned to a permanent public URL. Point them at separate "
+                            + "directories, or supply imageUrl, which needs no filesystem access.");
+        }
+        return root;
     }
 
     @Tool(name = "delete_guild_scheduled_event", description = "Permanently delete a scheduled event")
@@ -1326,10 +1363,14 @@ public class ScheduledEventService {
         if (events.isEmpty() && rawKnown && returned.isEmpty() && unidentifiable == 0) {
             return "No scheduled events found on this server.";
         }
-        return "Retrieved " + events.size() + " scheduled events:" + caveat + "\n" +
-                events.stream()
-                        .map(e -> renderEvent(e, rules, covers, includeUserCount))
-                        .collect(Collectors.joining("\n"));
+        String header = "Retrieved " + events.size() + " scheduled events:" + caveat;
+        String rows = events.stream()
+                .map(e -> renderEvent(e, rules, covers, includeUserCount))
+                .collect(Collectors.joining("\n"));
+        // The separator only when there is something to separate. An empty cache whose live read
+        // also failed reaches here — it cannot claim "none" — and appending the newline anyway
+        // hangs the caveat above a blank line, which reads as a truncated answer.
+        return rows.isEmpty() ? header : header + "\n" + rows;
     }
 
     /**

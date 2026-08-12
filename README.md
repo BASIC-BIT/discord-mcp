@@ -277,9 +277,15 @@ only when you have a reason beyond convenience.
 It also cancels the format argument made above. That reasoning holds only because an upload
 root contains what the operator put there; once the two roots are one directory, the bytes
 were chosen by whoever caused the download, and making them begin with a PNG signature is
-free. A deployment that has already chained them should read the upgrade note as granting a
-real new capability — pinning attacker-chosen content to a permanent public URL — rather
-than a bounded one.
+free.
+
+So `set_guild_scheduled_event_image` refuses a local `filePath` when the two roots overlap —
+equal, or either nested inside the other — and says which two variables collide. It is the
+only configuration this server refuses on your behalf, and it is refused because the argument
+for reusing one variable does not survive it. `send_file` and `download_attachment` are
+unchanged: the chained root was always a widening for them, it is documented above, and
+turning it into a startup failure would break deployments that chose it deliberately. `imageUrl`
+is unaffected — it reads no files.
 
 ### `DISCORD_MCP_DOWNLOAD_ROOT`
 

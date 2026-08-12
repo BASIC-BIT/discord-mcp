@@ -27,8 +27,17 @@ final class FileSizes {
      */
     static String format(long bytes) {
         if (bytes < 1024) return bytes + " B";
-        if (bytes < 1024 * 1024) return String.format(Locale.ROOT, "%.1f KB", bytes / 1024.0);
-        if (bytes < 1024 * 1024 * 1024) return String.format(Locale.ROOT, "%.1f MB", bytes / (1024.0 * 1024));
-        return String.format(Locale.ROOT, "%.1f GB", bytes / (1024.0 * 1024 * 1024));
+        String[] units = {"KB", "MB", "GB"};
+        double scaled = bytes / 1024.0;
+        int unit = 0;
+        // Carried on what will be printed, not on the raw value: 1048575 B is 1023.999 KB, which
+        // renders as "1024.0 KB" — a number that reads as a unit nobody carried, and does so
+        // beside a limit quoted in the next unit up. That is the same confusing arithmetic this
+        // class was pulled out to stop.
+        while (unit < units.length - 1 && Math.round(scaled * 10) >= 10240) {
+            scaled /= 1024;
+            unit++;
+        }
+        return String.format(Locale.ROOT, "%.1f %s", scaled, units[unit]);
     }
 }
