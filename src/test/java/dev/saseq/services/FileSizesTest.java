@@ -21,14 +21,14 @@ class FileSizesTest {
     void unitsChangeAtTheBoundaryAndNotBefore() {
         assertThat(FileSizes.format(0)).isEqualTo("0 B");
         assertThat(FileSizes.format(1023)).isEqualTo("1023 B");
-        assertThat(FileSizes.format(1024)).isEqualTo("1.0 KB");
+        assertThat(FileSizes.format(1024)).isEqualTo("1 KB");
         // Not "1024.0 KB": a value that rounds to a full unit is carried, since printing a
         // thousand of a unit next to a limit quoted in the next one up is what this class exists
         // to stop. The band is narrow — 52 bytes — and it is the band a 5 MB limit sits beside.
-        assertThat(FileSizes.format(1024L * 1024 - 1)).isEqualTo("1.0 MB");
+        assertThat(FileSizes.format(1024L * 1024 - 1)).isEqualTo("1 MB");
         assertThat(FileSizes.format(1024L * 1024 - 53)).isEqualTo("1023.9 KB");
-        assertThat(FileSizes.format(1024L * 1024)).isEqualTo("1.0 MB");
-        assertThat(FileSizes.format(1024L * 1024 * 1024)).isEqualTo("1.0 GB");
+        assertThat(FileSizes.format(1024L * 1024)).isEqualTo("1 MB");
+        assertThat(FileSizes.format(1024L * 1024 * 1024)).isEqualTo("1 GB");
     }
 
     @Test
@@ -36,7 +36,7 @@ class FileSizesTest {
         // "exceeded the 0 MB allowed for it" is what integer division produced, which reads as a
         // bug rather than a limit — and a 1.9 MB cover reported as "1 MB" beside a limit quoted
         // in MB tells the caller to do nothing.
-        assertThat(FileSizes.format(5L * 1024 * 1024)).isEqualTo("5.0 MB");
+        assertThat(FileSizes.format(5L * 1024 * 1024)).isEqualTo("5 MB");
         assertThat(FileSizes.format(1024L * 1024 * 19 / 10)).isEqualTo("1.9 MB");
     }
 
@@ -51,7 +51,7 @@ class FileSizesTest {
         Locale original = Locale.getDefault();
         try {
             Locale.setDefault(Locale.GERMANY);
-            assertThat(FileSizes.format(5L * 1024 * 1024)).isEqualTo("5.0 MB");
+            assertThat(FileSizes.format(5L * 1024 * 1024 + 1024 * 512)).isEqualTo("5.5 MB");
         } finally {
             Locale.setDefault(original);
         }
@@ -61,6 +61,6 @@ class FileSizesTest {
     void aTotalLargerThanAnIntIsNotTruncated() {
         // A per-call download total can exceed Integer.MAX_VALUE even though no single attachment
         // can, which is why the parameter is a long.
-        assertThat(FileSizes.format(3L * 1024 * 1024 * 1024)).isEqualTo("3.0 GB");
+        assertThat(FileSizes.format(3L * 1024 * 1024 * 1024)).isEqualTo("3 GB");
     }
 }

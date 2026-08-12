@@ -288,6 +288,10 @@ and `download_attachment` are unchanged: the chained root was always a widening 
 is documented above, and turning it into a startup failure would break deployments that chose
 it deliberately. `imageUrl` is unaffected — it reads no files.
 
+The server also warns once at startup when the two roots overlap, or when either is set to a
+directory that does not resolve. The per-call refusal above is a tool result: it reaches the
+model that made the call, not the person who set the variables.
+
 **That refusal raises the cost of the direct path; it does not close it.** With the roots
 chained, the same end state is two calls away: `download_attachment` writes the chosen file,
 `send_file` posts it to a channel — no format check there, and it reads the same root — and

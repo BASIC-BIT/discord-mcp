@@ -106,6 +106,30 @@ class MessageServiceTest {
     }
 
     @Test
+    void sendFileStillReadsARootThatOverlapsTheDownloadRoot(@TempDir Path dir) throws IOException {
+        // The deliberate asymmetry, otherwise protected only by prose:
+        // set_guild_scheduled_event_image refuses local paths when the upload and download roots
+        // overlap, and this tool does not. The chained root was always a widening here, it is
+        // documented as one, and taking it away would break deployments that chose it — so the
+        // new tool closes the new capability, not the existing one.
+        Path shared = Files.createDirectory(dir.resolve("shared"));
+        Path file = Files.writeString(shared.resolve("poster.png"), "not really a png");
+        messageService.fileRoot = shared.toString();
+        messageService.downloadRoot = shared.toString();
+
+        TextChannel channel = stubChannel();
+        MessageCreateAction action = mock(MessageCreateAction.class);
+        Message sent = mock(Message.class);
+        when(channel.sendFiles(any(FileUpload.class))).thenReturn(action);
+        when(action.complete()).thenReturn(sent);
+        when(sent.getJumpUrl()).thenReturn("https://discord.com/channels/1/2/3");
+
+        assertThat(messageService.sendFile(CHANNEL_ID, file.toString(), null, null, null, null))
+                .contains("File sent successfully")
+                .doesNotContain("overlap");
+    }
+
+    @Test
     void sendFileRefusesAFilesystemRootAsTheAllowedRoot(@TempDir Path dir) throws IOException {
         Path file = Files.writeString(dir.resolve("ok.txt"), "hello");
         messageService.fileRoot = dir.getRoot().toString();
@@ -398,7 +422,7 @@ class MessageServiceTest {
 
             assertThatThrownBy(() -> messageService.downloadAttachment(CHANNEL_ID, MESSAGE_ID, null))
                     .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("transfer failed after 40.0 MB");
+                    .hasMessageContaining("transfer failed after 40 MB");
 
             // 40 + 40 = 80 leaves 20 MB, so a third is still attempted; 120 would exceed the
             // budget, so there is no fourth. Three attachments, three attempts, budget spent.

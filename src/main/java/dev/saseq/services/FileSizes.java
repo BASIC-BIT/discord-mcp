@@ -38,6 +38,14 @@ final class FileSizes {
             scaled /= 1024;
             unit++;
         }
-        return String.format(Locale.ROOT, "%.1f %s", scaled, units[unit]);
+        // No trailing ".0" on a whole unit. The bug this replaced was integer division rendering
+        // a 50 MB ceiling as "0 MB"; a limit that is exactly 50 MB still reads better as "50 MB",
+        // and it keeps these messages spelling a round limit the way the rest of the docs do.
+        // Decided on what will be printed, like the carry above: 1048575 B is 0.99999 MB, whole
+        // to every digit this shows, and testing the raw value would render it "1.0 MB" while the
+        // carry that produced it was already reasoning about "1".
+        return Math.round(scaled * 10) % 10 == 0
+                ? String.format(Locale.ROOT, "%.0f %s", scaled, units[unit])
+                : String.format(Locale.ROOT, "%.1f %s", scaled, units[unit]);
     }
 }

@@ -727,18 +727,22 @@ public class MessageService {
         for (Message.Attachment attachment : attachments) {
             long size = attachment.getSize();
             if (size > MAX_DOWNLOAD_FILE_BYTES) {
+                // The limit through FileSizes too, not integer division: one sentence quoting a
+                // size and a limit should not spell them two different ways, and the division
+                // that produced "0 MB" for a sub-megabyte ceiling is the bug FileSizes exists for.
                 throw new IllegalArgumentException(String.format(
-                        "Attachment `%s` (ID %s) is %s, over the %d MB per-file download limit.",
+                        "Attachment `%s` (ID %s) is %s, over the %s per-file download limit.",
                         attachment.getFileName(), attachment.getId(), FileSizes.format(size),
-                        MAX_DOWNLOAD_FILE_BYTES / (1024 * 1024)));
+                        FileSizes.format(MAX_DOWNLOAD_FILE_BYTES)));
             }
             total += size;
         }
         if (total > MAX_DOWNLOAD_BUDGET_BYTES) {
             throw new IllegalArgumentException(String.format(
-                    "The %d attachments total %s, over the %d MB per-call download limit. "
+                    "The %d attachments total %s, over the %s per-call download limit. "
                             + "Pass attachmentId to fetch them one at a time.",
-                    attachments.size(), FileSizes.format(total), MAX_DOWNLOAD_BUDGET_BYTES / (1024 * 1024)));
+                    attachments.size(), FileSizes.format(total),
+                    FileSizes.format(MAX_DOWNLOAD_BUDGET_BYTES)));
         }
     }
 

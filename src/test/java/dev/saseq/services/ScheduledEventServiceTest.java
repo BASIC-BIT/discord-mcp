@@ -361,8 +361,12 @@ class ScheduledEventServiceTest {
         // finished; dropping it entirely leaves a row with no cover URL and nothing to say why,
         // which reads as "this event has no cover". Its own clause says what is true.
         assertThat(ScheduledEventService.coverCaveat(new CoverCounts(2, 0, 0, 0, 1, unlistedIds(0), 0, 0), true))
+                // Cover and schedule in one clause: neither was read, both are missing from the
+                // row, and for the same reason. A separate recurrence clause about the same event
+                // said "could not be read", which reads as a parse failure rather than as the
+                // event never being returned — on every guild that has ever run an event.
                 .isEqualTo("\n(1 event has ended or been cancelled, so Discord no longer returns it,"
-                        + " and no cover is shown below for it.)");
+                        + " and no cover or schedule is shown below for it.)");
         // And it suppresses the all-coverless shorthand, which would otherwise claim over an
         // event whose cover was never read.
         assertThat(ScheduledEventService.coverCaveat(new CoverCounts(2, 2, 0, 0, 1, unlistedIds(0), 0, 0), true))
@@ -639,7 +643,7 @@ class ScheduledEventServiceTest {
             assertThatThrownBy(() -> service.setScheduledEventImage(
                     GUILD, EVENT, "https://cdn.discordapp.com/big.png", null))
                     .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("Cover image exceeds the 5.0 MB limit.")
+                    .hasMessageContaining("Cover image exceeds the 5 MB limit.")
                     .hasMessageContaining("Crop it to 5:2");
         }
     }
@@ -1010,7 +1014,7 @@ class ScheduledEventServiceTest {
 
         assertThatThrownBy(() -> service.setScheduledEventImage(GUILD, EVENT, null, file.toString()))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("Cover image exceeds the 5.0 MB limit.")
+                .hasMessageContaining("Cover image exceeds the 5 MB limit.")
                 .hasMessageContaining("Crop it to 5:2");
     }
 

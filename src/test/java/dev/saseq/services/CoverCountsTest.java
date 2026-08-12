@@ -124,10 +124,15 @@ class CoverCountsTest {
         assertThat(absent.absent()).isEqualTo(1);
         assertThat(absent.recurrenceUnreadable()).isEqualTo(1);
 
+        // A terminal event is the exception, and not because its schedule is known: its own
+        // clause already says nothing below was read for it. Counting it here too gave every
+        // guild that has run an event a second clause about the same event, saying its recurrence
+        // "could not be read" — which reads as a parse failure — directly after the first said it
+        // was never returned.
         CoverCounts over = CoverCounts.tally(List.of("a", "done"), Set.of("done"), Set.of("a"),
                 Set.of("a"), Set.of("a"), Set.of(), 0);
         assertThat(over.terminal()).isEqualTo(1);
-        assertThat(over.recurrenceUnreadable()).isEqualTo(1);
+        assertThat(over.recurrenceUnreadable()).isZero();
 
         // And an event that was read is not counted twice or wrongly: its schedule is known.
         assertThat(CoverCounts.tally(List.of("a"), NONE, Set.of("a"), Set.of("a"), Set.of("a"),

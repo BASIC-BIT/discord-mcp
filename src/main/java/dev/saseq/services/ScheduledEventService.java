@@ -20,7 +20,6 @@ import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import java.nio.file.Path;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
@@ -1117,7 +1116,13 @@ public class ScheduledEventService {
                     .append(c.terminal() == 1 ? "it" : "them")
                     // Comma before the second clause: the hedged form already contains an "and",
                     // and two of them unpunctuated reads as one run-on claim.
-                    .append(", and no cover is shown below for ")
+                    //
+                    // Cover and schedule together, because neither was read and both are missing
+                    // from the row for the same reason. Counting these into recurrenceUnreadable
+                    // instead gave an ordinary guild — any guild that has run an event — two
+                    // clauses about one event, the second saying its recurrence "could not be
+                    // read" directly after the first said it was never returned.
+                    .append(", and no cover or schedule is shown below for ")
                     .append(c.terminal() == 1 ? "it" : "them");
         }
         if (c.unlisted() > 0) {
