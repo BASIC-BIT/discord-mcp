@@ -49,8 +49,9 @@ public class ScheduledEventService {
      * The only directory {@code set_guild_scheduled_event_image} may read a cover from.
      *
      * <p>The same variable {@code send_file} uses, and a separate field rather than a shared bean
-     * because Spring injects per-bean. Unset means this tool refuses; it has no other input, so
-     * there is nothing to fall back to. Package-private so tests can set it without Spring.
+     * because Spring injects per-bean. Unset disables only the {@code filePath} half of that
+     * tool; {@code imageUrl} needs no filesystem access and keeps working. Package-private so
+     * tests can set it without Spring.
      */
     @Value("${DISCORD_MCP_FILE_ROOT:}")
     String coverFileRoot;
@@ -655,9 +656,19 @@ public class ScheduledEventService {
                     + "filePath (a local file under DISCORD_MCP_FILE_ROOT).");
         }
 
-        // Read and identified before the event is looked up at all. Both orders work, but this one
-        // keeps a rejected source from revealing whether an event exists, and the guards are the
-        // part that must not be reachable around.
+        // Cheap checks first, matching download_attachment: it resolves its root before spending
+        // any network call so a misconfigured root fails immediately rather than after 50 MB.
+        // Same shape here — a mistyped eventId should not cost a 5 MB transfer. Both are cache
+        // lookups, so this costs no request of its own, and it does not weaken the guards below:
+        // they are what confine the source, and nothing here can route around them.
+        Guild guild = getGuild(guildId);
+        ScheduledEvent event = getEvent(guild, eventId);
+        // Resolved before the read for the same reason, so an unset or bad root is reported
+        // without having opened anything.
+        Path root = hasPath
+                ? LocalFileGuard.resolveRoot(requireCoverFileRoot(), "DISCORD_MCP_FILE_ROOT")
+                : null;
+
         String source;
         byte[] bytes;
         try {
@@ -671,29 +682,22 @@ public class ScheduledEventService {
                 bytes = RemoteFetchGuard.fetch(imageUrl, MAX_COVER_BYTES, "cover image");
                 source = imageUrl;
             } else {
-                if (coverFileRoot == null || coverFileRoot.isBlank()) {
-                    throw new IllegalArgumentException(
-                            "Local paths are disabled. Set DISCORD_MCP_FILE_ROOT to the directory "
-                                    + "this server may read uploads from, or supply imageUrl "
-                                    + "instead — that needs no filesystem access.");
-                }
-                Path path = LocalFileGuard.resolveWithinRoot(
-                        filePath, LocalFileGuard.resolveRoot(coverFileRoot, "DISCORD_MCP_FILE_ROOT"),
-                        "filePath", "upload");
+                Path path = LocalFileGuard.resolveWithinRoot(filePath, root, "filePath", "upload");
                 bytes = LocalFileGuard.readBounded(path, MAX_COVER_BYTES, "cover image");
                 source = path.getFileName().toString();
             }
         } catch (LocalFileGuard.TooLargeException | RemoteFetchGuard.TooLargeException e) {
             // The limit alone leaves the caller stuck: an oversized master is the ordinary input
-            // here, and the fix is the same crop the display shape needs anyway.
-            throw new IllegalArgumentException(e.getMessage()
+            // here, and the fix is the same crop the display shape needs anyway. RemoteFetchGuard's
+            // message has no trailing period and LocalFileGuard's does, so one is added rather than
+            // running the advice onto the end of "…maximum allowed size Crop it to 5:2".
+            String limit = e.getMessage();
+            throw new IllegalArgumentException(
+                    (limit.endsWith(".") ? limit : limit + ".")
                     + " Crop it to 5:2 and scale it down first — a cover is displayed at 800x320,"
                     + " so a full-resolution master is both too large and the wrong shape.");
         }
-        Icon.IconType type = coverType(bytes);
-
-        Guild guild = getGuild(guildId);
-        ScheduledEvent event = getEvent(guild, eventId);
+        Icon.IconType type = coverType(bytes, hasUrl ? "imageUrl" : "filePath");
 
         // From the live event, not event.getImageUrl(). JDA's cached entity keeps whatever hash it
         // last saw, so a cover changed out of band — by a human in the Discord UI, most likely —
@@ -731,7 +735,7 @@ public class ScheduledEventService {
                         + " unknown — check the event before retrying.";
             }
             throw new IllegalArgumentException("Setting the cover image failed: " + e.getMessage()
-                    + ". Sent " + formatSize(bytes.length) + " of " + type.name() + " from "
+                    + ". Sent " + LocalFileGuard.formatSize(bytes.length) + " of " + type.name() + " from "
                     + source + "." + outcome, e);
         }
 
@@ -752,7 +756,7 @@ public class ScheduledEventService {
         StringBuilder result = new StringBuilder("Set the cover image on ")
                 .append(event.getName()).append(" (ID: ").append(event.getId()).append(")")
                 .append("\n  • From: ").append(source)
-                .append(" (").append(type.name()).append(", ").append(formatSize(bytes.length)).append(")")
+                .append(" (").append(type.name()).append(", ").append(LocalFileGuard.formatSize(bytes.length)).append(")")
                 .append("\n  • Was: ")
                 .append(!beforeKnown ? "could not be read" : before == null ? "no cover image" : before)
                 .append("\n  • Now: ").append(after == null ? "none — Discord did not keep it" : after);
@@ -790,16 +794,18 @@ public class ScheduledEventService {
         if (now.equals(before)) {
             return " The event still has the cover it had before this call.";
         }
-        // Reached when the write landed and the response was lost. Saying "failed" and leaving it
-        // there would send someone to re-upload a change that already took.
-        return " The event's cover DID change despite the error, and is now " + now
-                + " — the request was applied and its response lost.";
+        // The cover moved. The tempting reading is "the write landed and its response was lost",
+        // and that is often what happened — but it is not the only thing that produces this. A
+        // genuine rejection followed by someone else editing the cover between the two reads looks
+        // identical from here, and nothing available correlates the current image with the bytes
+        // this call sent. Report the observation and let the caller look, rather than asserting
+        // authorship of a change that may not be this one's.
+        return " The event's cover CHANGED during this call and is now " + now
+                + ". That may mean the request applied and only its response was lost, or that"
+                + " something else changed it in the meantime — this cannot tell them apart, so"
+                + " check the event rather than re-uploading blind.";
     }
 
-    /** Bytes below a kilobyte reported as bytes, so a small but valid file is not shown as "0 KB". */
-    private static String formatSize(int bytes) {
-        return bytes < 1024 ? bytes + " bytes" : bytes / 1024 + " KB";
-    }
 
     /** The cover image URL from a raw event object, or null if it has no cover. */
     // Package-private for the same reason as resolveEndTime and coverType: testable without a
@@ -823,8 +829,10 @@ public class ScheduledEventService {
      * Discord-side error that blames the request rather than the file.
      */
     // Package-private so the format cases can be tested without a live event, matching
-    // resolveEndTime above.
-    static Icon.IconType coverType(byte[] bytes) {
+    // resolveEndTime above. paramName because this runs on both branches: telling a caller who
+    // passed a WebP CDN link that "filePath is not a PNG" names a parameter they did not use, and
+    // Discord's own media proxy serves WebP, so that is an ordinary mistake rather than a rare one.
+    static Icon.IconType coverType(byte[] bytes, String paramName) {
         if (bytes.length >= 8 && (bytes[0] & 0xFF) == 0x89 && bytes[1] == 'P' && bytes[2] == 'N' && bytes[3] == 'G'
                 && (bytes[4] & 0xFF) == 0x0D && (bytes[5] & 0xFF) == 0x0A
                 && (bytes[6] & 0xFF) == 0x1A && (bytes[7] & 0xFF) == 0x0A) {
@@ -840,8 +848,19 @@ public class ScheduledEventService {
                     "Scheduled event covers cannot be GIFs — Discord does not animate them. "
                             + "Supply a PNG or JPEG.");
         }
-        throw new IllegalArgumentException(
-                "filePath is not a PNG or JPEG. Discord accepts only those for event covers.");
+        throw new IllegalArgumentException(paramName
+                + " is not a PNG or JPEG. Discord accepts only those for event covers.");
+    }
+
+    /** The upload root, or a refusal that points at the parameter which needs no filesystem. */
+    private String requireCoverFileRoot() {
+        if (coverFileRoot == null || coverFileRoot.isBlank()) {
+            throw new IllegalArgumentException(
+                    "Local paths are disabled. Set DISCORD_MCP_FILE_ROOT to the directory this "
+                            + "server may read uploads from, or supply imageUrl instead — that "
+                            + "needs no filesystem access.");
+        }
+        return coverFileRoot;
     }
 
     @Tool(name = "delete_guild_scheduled_event", description = "Permanently delete a scheduled event")
@@ -921,10 +940,6 @@ public class ScheduledEventService {
         String caveat = rawKnown ? ""
                 : "\n(Recurrence and cover images could not be read, so no event below is marked as"
                 + " recurring or as having a cover even if it is.)";
-        // Assigned inside the try above, so not effectively final and unreadable from the lambda.
-        // Only used to keep the whole-read failure from reaching the per-event check below; the
-        // `described` set is what decides each individual line.
-        final boolean coversKnown = rawKnown;
         return "Retrieved " + events.size() + " scheduled events:" + caveat + "\n" +
                 events.stream()
                         .map(e -> {
@@ -939,7 +954,10 @@ public class ScheduledEventService {
                             // "none" asserts the event has no cover, and neither a failed read nor
                             // a response that omitted the event can support that. The recurrence
                             // line above avoids the same trap by omitting itself.
-                            if (coversKnown && described.contains(e.getId())) {
+                            // `described` alone: it is cleared when the raw read fails, so it
+                            // is already empty in that case and a separate flag would guard
+                            // nothing. One condition, one reason.
+                            if (described.contains(e.getId())) {
                                 sb.append("\n  • Cover image: ")
                                         .append(covers.getOrDefault(e.getId(), "none"));
                             }

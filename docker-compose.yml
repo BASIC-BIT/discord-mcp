@@ -15,8 +15,8 @@ services:
       # container path below to enable downloads; the named volume is what keeps them
       # when the container is recreated.
       DISCORD_MCP_DOWNLOAD_ROOT: ${DISCORD_MCP_DOWNLOAD_ROOT:-}
-      # Unset by default, which leaves send_file refusing local paths and
-      # set_guild_scheduled_event_image refusing outright. Its own volume below, so
+      # Unset by default, which leaves send_file and set_guild_scheduled_event_image
+      # refusing local paths — the latter still works via its imageUrl. Its own volume below, so
       # reading uploads and writing downloads stay separate grants. Pointing it at the
       # downloads path instead is what chains download_attachment into
       # set_guild_scheduled_event_image, and is a decision rather than a default.

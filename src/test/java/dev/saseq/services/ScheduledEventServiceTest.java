@@ -1,7 +1,9 @@
 package dev.saseq.services;
 
 import net.dv8tion.jda.api.JDA;
+import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.Icon;
+import net.dv8tion.jda.api.entities.ScheduledEvent;
 import net.dv8tion.jda.api.utils.data.DataObject;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -16,15 +18,35 @@ import java.time.OffsetDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 
 class ScheduledEventServiceTest {
 
     private ScheduledEventService service;
 
+    /**
+     * A guild and event that resolve, so the source checks are actually reached.
+     *
+     * <p>setScheduledEventImage looks the event up before touching the source, deliberately: a
+     * mistyped eventId should not cost a 5 MB transfer first. That means a test passing a null
+     * guildId stops at "guildId cannot be null" and never exercises what it claims to — which is
+     * how an assertion ends up passing for a reason it did not name.
+     */
+    private static final String GUILD = "480695542155051010";
+    private static final String EVENT = "1385996249957662770";
+
     @BeforeEach
     void setUp() {
-        service = new ScheduledEventService(mock(JDA.class));
+        JDA jda = mock(JDA.class);
+        Guild guild = mock(Guild.class);
+        ScheduledEvent event = mock(ScheduledEvent.class);
+        lenient().when(jda.getGuildById(GUILD)).thenReturn(guild);
+        lenient().when(guild.getId()).thenReturn(GUILD);
+        lenient().when(guild.getScheduledEventById(EVENT)).thenReturn(event);
+        lenient().when(event.getId()).thenReturn(EVENT);
+        lenient().when(event.getName()).thenReturn("Community Night");
+        service = new ScheduledEventService(jda);
     }
 
     @Test
@@ -174,29 +196,29 @@ class ScheduledEventServiceTest {
     void aCoverImageIsIdentifiedFromItsBytesNotItsName() {
         // The name is caller-supplied text. Trusting it means building a PNG icon around a JPEG
         // body, which Discord rejects with an error that blames the request rather than the file.
-        assertThat(ScheduledEventService.coverType(png())).isEqualTo(Icon.IconType.PNG);
-        assertThat(ScheduledEventService.coverType(jpeg())).isEqualTo(Icon.IconType.JPEG);
+        assertThat(ScheduledEventService.coverType(png(), "filePath")).isEqualTo(Icon.IconType.PNG);
+        assertThat(ScheduledEventService.coverType(jpeg(), "filePath")).isEqualTo(Icon.IconType.JPEG);
     }
 
     @Test
     void aGifCoverIsRefusedByName() {
         // Discord animates avatars and banners but not event covers, so this is the plausible
         // mistake rather than an exotic one, and the message has to say which.
-        assertThatThrownBy(() -> ScheduledEventService.coverType("GIF89a".getBytes(StandardCharsets.US_ASCII)))
+        assertThatThrownBy(() -> ScheduledEventService.coverType("GIF89a".getBytes(StandardCharsets.US_ASCII), "filePath"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("cannot be GIFs");
     }
 
     @Test
     void anythingElseIsRefusedBeforeItReachesDiscord() {
-        assertThatThrownBy(() -> ScheduledEventService.coverType("<svg/>".getBytes(StandardCharsets.US_ASCII)))
+        assertThatThrownBy(() -> ScheduledEventService.coverType("<svg/>".getBytes(StandardCharsets.US_ASCII), "imageUrl"))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("not a PNG or JPEG");
+                .hasMessageContaining("imageUrl is not a PNG or JPEG");
         // A truncated body must not index past its end. Every prefix of a real PNG is a plausible
         // partial download.
-        assertThatThrownBy(() -> ScheduledEventService.coverType(new byte[]{(byte) 0x89, 'P'}))
+        assertThatThrownBy(() -> ScheduledEventService.coverType(new byte[]{(byte) 0x89, 'P'}, "filePath"))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> ScheduledEventService.coverType(new byte[0]))
+        assertThatThrownBy(() -> ScheduledEventService.coverType(new byte[0], "filePath"))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -205,16 +227,16 @@ class ScheduledEventServiceTest {
         // Neither: the message leads with imageUrl, because that is the option needing no
         // filesystem grant, and steering callers to it is what keeps deployments off the
         // shared-root configuration.
-        assertThatThrownBy(() -> service.setScheduledEventImage(null, "1", null, null))
+        assertThatThrownBy(() -> service.setScheduledEventImage(GUILD, EVENT, null, null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Supply either imageUrl")
                 .hasMessageContaining("no filesystem access needed");
-        assertThatThrownBy(() -> service.setScheduledEventImage(null, "1", "", ""))
+        assertThatThrownBy(() -> service.setScheduledEventImage(GUILD, EVENT, "", ""))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Supply either imageUrl");
         // Both: ambiguous about which one was meant, so neither is guessed at.
         assertThatThrownBy(() -> service.setScheduledEventImage(
-                null, "1", "https://cdn.discordapp.com/x.png", "/tmp/x.png"))
+                GUILD, EVENT, "https://cdn.discordapp.com/x.png", "/tmp/x.png"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("not both");
     }
@@ -224,14 +246,26 @@ class ScheduledEventServiceTest {
         // The whole point of offering imageUrl is that it needs no filesystem grant — which makes
         // it the parameter an injected prompt would reach for. It must not become a second,
         // unguarded fetch path; that is the exact regression RemoteFetchGuard exists to prevent.
+        //
+        // Each assertion pins the GUARD's own wording rather than just the exception type. With
+        // only `isInstanceOf`, replacing the guard with a bare openStream() would still pass:
+        // guildId is null here, so the call would reach getGuild(null) and throw anyway. A test
+        // that cannot fail for the reason it names is worse than no test.
         service.coverFileRoot = "";
 
         assertThatThrownBy(() -> service.setScheduledEventImage(
-                null, "1", "http://169.254.169.254/latest/meta-data/", null))
-                .isInstanceOf(IllegalArgumentException.class);
+                GUILD, EVENT, "http://169.254.169.254/latest/meta-data/", null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must use the https scheme");
         assertThatThrownBy(() -> service.setScheduledEventImage(
-                null, "1", "file:///etc/passwd", null))
-                .isInstanceOf(IllegalArgumentException.class);
+                GUILD, EVENT, "file:///etc/passwd", null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must use the https scheme");
+        // https, so the scheme check passes and the address check is what has to stop it.
+        assertThatThrownBy(() -> service.setScheduledEventImage(
+                GUILD, EVENT, "https://169.254.169.254/latest/meta-data/", null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("disallowed (internal) address");
     }
 
     @Test
@@ -240,7 +274,7 @@ class ScheduledEventServiceTest {
         // and the refusal has to point at the option that still works.
         service.coverFileRoot = "";
 
-        assertThatThrownBy(() -> service.setScheduledEventImage(null, "1", null, "/etc/passwd"))
+        assertThatThrownBy(() -> service.setScheduledEventImage(GUILD, EVENT, null, "/etc/passwd"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Local paths are disabled")
                 .hasMessageContaining("supply imageUrl");
@@ -259,8 +293,11 @@ class ScheduledEventServiceTest {
         assertThat(ScheduledEventService.describeOutcome(was, was, true))
                 .contains("still has the cover it had before");
         assertThat(ScheduledEventService.describeOutcome(now, was, true))
-                .contains("DID change despite the error")
-                .contains(now);
+                .contains("CHANGED during this call")
+                .contains(now)
+                // Must NOT claim this request made the change: a genuine rejection followed by a
+                // concurrent edit reaches the same branch, and nothing here can tell them apart.
+                .contains("something else changed it in the meantime");
         // The previous cover was unreadable, so no comparison is possible and none is implied.
         assertThat(ScheduledEventService.describeOutcome(now, null, false))
                 .contains("whether this call changed it is unknown");
@@ -275,7 +312,7 @@ class ScheduledEventServiceTest {
         Path file = Files.write(dir.resolve("poster.png"), png());
         service.coverFileRoot = "";
 
-        assertThatThrownBy(() -> service.setScheduledEventImage(null, "1", null, file.toString()))
+        assertThatThrownBy(() -> service.setScheduledEventImage(GUILD, EVENT, null, file.toString()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("DISCORD_MCP_FILE_ROOT");
     }
@@ -288,7 +325,7 @@ class ScheduledEventServiceTest {
         Path outside = Files.write(dir.resolve("secret.png"), png());
         service.coverFileRoot = root.toString();
 
-        assertThatThrownBy(() -> service.setScheduledEventImage(null, "1", null, outside.toString()))
+        assertThatThrownBy(() -> service.setScheduledEventImage(GUILD, EVENT, null, outside.toString()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("outside the allowed upload directory");
     }
@@ -303,7 +340,7 @@ class ScheduledEventServiceTest {
         Path file = Files.write(root.resolve("master.png"), big);
         service.coverFileRoot = root.toString();
 
-        assertThatThrownBy(() -> service.setScheduledEventImage(null, "1", null, file.toString()))
+        assertThatThrownBy(() -> service.setScheduledEventImage(GUILD, EVENT, null, file.toString()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("5 MB limit")
                 .hasMessageContaining("Crop it to 5:2");

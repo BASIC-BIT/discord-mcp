@@ -38,7 +38,7 @@ export SPRING_PROFILES_ACTIVE=http
 # not a host path — see Security notes.
 export DISCORD_MCP_DOWNLOAD_ROOT=/var/lib/discord-mcp/downloads
 # Only if you want local-path uploads: send_file's filePath, and
-# set_guild_scheduled_event_image, which has no other input. A directory of its own, so
+# set_guild_scheduled_event_image when not using its imageUrl. A directory of its own, so
 # that reading uploads and writing downloads stay separate grants — see Security notes
 # before pointing this at the download directory instead.
 export DISCORD_MCP_FILE_ROOT=/var/lib/discord-mcp/uploads
@@ -105,6 +105,10 @@ DISCORD_TOKEN=<YOUR_DISCORD_BOT_TOKEN>
 DISCORD_GUILD_ID=<OPTIONAL_DEFAULT_SERVER_ID>
 # Optional, enables download_attachment. Container path, matching the named volume.
 DISCORD_MCP_DOWNLOAD_ROOT=/var/lib/discord-mcp/downloads
+# Optional, enables local-path uploads. Container path, matching the ./uploads bind mount.
+# set_guild_scheduled_event_image works via imageUrl without this; it is only needed for
+# filePath. See Security notes before pointing it at the download path instead.
+DISCORD_MCP_FILE_ROOT=/var/lib/discord-mcp/uploads
 EOF
 ```
 
@@ -172,9 +176,9 @@ Optional. The single directory that `send_file` and `set_guild_scheduled_event_i
 read local `filePath` uploads from.
 
 **Unset (default), local paths are refused.** `send_file` still works via `fileUrl` or
-base64 `fileData`; `set_guild_scheduled_event_image` has no other input and refuses
-outright. Set this only if you need local-path uploads, and point it at a
-directory that holds nothing but uploads:
+base64 `fileData`, and `set_guild_scheduled_event_image` still works via `imageUrl` —
+unset refuses only local `filePath`. Set this only if you need local-path uploads, and
+point it at a directory that holds nothing but uploads:
 
 ```bash
 export DISCORD_MCP_FILE_ROOT=/var/lib/discord-mcp/uploads

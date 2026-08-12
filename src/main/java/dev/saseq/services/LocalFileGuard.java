@@ -19,6 +19,27 @@ import java.nio.file.Paths;
  * guard existed as a private method inside one service, and {@code send_file} then shipped with its
  * own unguarded fetch. A private helper protects the file it lives in and nothing else. The second
  * caller — {@code set_guild_scheduled_event_image} — is what prompted the extraction.
+ *
+ * <h2>What this defends against, and what it does not</h2>
+ *
+ * <p>The threat is the <b>caller</b>: a model that has been talked into asking for
+ * {@code /proc/self/environ}. Against that, resolving both sides and opening the resolved path is
+ * sufficient, and it is the whole job.
+ *
+ * <p>It is <b>not</b> a defence against another process that can already write inside the root.
+ * There is a window between {@link #resolveWithinRoot} returning and {@link #readBounded} opening,
+ * and {@code NOFOLLOW_LINKS} only refuses a symlink in the final component — so a process able to
+ * replace a checked ancestor directory with a symlink in that window could redirect the read.
+ * Closing it properly needs a securely held directory handle, which the default filesystem
+ * provider does not offer portably.
+ *
+ * <p>That gap is narrow because of what it presupposes. An attacker who can rename directories
+ * inside the root can equally well place any file they like inside the root, and the tools here
+ * would read that one without needing a race at all. The root is therefore load-bearing: it must
+ * be a directory only the operator writes. The Compose deployment mounts it read-only for exactly
+ * this reason. Widening it — pointing it at a directory some other tool writes into — is what
+ * turns the race from theoretical into reachable, which is the deeper reason the README argues
+ * against chaining it to the download root.
  */
 public final class LocalFileGuard {
 
@@ -141,7 +162,7 @@ public final class LocalFileGuard {
      * allowed for it", which reads as a bug rather than a limit. A third caller with a smaller
      * cap should not have to rediscover that.
      */
-    private static String formatSize(int bytes) {
+    static String formatSize(int bytes) {
         if (bytes >= 1024 * 1024) {
             return bytes / (1024 * 1024) + " MB";
         }
