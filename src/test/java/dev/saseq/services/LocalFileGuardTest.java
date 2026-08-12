@@ -29,7 +29,7 @@ class LocalFileGuardTest {
         Path file = Files.writeString(root.resolve("poster.png"), "x");
 
         assertThat(LocalFileGuard.resolveWithinRoot(file.toString(), root.toRealPath(), "filePath", "upload"))
-                .isEqualTo(new LocalFileGuard.ConfinedPath(file.toRealPath()));
+                .extracting(LocalFileGuard.ConfinedPath::path).isEqualTo(file.toRealPath());
     }
 
     @Test
@@ -112,10 +112,14 @@ class LocalFileGuardTest {
 
     @Test
     void readingStopsOneBytePastTheLimitRatherThanTrustingTheFileSize(@TempDir Path dir) throws IOException {
-        Path file = Files.write(dir.resolve("f"), new byte[64]);
+        // Through the factory, because there is no other way to make one — which is the point.
+        Path root = Files.createDirectory(dir.resolve("root")).toRealPath();
+        Files.write(root.resolve("f"), new byte[64]);
+        LocalFileGuard.ConfinedPath file = LocalFileGuard.resolveWithinRoot(
+                root.resolve("f").toString(), root, "filePath", "upload");
 
-        assertThat(LocalFileGuard.readBounded(new LocalFileGuard.ConfinedPath(file), 64, "file")).hasSize(64);
-        assertThatThrownBy(() -> LocalFileGuard.readBounded(new LocalFileGuard.ConfinedPath(file), 63, "cover image"))
+        assertThat(LocalFileGuard.readBounded(file, 64, "file")).hasSize(64);
+        assertThatThrownBy(() -> LocalFileGuard.readBounded(file, 63, "cover image"))
                 .isInstanceOf(LocalFileGuard.TooLargeException.class)
                 // Capitalized at the start of its own sentence, lowercase mid-sentence in the read
                 // failure. One noun cannot be spelled correctly for both without this.
@@ -124,9 +128,15 @@ class LocalFileGuardTest {
 
     @Test
     void anUnreadableFileFailsWithTheNounInMidSentenceForm(@TempDir Path dir) throws IOException {
-        Path missing = dir.resolve("gone");
+        // Confined when resolved, then removed — the only honest way to reach the IO failure now
+        // that a ConfinedPath cannot be minted around a path that was never checked.
+        Path root = Files.createDirectory(dir.resolve("root")).toRealPath();
+        Files.write(root.resolve("gone"), new byte[1]);
+        LocalFileGuard.ConfinedPath vanishing = LocalFileGuard.resolveWithinRoot(
+                root.resolve("gone").toString(), root, "filePath", "upload");
+        Files.delete(root.resolve("gone"));
 
-        assertThatThrownBy(() -> LocalFileGuard.readBounded(new LocalFileGuard.ConfinedPath(missing), 10, "cover image"))
+        assertThatThrownBy(() -> LocalFileGuard.readBounded(vanishing, 10, "cover image"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .isNotInstanceOf(LocalFileGuard.TooLargeException.class)
                 .hasMessageContaining("Failed to read cover image");
@@ -151,9 +161,12 @@ class LocalFileGuardTest {
 
     @Test
     void theBytesReadAreTheFilesOwn(@TempDir Path dir) throws IOException {
-        Path file = Files.writeString(dir.resolve("f"), "hello");
+        Path root = Files.createDirectory(dir.resolve("root")).toRealPath();
+        Files.writeString(root.resolve("f"), "hello");
+        LocalFileGuard.ConfinedPath file = LocalFileGuard.resolveWithinRoot(
+                root.resolve("f").toString(), root, "filePath", "upload");
 
-        assertThat(new String(LocalFileGuard.readBounded(new LocalFileGuard.ConfinedPath(file), 1024, "file"), StandardCharsets.UTF_8))
+        assertThat(new String(LocalFileGuard.readBounded(file, 1024, "file"), StandardCharsets.UTF_8))
                 .isEqualTo("hello");
     }
 }

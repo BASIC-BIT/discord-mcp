@@ -93,7 +93,23 @@ public final class LocalFileGuard {
      * That is the same shape of mistake this class was extracted to prevent: the convention did
      * not hold last time either.
      */
-    public record ConfinedPath(Path path) {
+    public static final class ConfinedPath {
+        private final Path path;
+
+        // Private, and a class rather than a record for that reason alone: a record cannot narrow
+        // its canonical constructor below the record's own visibility, so `public record
+        // ConfinedPath(Path)` left anyone free to write
+        // `readBounded(new ConfinedPath(Paths.get(filePath)), ...)` — an unconfined read with this
+        // class's name on it, which is the exact bypass the wrapper was introduced to close. The
+        // first version of this shipped with that hole and four tests that demonstrated it.
+        private ConfinedPath(Path path) {
+            this.path = path;
+        }
+
+        public Path path() {
+            return path;
+        }
+
         @Override
         public String toString() {
             return path.toString();

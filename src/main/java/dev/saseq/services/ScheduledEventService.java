@@ -898,7 +898,15 @@ public class ScheduledEventService {
         }
         if (absent > 0) {
             join(sb).append(absent).append(absent == 1 ? " event was" : " events were")
-                    .append(" not in the live read, so ")
+                    // Hedged when an entry came back with no usable id, because that entry could
+                    // be one of these: nothing matches it to a listed event, so "not in the live
+                    // read" stops being knowable. Saying it flatly would be the same unsupported
+                    // claim these counters were split apart to avoid, made about the one case
+                    // where the split cannot help.
+                    .append(unidentifiable > 0
+                            ? " not matched to anything in the live read, though the unreadable"
+                            + " entries below may be among them, so "
+                            : " not in the live read, so ")
                     .append(absent == 1 ? "its cover is" : "their covers are").append(" unknown");
         }
         if (unlisted > 0) {
@@ -1093,10 +1101,13 @@ public class ScheduledEventService {
         // Entries with no usable id. They cannot be attributed to any listed event, so they
         // cannot be counted as unreadable-but-identified — they get their own line or none.
         int unidentifiable = 0;
-        // Entries whose recurrence_rule would not parse. Their cover may still be fine, so they
-        // are listed and counted for covers — but a missing "Recurs:" line has to be explained
-        // rather than left to read as "this event does not recur".
-        int recurrenceUnreadable = 0;
+        // Ids whose recurrence_rule would not parse. A set rather than a counter because the
+        // clause it feeds says the event "shows no schedule below" — true only of events that
+        // have a row below. `described`, `unreadable` and `absent` are all narrowed to the listed
+        // events for the same reason; counting this one raw would describe an event Discord
+        // returned but the cache does not hold as showing nothing below, when it shows nothing
+        // at all.
+        java.util.Set<String> recurrenceFailed = new java.util.HashSet<>();
         boolean rawKnown = false;
         try {
             Route.CompiledRoute route = Route.custom(Method.GET, "guilds/{guild_id}/scheduled-events")
@@ -1104,27 +1115,28 @@ public class ScheduledEventService {
             var raw = new RestActionImpl<net.dv8tion.jda.api.utils.data.DataArray>(jda, route,
                     (response, request) -> response.getArray()).complete();
             for (int i = 0; i < raw.length(); i++) {
+                // The element AND its id are read inside the guard. Pulling the id out below it
+                // left getString("id", null) exposed: the default covers an absent key, not a
+                // non-string one, which throws and reaches the outer catch — discarding every
+                // cover and recurrence already parsed and reporting the whole live read as
+                // failed. That is the cost this per-entry guard exists to avoid, one line outside
+                // the guard.
                 DataObject o;
+                String id;
                 try {
                     o = raw.getObject(i);
+                    id = o.getString("id", null);
                 } catch (RuntimeException malformed) {
-                    // Per entry, not per response. Defaulting `id` below without this was half a
-                    // defence: recurrenceOf and coverUrlOf can throw on the same entry, land in
-                    // the outer catch, and drop recurrence and covers for every other event —
-                    // the exact cost the id guard exists to avoid.
                     unidentifiable++;
                     continue;
                 }
-                // Defaulted rather than demanded. This loop now runs for every event rather than
-                // only recurring ones, so one malformed entry would otherwise throw and the outer
-                // catch would report the whole listing as unreadable, losing recurrence and covers
-                // for every other event too.
-                String id = o.getString("id", null);
-                if (id == null) {
-                    // Counted, not silently dropped. Discord did return this event; without an id
-                    // there is no way to say which, so a listed copy of it would otherwise fall
-                    // into "not in the live read" — the mislabelling the rest of this exists to
-                    // avoid — and nothing would mention it at all.
+                if (id == null || id.isBlank()) {
+                    // Counted, not silently dropped. Discord did return this event; without a
+                    // usable id there is no way to say which, so a listed copy of it would
+                    // otherwise fall into "not in the live read" — the mislabelling the rest of
+                    // this exists to avoid — and nothing would mention it at all. Blank as well as
+                    // null: a blank id matches no listed event, so it would otherwise enter
+                    // `returned` and be counted as a phantom event missing from the list.
                     unidentifiable++;
                     continue;
                 }
@@ -1166,7 +1178,7 @@ public class ScheduledEventService {
                 }
                 if (!recurrenceRead) {
                     // Otherwise this event renders with no "Recurs:" line and nothing to say why.
-                    recurrenceUnreadable++;
+                    recurrenceFailed.add(id);
                 }
                 if (!coverRead) continue;
                 // Every event the live response described, whether or not it has a cover. The
@@ -1193,7 +1205,7 @@ public class ScheduledEventService {
             described.clear();
             returned.clear();
             unidentifiable = 0;
-            recurrenceUnreadable = 0;
+            recurrenceFailed.clear();
         }
 
         int describedCount = (int) events.stream().filter(e -> described.contains(e.getId())).count();
@@ -1208,6 +1220,8 @@ public class ScheduledEventService {
         int absentCount = (int) events.stream().filter(e -> !returned.contains(e.getId())).count();
         int unlistedCount = returned.size()
                 - (int) events.stream().filter(e -> returned.contains(e.getId())).count();
+        int recurrenceUnreadable = (int) events.stream()
+                .filter(e -> recurrenceFailed.contains(e.getId())).count();
         String caveat = coverCaveat(describedCount, coverlessCount, unreadableCount,
                 absentCount, unlistedCount, unidentifiable, recurrenceUnreadable, rawKnown);
         return "Retrieved " + events.size() + " scheduled events:" + caveat + "\n" +

@@ -277,6 +277,20 @@ class ScheduledEventServiceTest {
     }
 
     @Test
+    void anAbsentEventIsHedgedWhenAnEntryCameBackUnidentifiable() {
+        // The unidentifiable entry could be the absent event. Nothing matches them up, so the
+        // flat claim stops being knowable — the one place the counter split cannot help, and so
+        // the one place the wording has to.
+        assertThat(ScheduledEventService.coverCaveat(1, 0, 0, 1, 0, 1, 0, true))
+                .contains("not matched to anything in the live read")
+                .contains("may be among them")
+                .doesNotContain("not in the live read, so");
+        // With nothing unidentifiable, the flat claim is supported and stays.
+        assertThat(ScheduledEventService.coverCaveat(1, 0, 0, 1, 0, 0, 0, true))
+                .contains("1 event was not in the live read");
+    }
+
+    @Test
     void aFullyDescribedListingWithEveryCoverPresentSaysNothing() {
         assertThat(ScheduledEventService.coverCaveat(3, 0, 0, 0, 0, 0, 0, true)).isEmpty();
     }
