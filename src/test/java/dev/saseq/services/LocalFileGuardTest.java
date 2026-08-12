@@ -206,7 +206,13 @@ class LocalFileGuardTest {
         String unparseable = catchThrowable(() -> LocalFileGuard.resolveWithinRoot(
                 String.valueOf((char) 0), root, "filePath", "upload")).getMessage();
 
-        assertThat(missing).isEqualTo(elsewhere).isEqualTo(unparseable)
+        // Paths.get(null) raises NullPointerException, which the catch does not cover — the same
+        // hole InvalidPathException was, one step earlier. Both callers gate on isBlank() so it is
+        // unreachable today, but shared code cannot rely on every future caller gating first.
+        String nothing = catchThrowable(() -> LocalFileGuard.resolveWithinRoot(
+                null, root, "filePath", "upload")).getMessage();
+
+        assertThat(missing).isEqualTo(elsewhere).isEqualTo(unparseable).isEqualTo(nothing)
                 .isEqualTo("filePath is not a readable file inside the allowed upload directory");
     }
 

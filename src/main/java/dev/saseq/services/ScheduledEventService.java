@@ -671,23 +671,31 @@ public class ScheduledEventService {
         // any network call so a misconfigured root fails immediately rather than after 50 MB.
         //
         // The root goes first of all, because it is the only check here that costs nothing at
-        // all. getEventForCover spends a GET on a cache miss, so looking the event up first meant
-        // a filePath call on a deployment with no upload root could burn a request before
-        // refusing with "Local paths are disabled" — a refusal that needs no I/O to reach.
+        // all: a filePath call on a deployment with no upload root should refuse with "Local
+        // paths are disabled" without spending a request to get there.
         LocalFileGuard.Root root = hasPath
                 ? LocalFileGuard.resolveRoot(requireCoverFileRoot(), "DISCORD_MCP_FILE_ROOT")
                 : null;
-        // Then the event, still before the source is fetched: a mistyped eventId should not cost
-        // a 5 MB transfer. Neither weakens the guards below — those are what confine the source,
-        // and nothing here can route around them.
+        // Then the ids. The event itself is read further down, after the source — deliberately.
+        // The source checks are the ones that protect this host: confinement for a local path,
+        // the SSRF guard for a URL. Running them first means a path pointing out of the root, or
+        // a URL aimed at a link-local address, is refused before any request to Discord is formed
+        // at all. The cost is that a mistyped eventId can spend one fetch first, bounded at 5 MB
+        // by the same guard — the cheaper of the two things to get wrong.
         //
-        // Deliberately NOT checked here: whether the event is over. isTerminal is free on the
-        // cached entity and Discord refuses edits to a COMPLETED or CANCELED event, so this could
-        // fail sooner — but the status comes from the same gateway cache that lags, and refusing
-        // on a stale COMPLETED would block a call that would have worked. Failing slower on a
-        // genuinely finished event is the better trade than failing wrongly on a live one.
-        Guild guild = getGuild(guildId);
-        ScheduledEvent event = getEventForCover(guild, eventId);
+        // No cached entity is needed: the write below goes through patchRaw, the same raw route
+        // this file already uses for every other scheduled-event field. Using JDA's manager here
+        // was the deviation, and it dragged in a cache dependency that made the flow the tool
+        // description recommends — create an event, then cover it — fail on first try whenever the
+        // gateway had not caught up.
+        String resolvedGuild = resolveGuildId(guildId);
+        if (resolvedGuild == null || resolvedGuild.isEmpty()) {
+            throw new IllegalArgumentException("guildId cannot be null");
+        }
+        if (eventId == null || eventId.isEmpty()) {
+            throw new IllegalArgumentException("eventId cannot be null");
+        }
+
 
         String source;
         byte[] bytes;
@@ -732,22 +740,43 @@ public class ScheduledEventService {
         // "something moved" from "the cover was removed" — the difference between a caller who can
         // act and one who has to go and look. Best-effort: failing to read it is no reason to
         // refuse to set a new cover.
-        String before = null;
-        boolean beforeKnown = false;
-        try {
-            before = coverUrlOf(fetchRaw(guild.getId(), event.getId()), event.getId());
-            beforeKnown = true;
-        } catch (RuntimeException ignored) {
-            // Reported as unread below rather than as absent. "no cover image" is a claim about the
-            // event, and a failed read cannot support it.
-        }
 
         // Built before the try, whose catch reports "Sent 1.2 MB of PNG from x" and reads the
         // event back. Icon.from only fails on null arguments, unreachable here — but inside the
         // try it would produce a message claiming bytes left the process that never did.
-        Icon icon = Icon.from(bytes, type);
+        // One read, doing two jobs: it establishes the event exists — authoritatively, from
+        // Discord rather than from a cache that lags — and it captures the cover being replaced.
+        // Reading the previous cover is what lets a failed write separate "still the old cover"
+        // from "something moved" from "the cover was removed", which is the difference between a
+        // caller who can act and one who has to go and look.
+        String eventName;
+        String before;
         try {
-            event.getManager().setImage(icon).complete();
+            DataObject current = fetchRaw(resolvedGuild, eventId);
+            eventName = current.getString("name", eventId);
+            before = coverUrlOf(current, eventId);
+        } catch (ErrorResponseException discordSaidNo) {
+            if (discordSaidNo.getErrorResponse() == ErrorResponse.UNKNOWN_SCHEDULED_EVENT) {
+                throw new IllegalArgumentException("Scheduled event not found by eventId");
+            }
+            throw new IllegalArgumentException("Could not read that event before setting its cover"
+                    + reason(discordSaidNo) + ". Nothing was changed.");
+        } catch (RuntimeException unreachable) {
+            throw new IllegalArgumentException("Could not reach Discord to read that event before"
+                    + " setting its cover" + reason(unreachable) + ". Nothing was changed.");
+        }
+        boolean beforeKnown = true;
+
+        Icon icon = Icon.from(bytes, type);
+        String after;
+        try {
+            // patchRaw, not the manager. The PATCH response carries the updated event, so the
+            // new cover comes back with the write rather than costing a third request — and
+            // nothing here needs JDA's cache, which is what made an event created moments ago
+            // impossible to cover until the gateway caught up.
+            after = coverUrlOf(
+                    patchRaw(resolvedGuild, eventId, DataObject.empty().put("image", icon.getEncoding())),
+                    eventId);
         } catch (RuntimeException e) {
             // Same rule as patchRecurrence above: a thrown request does not prove the change did
             // not happen, since a lost response after Discord applied the image looks identical
@@ -761,8 +790,7 @@ public class ScheduledEventService {
             String outcome;
             try {
                 outcome = describeOutcome(
-                        coverUrlOf(fetchRaw(guild.getId(), event.getId()), event.getId()),
-                        before, beforeKnown);
+                        coverUrlOf(fetchRaw(resolvedGuild, eventId), eventId), before, beforeKnown);
             } catch (RuntimeException unverifiable) {
                 outcome = " Could not read the event back, so whether the cover was applied is"
                         + " unknown — check the event before retrying.";
@@ -772,22 +800,11 @@ public class ScheduledEventService {
                     + source + "." + outcome, e);
         }
 
-        // Re-read rather than trusting the write. The manager reports success on an accepted
-        // request, but the entity in memory keeps the old hash, so reporting from it would print
-        // the previous cover as though it were the new one — a success message that shows the
-        // wrong image is worse than no message. This is also the only confirmation available that
-        // Discord kept what it was given.
-        String after;
-        try {
-            after = coverUrlOf(fetchRaw(guild.getId(), event.getId()), event.getId());
-        } catch (RuntimeException e) {
-            return "Set the cover image on " + event.getName() + " (ID: " + event.getId() + ") from "
-                    + source + ", but could not read the event back to confirm it"
-                    + reason(e) + ". Check the event before uploading again.";
-        }
-
+        // `after` came from the PATCH response itself, so it is what Discord stored rather than
+        // what was sent — no separate read-back, and no window in which someone else's change
+        // could be reported as this call's result.
         StringBuilder result = new StringBuilder("Set the cover image on ")
-                .append(event.getName()).append(" (ID: ").append(event.getId()).append(")")
+                .append(eventName).append(" (ID: ").append(eventId).append(")")
                 .append("\n  • From: ").append(source)
                 .append(" (").append(type.name()).append(", ").append(FileSizes.format(bytes.length)).append(")")
                 .append("\n  • Was: ")
@@ -838,6 +855,15 @@ public class ScheduledEventService {
         }
         if (now.equals(before)) {
             return " The event still has the cover it had before this call.";
+        }
+        if (before == null) {
+            // Knowable, and asymmetric the other way from a removal: it had none and now has one.
+            // "CHANGED" is true but weaker than what the read supports. The concurrent-editor
+            // hedge still applies, so it is kept verbatim.
+            return " The event's cover was ADDED during this call and is now " + now
+                    + ". That may mean the request applied and only its response was lost, or that"
+                    + " something else set it in the meantime — this cannot tell them apart, so"
+                    + " check the event rather than re-uploading blind.";
         }
         // The cover moved. The tempting reading is "the write landed and its response was lost",
         // and that is often what happened — but it is not the only thing that produces this. A
@@ -917,7 +943,12 @@ public class ScheduledEventService {
                     // "ended or been cancelled", not "finished": a cancelled event may never have
                     // started, so the row would read Status: CANCELED beside a header calling it
                     // finished.
-                    .append(" ended or been cancelled, so Discord no longer returns ")
+                    // Hedged for the same reason the absent clause is: an entry that came back
+                    // with no usable id might be this very event, so "no longer returns it" stops
+                    // being knowable once one exists.
+                    .append(c.unidentifiable() > 0
+                            ? " ended or been cancelled, and nothing in the live read matched "
+                            : " ended or been cancelled, so Discord no longer returns ")
                     .append(c.terminal() == 1 ? "it" : "them")
                     .append(" and no cover is shown below for ")
                     .append(c.terminal() == 1 ? "it" : "them");
@@ -1022,53 +1053,6 @@ public class ScheduledEventService {
                 + " is not a PNG or JPEG. Discord accepts only those for event covers.");
     }
 
-    /**
-     * Like {@link #getEvent}, but does not report a cache miss as a missing event.
-     *
-     * <p>{@code getScheduledEventById} reads JDA's cache, which is filled from the gateway. An
-     * event created seconds earlier — by {@code create_guild_scheduled_event}, or by a human in
-     * the Discord UI — exists at Discord before it exists here, and "not found by eventId" sends
-     * the caller to check an id that is correct. The listing already reports this state from the
-     * other side, as an event Discord returned that the cache does not hold.
-     *
-     * <p>A live read distinguishes the two. It does not fix the underlying limitation: the write
-     * below needs a cached entity for its manager, so a valid-but-uncached event still cannot be
-     * given a cover. Routing the write through {@code patchRaw} with {@code Icon#getEncoding}
-     * would remove the cache from this path entirely and drop a request besides; that is a change
-     * to how the write works and belongs in its own review, not appended to this one.
-     */
-    private ScheduledEvent getEventForCover(Guild guild, String eventId) {
-        if (eventId == null || eventId.isEmpty()) {
-            throw new IllegalArgumentException("eventId cannot be null");
-        }
-        ScheduledEvent event = guild.getScheduledEventById(eventId);
-        if (event != null) {
-            return event;
-        }
-        try {
-            fetchRaw(guild.getId(), eventId);
-        } catch (ErrorResponseException discordSaidNo) {
-            // Only Discord saying "no such event" establishes that. A 500, a timeout or an
-            // exhausted rate limit says nothing about whether the event exists, and reporting
-            // those as "not found" sends the caller to check an id that may be correct — the
-            // same over-attribution describeOutcome refuses to make two hundred lines up.
-            if (discordSaidNo.getErrorResponse() == ErrorResponse.UNKNOWN_SCHEDULED_EVENT) {
-                throw new IllegalArgumentException("Scheduled event not found by eventId");
-            }
-            throw new IllegalArgumentException("Could not confirm whether that event exists"
-                    + reason(discordSaidNo) + ". It is not in this server's cache, which is normal"
-                    + " for an event created moments ago. Retry before assuming the id is wrong.");
-        } catch (RuntimeException unreachable) {
-            throw new IllegalArgumentException("Could not reach Discord to confirm whether that"
-                    + " event exists" + reason(unreachable) + ". It is not in this server's cache,"
-                    + " which is normal for an event created moments ago. Retry before assuming"
-                    + " the id is wrong.");
-        }
-        throw new IllegalArgumentException(
-                "That event exists at Discord but has not reached this server's cache yet, so its "
-                        + "cover cannot be set. This usually clears within seconds of the event "
-                        + "being created — retry shortly.");
-    }
 
     /** The upload root, or a refusal that points at the parameter which needs no filesystem. */
     private String requireCoverFileRoot() {

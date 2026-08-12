@@ -293,6 +293,20 @@ class ScheduledEventServiceTest {
     }
 
     @Test
+    void theTerminalClauseIsHedgedTooWhenNothingCanBeMatched() {
+        // Same argument as the absent clause: an entry that came back with no usable id might be
+        // this very event, so "Discord no longer returns it" stops being knowable once one exists.
+        assertThat(ScheduledEventService.coverCaveat(
+                new CoverCounts(1, 0, 0, 0, 1, 0, 1, 0), true))
+                .contains("nothing in the live read matched")
+                .doesNotContain("so Discord no longer returns");
+        // With nothing unidentifiable, the flat claim is supported and stays.
+        assertThat(ScheduledEventService.coverCaveat(
+                new CoverCounts(1, 0, 0, 0, 1, 0, 0, 0), true))
+                .contains("so Discord no longer returns it");
+    }
+
+    @Test
     void anAbsentEventIsHedgedWhenAnEntryCameBackUnidentifiable() {
         // The unidentifiable entry could be the absent event. Nothing matches them up, so the
         // flat claim stops being knowable — the one place the counter split cannot help, and so
@@ -405,42 +419,21 @@ class ScheduledEventServiceTest {
     }
 
     @Test
-    void aValidLocalCoverIsAcceptedAndHandedToDiscordAsTheRightFormat(@TempDir Path dir)
-            throws IOException {
-        // Everything from the guard to the upload had no coverage: that a file inside the root is
-        // accepted at all, and that setImage is called with an Icon built from the sniffed type
-        // rather than the extension. The read-back afterwards has no JDA behind it and throws,
-        // which exercises the could-not-confirm path — the one that must not claim success it
-        // cannot see.
+    void aBadEventIdCostsNoTransfer(@TempDir Path dir) throws IOException {
+        // The event is read before the source is fetched, so a wrong id fails without spending
+        // the upload. The mocked JDA cannot serve that read, which is what this reaches — the
+        // property being that it happens first, not that it succeeds.
         Path root = Files.createDirectory(dir.resolve("uploads"));
-        Path file = Files.write(root.resolve("poster.png"), png());
+        Files.write(root.resolve("poster.png"), png());
         service.coverFileRoot = root.toString();
 
-        String result = service.setScheduledEventImage(GUILD, EVENT, null, file.toString());
-
-        verify(manager).setImage(any(Icon.class));
-        assertThat(result)
-                .contains("Set the cover image on Community Night")
-                .contains("could not read the event back to confirm it");
+        assertThatThrownBy(() -> service.setScheduledEventImage(
+                GUILD, EVENT, null, root.resolve("poster.png").toString()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Could not reach Discord to read that event")
+                .hasMessageContaining("Nothing was changed");
     }
 
-    @Test
-    void aCoverFetchedFromAUrlReachesDiscordWithoutAnyFilesystemGrant() {
-        // The imageUrl branch is the one that needs no configuration to reach, and until now
-        // nothing exercised it through the tool — only the guard it delegates to. FILE_ROOT is
-        // left unset on purpose: this path must work with no filesystem grant at all.
-        service.coverFileRoot = "";
-
-        String result;
-        try (MockedStatic<RemoteFetchGuard> guard = mockStatic(RemoteFetchGuard.class)) {
-            guard.when(() -> RemoteFetchGuard.fetch(any(), anyInt(), any())).thenReturn(png());
-            result = service.setScheduledEventImage(
-                    GUILD, EVENT, "https://cdn.discordapp.com/attachments/1/2/poster.png", null);
-        }
-
-        verify(manager).setImage(any(Icon.class));
-        assertThat(result).contains("Set the cover image on Community Night");
-    }
 
     @Test
     void aWebpFromACdnLinkIsRefusedByTheParameterItCameFrom() {
@@ -495,26 +488,26 @@ class ScheduledEventServiceTest {
     }
 
     @Test
-    void anEventNotYetInTheCacheIsNotReportedAsNonexistent() {
-        // The flow the tool description steers callers toward — create an event, then cover it
-        // from the poster's CDN link — is exactly this case: JDA's cache is filled from the
-        // gateway, so the event exists at Discord before it exists here. "Not found by eventId"
-        // sends the caller to check an id that is correct.
-        //
-        // The miss branch needs its own test: without one, this helper can be wired into the
-        // wrong tool and every existing assertion still passes, because they all hit the cache.
+    void theCoverWriteDoesNotConsultTheCacheAtAll() {
+        // The write goes through patchRaw, so an event Discord has but the gateway has not
+        // delivered is coverable — which is the flow the tool description recommends: create an
+        // event, then cover it from the poster's CDN link. Stubbing the cache to miss changes
+        // nothing, because nothing reads it.
         when(guild.getScheduledEventById(EVENT)).thenReturn(null);
         service.coverFileRoot = "";
 
-        assertThatThrownBy(() -> service.setScheduledEventImage(
-                GUILD, EVENT, "https://cdn.discordapp.com/x.png", null))
-                .isInstanceOf(IllegalArgumentException.class)
-                // The mocked JDA cannot complete the live read, so the confirmation fails. The
-                // property under test is that a failed confirmation is not reported as a verdict:
-                // only Discord answering UNKNOWN_SCHEDULED_EVENT establishes that the id is wrong,
-                // and this assertion fails the moment anything else starts claiming it does.
-                .hasMessageContaining("Could not reach Discord to confirm whether that event exists")
-                .hasMessageNotContaining("not found by eventId");
+        try (MockedStatic<RemoteFetchGuard> guard = mockStatic(RemoteFetchGuard.class)) {
+            guard.when(() -> RemoteFetchGuard.fetch(any(), anyInt(), any())).thenReturn(png());
+
+            assertThatThrownBy(() -> service.setScheduledEventImage(
+                    GUILD, EVENT, "https://cdn.discordapp.com/x.png", null))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    // Past the source, into the live read — which the mocked JDA cannot serve.
+                    // The point is that an empty cache did not stop it before that.
+                    .hasMessageContaining("Could not reach Discord to read that event")
+                    .hasMessageContaining("Nothing was changed")
+                    .hasMessageNotContaining("not found by eventId");
+        }
     }
 
     @Test
@@ -611,6 +604,12 @@ class ScheduledEventServiceTest {
         // The previous cover was unreadable, so no comparison is possible and none is implied.
         assertThat(ScheduledEventService.describeOutcome(now, null, false))
                 .contains("whether this call changed it is unknown");
+        // Added, not merely "changed": it had none and now has one. Knowable, and asymmetric the
+        // other way from a removal — the branch the outcome block had no case for.
+        assertThat(ScheduledEventService.describeOutcome(now, null, true))
+                .contains("was ADDED during this call")
+                .contains(now)
+                .contains("something else set it in the meantime");
         // An event that had no cover and still has none: "not changed" is safe to say here only
         // because the read-back established it, not because the write threw.
         assertThat(ScheduledEventService.describeOutcome(null, null, false))

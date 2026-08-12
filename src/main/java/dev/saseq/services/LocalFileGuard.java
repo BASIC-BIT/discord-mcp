@@ -170,6 +170,13 @@ public final class LocalFileGuard {
      */
     public static ConfinedPath resolveWithinRoot(String filePath, Root allowed, String paramName,
                                                  String rootName) {
+        if (filePath == null) {
+            // Paths.get(null) raises NullPointerException, which the catch below does not cover —
+            // the same hole InvalidPathException was, one step earlier. Both callers gate on
+            // isBlank() so it is unreachable today, but this class's stated property is one
+            // answer, and shared code cannot rely on every future caller gating first.
+            throw new IllegalArgumentException(refusal(paramName, rootName));
+        }
         Path real;
         try {
             // toRealPath, not normalize: normalize is purely lexical, so a symlink
