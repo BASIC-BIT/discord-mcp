@@ -344,8 +344,8 @@ class ScheduledEventServiceTest {
         // finished; dropping it entirely leaves a row with no cover URL and nothing to say why,
         // which reads as "this event has no cover". Its own clause says what is true.
         assertThat(ScheduledEventService.coverCaveat(new CoverCounts(2, 0, 0, 0, 1, 0, 0, 0), true))
-                .isEqualTo("\n(1 event has ended or been cancelled, so Discord no longer returns it and no"
-                        + " cover is shown below for it.)");
+                .isEqualTo("\n(1 event has ended or been cancelled, so Discord no longer returns it,"
+                        + " and no cover is shown below for it.)");
         // And it suppresses the all-coverless shorthand, which would otherwise claim over an
         // event whose cover was never read.
         assertThat(ScheduledEventService.coverCaveat(new CoverCounts(2, 2, 0, 0, 1, 0, 0, 0), true))
@@ -553,7 +553,6 @@ class ScheduledEventServiceTest {
                 .hasMessageContaining("Nothing was changed");
     }
 
-
     @Test
     void aWebpFromACdnLinkIsRefusedByTheParameterItCameFrom() {
         // Discord's own media proxy serves WebP, so this is an ordinary mistake rather than an
@@ -661,7 +660,12 @@ class ScheduledEventServiceTest {
         //
         // Created under target/ so it is genuinely below the working directory, which is the
         // whole point; a @TempDir lives under the system tmpdir and cannot reproduce this.
-        Path underCwd = Files.createTempDirectory(Path.of("target").toAbsolutePath(), "cover-root");
+        // createDirectories first: under Surefire the working directory is the module root and
+        // target/ is already there, but an IDE runner can start elsewhere, and then the parent
+        // this needs does not exist. The directory must be below the CWD either way — that is
+        // what reproduces the bug.
+        Path parent = Files.createDirectories(Path.of("target").toAbsolutePath());
+        Path underCwd = Files.createTempDirectory(parent, "cover-root");
         try {
             Files.write(underCwd.resolve("poster.png"), png());
             service.coverFileRoot = underCwd.toString();

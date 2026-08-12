@@ -35,6 +35,18 @@ import static org.mockito.Mockito.when;
 
 class MessageServiceTest {
 
+    private static final String CHANNEL_ID = "345678901234567890";
+    private static final String MESSAGE_ID = "456789012345678901";
+
+    private JDA jda;
+    private MessageService messageService;
+
+    @BeforeEach
+    void setUp() {
+        jda = mock(JDA.class);
+        messageService = new MessageService(jda);
+    }
+
     @Test
     void onlyADirectoryMeantToBeReadFromBecomesARoot() throws NoSuchMethodException {
         // LocalFileGuard.resolveWithinRoot confines against a Root, so a directory this service
@@ -52,18 +64,6 @@ class MessageServiceTest {
         assertThat(MessageService.class.getDeclaredMethod("allowedRoot").getReturnType())
                 .as("the upload root is read from by caller-supplied path, so it is a Root")
                 .isEqualTo(LocalFileGuard.Root.class);
-    }
-
-    private static final String CHANNEL_ID = "345678901234567890";
-    private static final String MESSAGE_ID = "456789012345678901";
-
-    private JDA jda;
-    private MessageService messageService;
-
-    @BeforeEach
-    void setUp() {
-        jda = mock(JDA.class);
-        messageService = new MessageService(jda);
     }
 
     @Test

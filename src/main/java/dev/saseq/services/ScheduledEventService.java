@@ -723,7 +723,7 @@ public class ScheduledEventService {
             @ToolParam(description = "Direct URL to a PNG or JPEG, e.g. an attachment's CDN link. Needs no filesystem access.", required = false) String imageUrl,
             @ToolParam(description = "Path to a local PNG or JPEG, which must resolve to a file under DISCORD_MCP_FILE_ROOT", required = false) String filePath) {
         // isBlank, not isEmpty: "   " is not a supplied argument, and treating it as one
-        // fails later with "File not found at filePath:    ". Matches requireCoverFileRoot below.
+        // fails later with "File not found at filePath:    ". Matches coverRoot() below.
         boolean hasUrl = imageUrl != null && !imageUrl.isBlank();
         boolean hasPath = filePath != null && !filePath.isBlank();
         if (hasUrl == hasPath) {
@@ -755,7 +755,7 @@ public class ScheduledEventService {
         Guild guild = getGuild(guildId);
         String resolvedGuild = guild.getId();
         // The same check the raw routes below make, run here so it costs nothing: a bad id refused
-        // now is refused before up to 8 MB is fetched or read from disk, rather than after.
+        // now is refused before MAX_COVER_BYTES is fetched or read from disk, rather than after.
         requireSnowflake(eventId, "eventId");
 
         // The source is read before anything establishes the event exists, and what that buys is
@@ -1103,7 +1103,9 @@ public class ScheduledEventService {
                             ? " ended or been cancelled, and nothing in the live read matched "
                             : " ended or been cancelled, so Discord no longer returns ")
                     .append(c.terminal() == 1 ? "it" : "them")
-                    .append(" and no cover is shown below for ")
+                    // Comma before the second clause: the hedged form already contains an "and",
+                    // and two of them unpunctuated reads as one run-on claim.
+                    .append(", and no cover is shown below for ")
                     .append(c.terminal() == 1 ? "it" : "them");
         }
         if (c.unlisted() > 0) {
@@ -1230,16 +1232,22 @@ public class ScheduledEventService {
     /**
      * The upload root, or a refusal that points at the parameter needing no filesystem.
      *
-     * <p>Also the one place the chained configuration is refused. The README's argument for
-     * reusing {@code DISCORD_MCP_FILE_ROOT} rests on the magic-byte check, and that argument is
-     * void when the upload root is also the directory {@code download_attachment} writes into: a
-     * caller can then fetch a file it chose, PNG header and all, and pin it to a permanent
-     * unauthenticated URL. The type-level split between {@code Root} and {@code Path} stops the
-     * code confusing the two roots; only this stops the configuration doing it.
+     * <p>Also where the chained configuration is refused. The README's argument for reusing
+     * {@code DISCORD_MCP_FILE_ROOT} rests on the upload root holding only what the operator put
+     * there, which stops being true when it is also the directory {@code download_attachment}
+     * writes into: a caller can then fetch a file it chose, PNG header and all, and pin it to a
+     * permanent unauthenticated URL.
+     *
+     * <p>Be exact about what this is worth. It is not a boundary: with the roots chained, the
+     * same end state is two calls away — {@code download_attachment} writes the file,
+     * {@code send_file} posts it to a channel with no format check of its own, and
+     * {@code imageUrl} pins the CDN link that comes back. Only separating the directories removes
+     * that. What this removes is reaching it by accident, on the one path where a deployment
+     * would never see it coming.
      *
      * <p>Refused here rather than at startup, and only on the {@code filePath} branch, so a
      * deployment with the chained config keeps {@code send_file} and {@code imageUrl} working
-     * exactly as before — this closes the new capability, not the existing one.
+     * exactly as before.
      */
     private LocalFileGuard.Root coverRoot() {
         if (coverFileRoot == null || coverFileRoot.isBlank()) {

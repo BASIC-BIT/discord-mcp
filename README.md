@@ -280,12 +280,18 @@ were chosen by whoever caused the download, and making them begin with a PNG sig
 free.
 
 So `set_guild_scheduled_event_image` refuses a local `filePath` when the two roots overlap —
-equal, or either nested inside the other — and says which two variables collide. It is the
-only configuration this server refuses on your behalf, and it is refused because the argument
-for reusing one variable does not survive it. `send_file` and `download_attachment` are
-unchanged: the chained root was always a widening for them, it is documented above, and
-turning it into a startup failure would break deployments that chose it deliberately. `imageUrl`
-is unaffected — it reads no files.
+equal, or either nested inside the other — and says which two variables collide. `send_file`
+and `download_attachment` are unchanged: the chained root was always a widening for them, it
+is documented above, and turning it into a startup failure would break deployments that chose
+it deliberately. `imageUrl` is unaffected — it reads no files.
+
+**That refusal raises the cost of the direct path; it does not close it.** With the roots
+chained, the same end state is two calls away: `download_attachment` writes the chosen file,
+`send_file` posts it to a channel — no format check there, and it reads the same root — and
+`imageUrl` pins the resulting CDN link as a permanent cover. Nothing short of separating the
+two directories removes that, so read the refusal as a guard against reaching the state by
+accident, not as the reason the shared variable is acceptable. That reason is the upload root
+containing only what you put in it.
 
 ### `DISCORD_MCP_DOWNLOAD_ROOT`
 

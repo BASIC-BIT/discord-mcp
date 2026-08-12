@@ -1,6 +1,8 @@
 package dev.saseq.services;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.ResourceLock;
+import org.junit.jupiter.api.parallel.Resources;
 
 import java.util.Locale;
 
@@ -39,7 +41,11 @@ class FileSizesTest {
     }
 
     @Test
+    @ResourceLock(Resources.LOCALE)
     void theDecimalSeparatorDoesNotFollowTheHost() {
+        // Declared, not just restored in finally: the only way to prove Locale.ROOT is in force is
+        // to change the default, which is process-wide. Harmless today because Surefire runs
+        // serially here, and the annotation is what keeps it harmless if that ever changes.
         // A comma-decimal default would render "5,0 MB" here, so an operator in Berlin and one in
         // Chicago would read different text out of the same failure.
         Locale original = Locale.getDefault();
