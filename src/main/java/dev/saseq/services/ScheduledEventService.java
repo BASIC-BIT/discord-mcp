@@ -871,87 +871,76 @@ public class ScheduledEventService {
      *                             "Recurs:" line below means unknown rather than absent
      * @param rawKnown   whether the live read succeeded at all
      */
-    static String coverCaveat(int described, int coverless, int unreadable, int absent,
-                              int terminal, int unlisted, int unidentifiable,
-                              int recurrenceUnreadable, boolean rawKnown) {
+    static String coverCaveat(CoverCounts c, boolean rawKnown) {
         if (!rawKnown) {
             return "\n(Recurrence and cover images could not be read, so no event below is marked as"
                     + " recurring or as having a cover even if it is.)";
         }
         StringBuilder sb = new StringBuilder();
-        if (coverless > 0) {
+        if (c.coverless() > 0) {
             // Covers are rare, so "N of N" is the ordinary case and its arithmetic says nothing.
             // Kept rather than suppressed: this line is why a stale or absent cover stops being
-            // invisible, which is the whole reason the listing reads them.
-            // The absolute phrasing is only supportable when the live read described every listed
-            // event. With 1 of 3 described and coverless, "no event here has a cover image" makes
-            // a claim about the two it never saw — beside a clause that calls those two unknown.
-            if (coverless == described && unreadable == 0 && absent == 0 && terminal == 0
-                    && unidentifiable == 0) {
+            // invisible, which is the whole reason the listing reads them. The absolute phrasing
+            // needs a read that saw every listed event, or it claims over ones it never saw.
+            if (c.coverless() == c.described() && c.unreadable() == 0 && c.absent() == 0
+                    && c.terminal() == 0 && c.unidentifiable() == 0) {
                 sb.append("no event here has a cover image");
             } else {
-                // Three numbers, three agreements, and they are not the same number. The noun
-                // counts `described`, the verb agrees with `coverless`. Taking both from one gets
-                // one of them wrong.
-                //
-                // `described == 1` is reachable: the shorthand above also requires nothing
-                // unreadable, absent or unidentifiable, so one described-and-coverless event
-                // beside two absent ones lands here and would otherwise read "1 of 1 events".
-                sb.append(coverless).append(" of ").append(described)
-                        .append(described == 1 ? " event" : " events")
-                        .append(coverless == 1 ? " has" : " have").append(" no cover image");
+                // The noun counts described, the verb agrees with coverless: "1 of 3 events has
+                // no cover image". Taking both from one number gets one of them wrong.
+                sb.append(c.coverless()).append(" of ").append(c.described())
+                        .append(c.described() == 1 ? " event" : " events")
+                        .append(c.coverless() == 1 ? " has" : " have").append(" no cover image");
             }
         }
-        if (unreadable > 0) {
-            join(sb).append(unreadable).append(unreadable == 1 ? " event was" : " events were")
+        if (c.unreadable() > 0) {
+            join(sb).append(c.unreadable()).append(c.unreadable() == 1 ? " event was" : " events were")
                     .append(" returned but could not be read, so ")
-                    .append(unreadable == 1 ? "its cover is" : "their covers are").append(" unknown");
+                    .append(c.unreadable() == 1 ? "its cover is" : "their covers are").append(" unknown");
         }
-        if (absent > 0) {
-            join(sb).append(absent).append(absent == 1 ? " event was" : " events were")
+        if (c.absent() > 0) {
+            join(sb).append(c.absent()).append(c.absent() == 1 ? " event was" : " events were")
                     // Hedged when an entry came back with no usable id, because that entry could
                     // be one of these: nothing matches it to a listed event, so "not in the live
-                    // read" stops being knowable. Saying it flatly would be the same unsupported
-                    // claim these counters were split apart to avoid, made about the one case
-                    // where the split cannot help.
-                    .append(unidentifiable > 0
-                            // "entries with no id", not "the unreadable entries": the neighbouring
-                            // clause about unreadable *events* is one word away in a sentence that
-                            // already carries four numbers, and the events/entries distinction is
-                            // too thin to carry the reference on its own.
+                    // read" stops being knowable.
+                    .append(c.unidentifiable() > 0
                             ? " not matched to anything in the live read, and the entries with no"
                             + " id may be among them, so "
                             : " not in the live read, so ")
-                    .append(absent == 1 ? "its cover is" : "their covers are").append(" unknown");
+                    .append(c.absent() == 1 ? "its cover is" : "their covers are").append(" unknown");
         }
-        if (terminal > 0) {
-            join(sb).append(terminal).append(terminal == 1 ? " event has" : " events have")
-                    .append(" finished, so Discord no longer returns ")
-                    .append(terminal == 1 ? "it" : "them")
+        if (c.terminal() > 0) {
+            join(sb).append(c.terminal()).append(c.terminal() == 1 ? " event has" : " events have")
+                    // "ended or been cancelled", not "finished": a cancelled event may never have
+                    // started, so the row would read Status: CANCELED beside a header calling it
+                    // finished.
+                    .append(" ended or been cancelled, so Discord no longer returns ")
+                    .append(c.terminal() == 1 ? "it" : "them")
                     .append(" and no cover is shown below for ")
-                    .append(terminal == 1 ? "it" : "them");
+                    .append(c.terminal() == 1 ? "it" : "them");
         }
-        if (unlisted > 0) {
-            join(sb).append("Discord returned ").append(unlisted).append(" event")
-                    .append(unlisted == 1 ? "" : "s").append(" not in this list, so the list is")
+        if (c.unlisted() > 0) {
+            join(sb).append("Discord returned ").append(c.unlisted()).append(" event")
+                    .append(c.unlisted() == 1 ? "" : "s").append(" not in this list, so the list is")
                     .append(" incomplete — the cache has not caught up");
         }
-        if (recurrenceUnreadable > 0) {
-            join(sb).append(recurrenceUnreadable)
-                    .append(recurrenceUnreadable == 1 ? " event's recurrence" : " events' recurrences")
-                    .append(" could not be read, so ")
-                    .append(recurrenceUnreadable == 1 ? "it shows" : "they show")
-                    .append(" no schedule below even if ")
-                    .append(recurrenceUnreadable == 1 ? "it recurs" : "they recur");
-        }
-        if (unidentifiable > 0) {
-            // Its own clause because it belongs to no event. Folding it into `unreadable` would
-            // name an event that cannot be named, and letting it fall through to `absent` would
+        if (c.unidentifiable() > 0) {
+            // Its own clause because it belongs to no event. Folding it into unreadable would
+            // name an event that cannot be named, and letting it fall through to absent would
             // blame the cache for a malformed response.
-            join(sb).append(unidentifiable).append(unidentifiable == 1 ? " entry" : " entries")
+            join(sb).append(c.unidentifiable())
+                    .append(c.unidentifiable() == 1 ? " entry" : " entries")
                     .append(" could not be read at all, so ")
-                    .append(unidentifiable == 1 ? "it is" : "they are")
+                    .append(c.unidentifiable() == 1 ? "it is" : "they are")
                     .append(" not counted above either way");
+        }
+        if (c.recurrenceUnreadable() > 0) {
+            join(sb).append(c.recurrenceUnreadable())
+                    .append(c.recurrenceUnreadable() == 1 ? " event's recurrence" : " events' recurrences")
+                    .append(" could not be read, so ")
+                    .append(c.recurrenceUnreadable() == 1 ? "it shows" : "they show")
+                    .append(" no schedule below even if ")
+                    .append(c.recurrenceUnreadable() == 1 ? "it recurs" : "they recur");
         }
         return sb.length() == 0 ? "" : "\n(" + sb + ".)";
     }
@@ -1019,8 +1008,9 @@ public class ScheduledEventService {
         // avatars and banners elsewhere, but not on scheduled event covers.
         if (bytes.length >= 3 && bytes[0] == 'G' && bytes[1] == 'I' && bytes[2] == 'F') {
             throw new IllegalArgumentException(
-                    "Scheduled event covers cannot be GIFs — Discord does not animate them. "
-                            + "Supply a PNG or JPEG.");
+                    "A GIF's animation is never shown on a scheduled event cover, so this refuses "
+                            + "it rather than silently publishing a still frame. Supply a PNG or "
+                            + "JPEG.");
         }
         throw new IllegalArgumentException(paramName
                 + " is not a PNG or JPEG. Discord accepts only those for event covers.");
@@ -1106,7 +1096,24 @@ public class ScheduledEventService {
         List<ScheduledEvent> events = guild.getScheduledEvents();
 
         if (events.isEmpty()) {
-            return "No scheduled events found on this server.";
+            // "None" is a claim, and an empty cache does not support it. This is the all-events
+            // form of the lag `unlistedCount` reports below: an event created out of band exists
+            // at Discord before the gateway delivers it here, and answering "no scheduled events"
+            // then is the same mistake as calling an uncached event missing — just total.
+            int live;
+            try {
+                Route.CompiledRoute route = Route.custom(Method.GET, "guilds/{guild_id}/scheduled-events")
+                        .compile(guild.getId());
+                live = new RestActionImpl<net.dv8tion.jda.api.utils.data.DataArray>(jda, route,
+                        (response, request) -> response.getArray()).complete().length();
+            } catch (RuntimeException e) {
+                return "This server's cache holds no scheduled events, and the live list could not"
+                        + " be read" + reason(e) + ", so whether there are none is unconfirmed.";
+            }
+            return live == 0
+                    ? "No scheduled events found on this server."
+                    : "This server's cache holds no scheduled events, but Discord returned " + live
+                    + ". The cache has not caught up — retry shortly.";
         }
 
         boolean includeUserCount = withUserCount == null || withUserCount.isEmpty() || Boolean.parseBoolean(withUserCount);
@@ -1233,35 +1240,16 @@ public class ScheduledEventService {
             recurrenceFailed.clear();
         }
 
-        int describedCount = (int) events.stream().filter(e -> described.contains(e.getId())).count();
-        int coverlessCount = (int) events.stream()
-                .filter(e -> described.contains(e.getId()) && !covers.containsKey(e.getId()))
-                .count();
-        // Listed events Discord returned but could not be read, and listed events it did not
-        // return at all. Different facts, counted separately so neither is described as the other.
-        int unreadableCount = (int) events.stream()
-                .filter(e -> returned.contains(e.getId()) && !described.contains(e.getId()))
-                .count();
-        // Split, not filtered away. GET /guilds/{id}/scheduled-events returns scheduled and
-        // active events, so a completed or cancelled one is legitimately missing from it, and
-        // counting those as "not in the live read" attributes to a read gap what is really an
-        // event being over. But dropping them entirely was the opposite error: the row still
-        // renders, with no cover URL and nothing to explain it, which reads as "this event has no
-        // cover" — the claim every other counter here exists to avoid making.
-        int absentCount = (int) events.stream()
-                .filter(e -> !isTerminal(e))
-                .filter(e -> !returned.contains(e.getId()))
-                .count();
-        int terminalCount = (int) events.stream()
-                .filter(ScheduledEventService::isTerminal)
-                .filter(e -> !returned.contains(e.getId()))
-                .count();
-        int unlistedCount = returned.size()
-                - (int) events.stream().filter(e -> returned.contains(e.getId())).count();
-        int recurrenceUnreadable = (int) events.stream()
-                .filter(e -> recurrenceFailed.contains(e.getId())).count();
-        String caveat = coverCaveat(describedCount, coverlessCount, unreadableCount, absentCount,
-                terminalCount, unlistedCount, unidentifiable, recurrenceUnreadable, rawKnown);
+        // The tally is a pure function of the id sets, extracted for the same reason coverCaveat
+        // was: it is where the subtle mistakes live — the absent/terminal split, and unlisted as
+        // "returned minus those actually listed" — and a transposition here produces confidently
+        // wrong text with nothing failing, because every caveat test calls the formatter directly.
+        CoverCounts counts = CoverCounts.tally(
+                events.stream().map(ScheduledEvent::getId).toList(),
+                events.stream().filter(ScheduledEventService::isTerminal)
+                        .map(ScheduledEvent::getId).collect(Collectors.toSet()),
+                returned, described, covers.keySet(), recurrenceFailed, unidentifiable);
+        String caveat = coverCaveat(counts, rawKnown);
         return "Retrieved " + events.size() + " scheduled events:" + caveat + "\n" +
                 events.stream()
                         .map(e -> {

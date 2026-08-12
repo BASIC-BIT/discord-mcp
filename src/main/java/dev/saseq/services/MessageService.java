@@ -129,8 +129,8 @@ public class MessageService {
 
         ResolvedFile resolvedFile = resolveFile(filePath, fileUrl, fileData, fileName);
         if (resolvedFile.bytes().length > MAX_UPLOAD_BYTES) {
-            throw new IllegalArgumentException("File exceeds the " + (MAX_UPLOAD_BYTES / (1024 * 1024))
-                    + " MB limit (" + (resolvedFile.bytes().length / (1024 * 1024)) + " MB). Discord's own"
+            throw new IllegalArgumentException("File exceeds the " + FileSizes.format(MAX_UPLOAD_BYTES)
+                    + " limit (" + FileSizes.format(resolvedFile.bytes().length) + "). Discord's own"
                     + " ceiling is lower below boost tier 2, so a smaller file may still be rejected there.");
         }
 
