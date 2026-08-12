@@ -201,11 +201,81 @@ class ScheduledEventServiceTest {
     }
 
     @Test
+    void exactlyOneOfImageUrlAndFilePathIsRequired() {
+        // Neither: the message leads with imageUrl, because that is the option needing no
+        // filesystem grant, and steering callers to it is what keeps deployments off the
+        // shared-root configuration.
+        assertThatThrownBy(() -> service.setScheduledEventImage(null, "1", null, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Supply either imageUrl")
+                .hasMessageContaining("no filesystem access needed");
+        assertThatThrownBy(() -> service.setScheduledEventImage(null, "1", "", ""))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Supply either imageUrl");
+        // Both: ambiguous about which one was meant, so neither is guessed at.
+        assertThatThrownBy(() -> service.setScheduledEventImage(
+                null, "1", "https://cdn.discordapp.com/x.png", "/tmp/x.png"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("not both");
+    }
+
+    @Test
+    void anImageUrlGoesThroughTheSharedSsrfGuard() {
+        // The whole point of offering imageUrl is that it needs no filesystem grant — which makes
+        // it the parameter an injected prompt would reach for. It must not become a second,
+        // unguarded fetch path; that is the exact regression RemoteFetchGuard exists to prevent.
+        service.coverFileRoot = "";
+
+        assertThatThrownBy(() -> service.setScheduledEventImage(
+                null, "1", "http://169.254.169.254/latest/meta-data/", null))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.setScheduledEventImage(
+                null, "1", "file:///etc/passwd", null))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void aLocalPathStillRequiresTheUploadRootButAUrlDoesNot() {
+        // Unset FILE_ROOT must not disable the tool outright any more, only its filePath half,
+        // and the refusal has to point at the option that still works.
+        service.coverFileRoot = "";
+
+        assertThatThrownBy(() -> service.setScheduledEventImage(null, "1", null, "/etc/passwd"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Local paths are disabled")
+                .hasMessageContaining("supply imageUrl");
+    }
+
+    @Test
+    void aFailedWriteReportsWhatTheEventActuallyHasAfterwards() {
+        // Every branch is a claim about whether a write took effect. Asserting "not changed" on a
+        // thrown request is what this replaced: a lost response after Discord applied the image is
+        // indistinguishable from a rejection, so the read-back is the only honest answer.
+        String was = "https://cdn.discordapp.com/guild-events/1/aaa.png";
+        String now = "https://cdn.discordapp.com/guild-events/1/bbb.png";
+
+        assertThat(ScheduledEventService.describeOutcome(null, was, true))
+                .contains("currently has no cover image");
+        assertThat(ScheduledEventService.describeOutcome(was, was, true))
+                .contains("still has the cover it had before");
+        assertThat(ScheduledEventService.describeOutcome(now, was, true))
+                .contains("DID change despite the error")
+                .contains(now);
+        // The previous cover was unreadable, so no comparison is possible and none is implied.
+        assertThat(ScheduledEventService.describeOutcome(now, null, false))
+                .contains("whether this call changed it is unknown");
+        // An event that had no cover and still has none: "not changed" is safe to say here only
+        // because the read-back established it, not because the write threw.
+        assertThat(ScheduledEventService.describeOutcome(null, null, false))
+                .contains("currently has no cover image");
+    }
+
+    @Test
     void settingACoverIsDisabledUntilAnUploadRootIsConfigured(@TempDir Path dir) throws IOException {
         Path file = Files.write(dir.resolve("poster.png"), png());
         service.coverFileRoot = "";
 
-        assertThatThrownBy(() -> service.setScheduledEventImage(null, "1", file.toString()))
+        assertThatThrownBy(() -> service.setScheduledEventImage(null, "1", null, file.toString()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("DISCORD_MCP_FILE_ROOT");
     }
@@ -218,7 +288,7 @@ class ScheduledEventServiceTest {
         Path outside = Files.write(dir.resolve("secret.png"), png());
         service.coverFileRoot = root.toString();
 
-        assertThatThrownBy(() -> service.setScheduledEventImage(null, "1", outside.toString()))
+        assertThatThrownBy(() -> service.setScheduledEventImage(null, "1", null, outside.toString()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("outside the allowed upload directory");
     }
@@ -233,7 +303,7 @@ class ScheduledEventServiceTest {
         Path file = Files.write(root.resolve("master.png"), big);
         service.coverFileRoot = root.toString();
 
-        assertThatThrownBy(() -> service.setScheduledEventImage(null, "1", file.toString()))
+        assertThatThrownBy(() -> service.setScheduledEventImage(null, "1", null, file.toString()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("5 MB limit")
                 .hasMessageContaining("Crop it to 5:2");

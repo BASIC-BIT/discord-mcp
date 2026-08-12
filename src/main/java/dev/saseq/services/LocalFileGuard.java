@@ -71,10 +71,11 @@ public final class LocalFileGuard {
      * @param filePath  the caller-supplied path
      * @param allowed   the resolved root, from {@link #resolveRoot}
      * @param paramName the tool parameter the path came from, for error messages
-     * @param rootName  what the root is for ("upload", "cover image"), for error messages. A
-     *                  caller that reads several kinds of file from several roots gets a message
-     *                  that says which one it was refused from, rather than a generic one that
-     *                  leaves the operator guessing which grant to widen.
+     * @param rootName  what the root is for, naming the grant an operator would have to widen.
+     *                  Both callers pass "upload" today, correctly: they read from the same
+     *                  {@code DISCORD_MCP_FILE_ROOT}. It is a parameter rather than a constant so
+     *                  that a caller reading from a different root cannot silently describe it as
+     *                  the upload directory.
      * @return the fully resolved real path
      */
     public static Path resolveWithinRoot(String filePath, Path allowed, String paramName, String rootName) {
@@ -122,12 +123,28 @@ public final class LocalFileGuard {
         }
         if (bytes.length > maxBytes) {
             throw new TooLargeException(capitalize(what)
-                    + " exceeds the " + (maxBytes / (1024 * 1024)) + " MB limit.");
+                    + " exceeds the " + formatSize(maxBytes) + " limit.");
         }
         return bytes;
     }
 
     private static String capitalize(String s) {
         return s.isEmpty() ? s : Character.toUpperCase(s.charAt(0)) + s.substring(1);
+    }
+
+    /**
+     * Size for a human, not integer megabytes.
+     *
+     * <p>Both callers happen to pass at least a megabyte today, so {@code maxBytes / (1024*1024)}
+     * would read correctly for them. This is shared code: the download path already learned this
+     * the hard way, where a remaining budget under a megabyte rendered as "exceeded the 0 MB
+     * allowed for it", which reads as a bug rather than a limit. A third caller with a smaller
+     * cap should not have to rediscover that.
+     */
+    private static String formatSize(int bytes) {
+        if (bytes >= 1024 * 1024) {
+            return bytes / (1024 * 1024) + " MB";
+        }
+        return bytes >= 1024 ? bytes / 1024 + " KB" : bytes + " bytes";
     }
 }

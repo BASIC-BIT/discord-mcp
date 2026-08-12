@@ -632,31 +632,58 @@ public class ScheduledEventService {
      * without the grant changing, so every deployment that allowed event editing would silently
      * acquire a local-file read. Splitting it keeps the two decisions separate: a deployment can
      * allow event edits and refuse cover uploads.
+     *
+     * <p>Takes {@code imageUrl} as well as {@code filePath} for a related reason. With only a
+     * local path, the ordinary job — put a poster that is already in Discord onto an event —
+     * requires a filesystem grant, and the shortest route to one is pointing
+     * {@code DISCORD_MCP_FILE_ROOT} at the download directory, which is exactly the widening the
+     * README argues against. A tool whose safe configuration is the inconvenient one gets
+     * configured unsafely.
      */
-    @Tool(name = "set_guild_scheduled_event_image", description = "Replace a scheduled event's cover image with a local PNG or JPEG. The file must already be under DISCORD_MCP_FILE_ROOT; where a deployment points that at its download directory, download_attachment can stage one there, but on split roots the file has to be put there out of band. Discord displays covers at 5:2 (800x320 recommended) and crops anything else, so crop to 5:2 yourself to control what is kept. Max 5MB, no animation — a full-resolution master is usually both too large and the wrong shape, so crop and scale first.")
+    @Tool(name = "set_guild_scheduled_event_image", description = "Replace a scheduled event's cover image with a PNG or JPEG, from a direct imageUrl OR a local filePath under DISCORD_MCP_FILE_ROOT. Prefer imageUrl: a poster already posted to Discord has a CDN URL, and using it needs no local file at all. Discord displays covers at 5:2 (800x320 recommended) and crops anything else, so crop to 5:2 yourself to control what is kept. Max 5MB. Animation is never shown, so an animated GIF is refused and an animated PNG plays as a still.")
     public String setScheduledEventImage(
             @ToolParam(description = "Discord server ID", required = false) String guildId,
             @ToolParam(description = "ID of the scheduled event") String eventId,
-            @ToolParam(description = "Absolute path to a local PNG or JPEG file") String filePath) {
-        if (filePath == null || filePath.isEmpty()) {
-            throw new IllegalArgumentException("filePath cannot be null");
-        }
-        if (coverFileRoot == null || coverFileRoot.isBlank()) {
-            throw new IllegalArgumentException(
-                    "Setting a cover image is disabled. Set DISCORD_MCP_FILE_ROOT to the directory "
-                            + "this server may read uploads from.");
+            @ToolParam(description = "Direct URL to a PNG or JPEG, e.g. an attachment's CDN link. Needs no filesystem access.", required = false) String imageUrl,
+            @ToolParam(description = "Absolute path to a local PNG or JPEG, which must be under DISCORD_MCP_FILE_ROOT", required = false) String filePath) {
+        boolean hasUrl = imageUrl != null && !imageUrl.isEmpty();
+        boolean hasPath = filePath != null && !filePath.isEmpty();
+        if (hasUrl == hasPath) {
+            throw new IllegalArgumentException(hasUrl
+                    ? "Supply imageUrl or filePath, not both."
+                    : "Supply either imageUrl (a direct link, no filesystem access needed) or "
+                    + "filePath (a local file under DISCORD_MCP_FILE_ROOT).");
         }
 
-        // The file is resolved, read and identified before the event is looked up at all. Both
-        // orders work, but this one keeps a rejected path from revealing whether an event exists,
-        // and the confinement check is the part that must not be reachable around.
-        Path path = LocalFileGuard.resolveWithinRoot(
-                filePath, LocalFileGuard.resolveRoot(coverFileRoot, "DISCORD_MCP_FILE_ROOT"),
-                "filePath", "upload");
+        // Read and identified before the event is looked up at all. Both orders work, but this one
+        // keeps a rejected source from revealing whether an event exists, and the guards are the
+        // part that must not be reachable around.
+        String source;
         byte[] bytes;
         try {
-            bytes = LocalFileGuard.readBounded(path, MAX_COVER_BYTES, "cover image");
-        } catch (LocalFileGuard.TooLargeException e) {
+            if (hasUrl) {
+                // The shared SSRF guard, same as send_file and create_emoji: https only, public
+                // host, no redirect following, bounded read. This is the path that needs no
+                // filesystem grant, which is why it is offered first — a cover almost always
+                // starts as an image already posted to Discord, and requiring it to be staged on
+                // disk first is what pushes operators into pointing FILE_ROOT at their download
+                // directory.
+                bytes = RemoteFetchGuard.fetch(imageUrl, MAX_COVER_BYTES, "cover image");
+                source = imageUrl;
+            } else {
+                if (coverFileRoot == null || coverFileRoot.isBlank()) {
+                    throw new IllegalArgumentException(
+                            "Local paths are disabled. Set DISCORD_MCP_FILE_ROOT to the directory "
+                                    + "this server may read uploads from, or supply imageUrl "
+                                    + "instead — that needs no filesystem access.");
+                }
+                Path path = LocalFileGuard.resolveWithinRoot(
+                        filePath, LocalFileGuard.resolveRoot(coverFileRoot, "DISCORD_MCP_FILE_ROOT"),
+                        "filePath", "upload");
+                bytes = LocalFileGuard.readBounded(path, MAX_COVER_BYTES, "cover image");
+                source = path.getFileName().toString();
+            }
+        } catch (LocalFileGuard.TooLargeException | RemoteFetchGuard.TooLargeException e) {
             // The limit alone leaves the caller stuck: an oversized master is the ordinary input
             // here, and the fix is the same crop the display shape needs anyway.
             throw new IllegalArgumentException(e.getMessage()
@@ -696,28 +723,16 @@ public class ScheduledEventService {
             // context, not a diagnosis.
             String outcome;
             try {
-                String now = coverUrlOf(fetchRaw(guild.getId(), event.getId()), event.getId());
-                if (now == null) {
-                    outcome = " The event currently has no cover image.";
-                } else if (beforeKnown && now.equals(before)) {
-                    outcome = " The event still has the cover it had before this call.";
-                } else if (beforeKnown) {
-                    // Reached when the write landed and the response was lost. Saying "failed"
-                    // and leaving it there would send someone to re-upload a change that took.
-                    outcome = " The event's cover DID change despite the error, and is now " + now
-                            + " — the request was applied and its response lost.";
-                } else {
-                    outcome = " The event currently has cover " + now
-                            + ", but the previous one could not be read, so whether this call"
-                            + " changed it is unknown.";
-                }
+                outcome = describeOutcome(
+                        coverUrlOf(fetchRaw(guild.getId(), event.getId()), event.getId()),
+                        before, beforeKnown);
             } catch (RuntimeException unverifiable) {
                 outcome = " Could not read the event back, so whether the cover was applied is"
                         + " unknown — check the event before retrying.";
             }
             throw new IllegalArgumentException("Setting the cover image failed: " + e.getMessage()
                     + ". Sent " + formatSize(bytes.length) + " of " + type.name() + " from "
-                    + path.getFileName() + "." + outcome, e);
+                    + source + "." + outcome, e);
         }
 
         // Re-read rather than trusting the write. The manager reports success on an accepted
@@ -730,13 +745,13 @@ public class ScheduledEventService {
             after = coverUrlOf(fetchRaw(guild.getId(), event.getId()), event.getId());
         } catch (RuntimeException e) {
             return "Set the cover image on " + event.getName() + " (ID: " + event.getId() + ") from "
-                    + path.getFileName() + ", but could not read the event back to confirm it ("
+                    + source + ", but could not read the event back to confirm it ("
                     + e.getMessage() + "). Check the event before uploading again.";
         }
 
         StringBuilder result = new StringBuilder("Set the cover image on ")
                 .append(event.getName()).append(" (ID: ").append(event.getId()).append(")")
-                .append("\n  • From: ").append(path.getFileName())
+                .append("\n  • From: ").append(source)
                 .append(" (").append(type.name()).append(", ").append(formatSize(bytes.length)).append(")")
                 .append("\n  • Was: ")
                 .append(!beforeKnown ? "could not be read" : before == null ? "no cover image" : before)
@@ -751,6 +766,34 @@ public class ScheduledEventService {
                     + " the image it already had.");
         }
         return result.toString();
+    }
+
+    /**
+     * What a failed cover write actually left behind, given the event read back afterwards.
+     *
+     * <p>Separated from the call so it can be tested: every branch here is a claim about whether a
+     * write took effect, this is the block most likely to be reworded into saying the wrong one,
+     * and exercising it in place would mean mocking JDA's request construction.
+     *
+     * @param now         the cover the event has now, or null if it has none
+     * @param before      the cover it had before the write, or null if it had none
+     * @param beforeKnown whether {@code before} was actually read, as opposed to unavailable
+     */
+    static String describeOutcome(String now, String before, boolean beforeKnown) {
+        if (now == null) {
+            return " The event currently has no cover image.";
+        }
+        if (!beforeKnown) {
+            return " The event currently has cover " + now + ", but the previous one could not be"
+                    + " read, so whether this call changed it is unknown.";
+        }
+        if (now.equals(before)) {
+            return " The event still has the cover it had before this call.";
+        }
+        // Reached when the write landed and the response was lost. Saying "failed" and leaving it
+        // there would send someone to re-upload a change that already took.
+        return " The event's cover DID change despite the error, and is now " + now
+                + " — the request was applied and its response lost.";
     }
 
     /** Bytes below a kilobyte reported as bytes, so a small but valid file is not shown as "0 KB". */

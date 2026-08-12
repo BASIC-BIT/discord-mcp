@@ -64,19 +64,21 @@ docker run -d -i \
   -e DISCORD_MCP_DOWNLOAD_ROOT \
   -e DISCORD_MCP_FILE_ROOT \
   -v discord-mcp-downloads:/var/lib/discord-mcp/downloads \
-  -v discord-mcp-uploads:/var/lib/discord-mcp/uploads \
+  -v "$PWD/uploads":/var/lib/discord-mcp/uploads:ro \
   saseq/discord-mcp:latest
 ```
 
 > [!TIP]
 > `-e DISCORD_MCP_DOWNLOAD_ROOT` and the downloads `-v` are only needed for
 > `download_attachment`; `-e DISCORD_MCP_FILE_ROOT` and the uploads `-v` only for local-path
-> uploads (`send_file`'s `filePath` and `set_guild_scheduled_event_image`). Leave either pair
-> off and those tools refuse; nothing else changes. Two volumes rather than one because
-> reading uploads and writing downloads are separate grants — sharing a single path is what
-> lets `download_attachment` stage a cover image directly, and is worth deciding on rather
-> than inheriting. The named volumes are also what keep files across `docker rm`; a
-> container-local path loses them on recreate.
+> uploads (`send_file`'s `filePath`, and `set_guild_scheduled_event_image` when you are not
+> using its `imageUrl`). Leave either pair off and those tools refuse; nothing else changes.
+>
+> The two are different shapes on purpose. Downloads are a **named volume**, because the app
+> writes them and they should survive `docker rm`. Uploads are a **read-only bind mount**,
+> because the operator puts files there and the app only reads them — a named volume cannot be
+> written from the host without `docker cp`, which makes "put the file there" impossible to
+> act on, and `:ro` enforces at the mount what the docs describe.
 
 Default MCP endpoint URL (HTTP profile): `http://localhost:8085/mcp`
 
@@ -199,12 +201,17 @@ no new directory — and only the destination differs, bytes reaching a public C
 than a channel message. The magic-byte check narrows it further to real PNG and JPEG
 bodies. Deployments that filter tools by name do not acquire it at all until they list it.
 
-**Pointing this at `DISCORD_MCP_DOWNLOAD_ROOT`** is what chains `download_attachment` into
-`set_guild_scheduled_event_image`, and is the only way to get a poster from Discord onto an
-event without moving files by hand. It is also a real widening: `send_file` can then read
-anything `download_attachment` saved, and what it saved was chosen by whoever got the agent
-to call it. Worth doing deliberately, with the two tools' allowlisting in mind; not worth
-copying from a quickstart.
+**You probably do not need this for `set_guild_scheduled_event_image`.** That tool takes an
+`imageUrl` as well as a `filePath`, and a poster already posted to Discord has a CDN URL, so
+the common case — put an image that is already in Discord onto an event — needs no
+filesystem grant at all. The URL goes through the same `RemoteFetchGuard` as `send_file`'s
+`fileUrl`.
+
+**Pointing this at `DISCORD_MCP_DOWNLOAD_ROOT`** chains `download_attachment` into the tools
+that read local paths. It is a real widening: `send_file` can then read anything
+`download_attachment` saved, and what it saved was chosen by whoever got the agent to call
+it. Since `imageUrl` covers the case that used to motivate it, treat this as something to do
+only when you have a reason beyond convenience.
 
 ### `DISCORD_MCP_DOWNLOAD_ROOT`
 
@@ -539,7 +546,7 @@ mvn -Dtest=DiscordLiveIntegrationTest test
 #### Scheduled Events Management
 - [`create_guild_scheduled_event`](): Schedule a new event on the server (voice, stage, or external), optionally recurring
 - [`edit_guild_scheduled_event`](): Modify event details or change its status (start, complete, cancel), including the recurrence rule
-- [`set_guild_scheduled_event_image`](): Replace an event's cover image with a local PNG or JPEG (max 5MB, no animation; covers display at 5:2, so crop first). Requires [`DISCORD_MCP_FILE_ROOT`](#-security-notes). Separate from `edit_guild_scheduled_event` so a deployment can allow event edits without granting a local-file read
+- [`set_guild_scheduled_event_image`](): Replace an event's cover image from a direct `imageUrl` or a local `filePath` (max 5MB, no animation; covers display at 5:2, so crop first). `imageUrl` needs no filesystem access; `filePath` requires [`DISCORD_MCP_FILE_ROOT`](#-security-notes). Separate from `edit_guild_scheduled_event` so a deployment can allow event edits without granting a local-file read
 - [`delete_guild_scheduled_event`](): Permanently delete a scheduled event
 - [`list_guild_scheduled_events`](): List all active and scheduled events on the server, showing which ones recur and their cover image URL
 

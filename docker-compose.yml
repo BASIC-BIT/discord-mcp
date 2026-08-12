@@ -22,8 +22,14 @@ services:
       # set_guild_scheduled_event_image, and is a decision rather than a default.
       DISCORD_MCP_FILE_ROOT: ${DISCORD_MCP_FILE_ROOT:-}
     volumes:
+      # A named volume, because the app writes downloads and they should survive `docker rm`.
       - discord-mcp-downloads:/var/lib/discord-mcp/downloads
-      - discord-mcp-uploads:/var/lib/discord-mcp/uploads
+      # A read-only bind mount, because the opposite is true of uploads: the operator puts files
+      # here and the app only ever reads them. A named volume would be the wrong shape — nothing
+      # on the host can write into one without `docker cp` or a helper container, which makes
+      # "put the file there" advice impossible to follow. `:ro` also enforces at the mount what
+      # the docs describe, so this path cannot become a second place the app writes.
+      - ./uploads:/var/lib/discord-mcp/uploads:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8085/actuator/health | grep -q '\"status\":\"UP\"'"]
       interval: 30s
@@ -33,4 +39,3 @@ services:
 
 volumes:
   discord-mcp-downloads:
-  discord-mcp-uploads:
