@@ -531,8 +531,9 @@ class ScheduledEventServiceTest {
     @Test
     void aValidLocalCoverIsReadBeforeTheEventAndChangesNothingWhenThatReadFails(@TempDir Path dir)
             throws IOException {
-        // The source is read first — deliberately, so a path out of the root or a URL aimed at a
-        // link-local address is refused before any Discord request is formed. A file inside the
+        // The source is read first — deliberately, so a wrong one is refused without spending a
+        // Discord request. An economy, not a defence: both guards refuse wherever they run. A
+        // file inside the
         // root therefore passes the guard and is read, and the call then stops at the event read,
         // which the mocked JDA cannot serve — RestActionImpl casts its JDA argument to JDAImpl and
         // a Mockito proxy is not one. So the exact string pinned below is an artifact of the mock,

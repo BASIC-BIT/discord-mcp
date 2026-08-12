@@ -756,6 +756,16 @@ public class ScheduledEventService {
         // now is refused before up to 8 MB is fetched or read from disk, rather than after.
         requireSnowflake(eventId, "eventId");
 
+        // The source is read before anything establishes the event exists, and what that buys is
+        // narrow: one saved Discord request when the source is wrong — outside the root, aimed at
+        // a link-local address, 12 MB, a WebP. It is not what makes those refusals safe.
+        // RemoteFetchGuard rejects an internal address wherever it runs and LocalFileGuard
+        // confines wherever it runs; neither depends on this ordering.
+        //
+        // What it costs is that a syntactically valid eventId naming no event still spends the
+        // fetch. Kept anyway: a caller can name a real event as cheaply as a fake one, so the
+        // ordering bounds bandwidth rather than exposure, and the common mistake here is the
+        // wrong file — which this refuses without asking Discord anything.
         String source;
         byte[] bytes;
         try {
@@ -968,40 +978,41 @@ public class ScheduledEventService {
      *               read — the call cannot get this far otherwise — but its cover field may not
      *               have been, and then there is nothing to compare against.
      */
-    static String describeOutcome(Cover nowRead, Cover beforeRead) {
-        if (nowRead.state() == Cover.State.UNKNOWN) {
+    static String describeOutcome(Cover now, Cover before) {
+        if (now.state() == Cover.State.UNKNOWN) {
             // The event came back and its cover field did not parse. Nothing about the write
             // follows from that — least of all that it did not take.
             return " The event was read back, but its cover could not be, so whether this call"
                     + " applied is unknown — check the event before retrying.";
         }
-        String now = nowRead.url();
-        String before = beforeRead.url();
-        if (beforeRead.state() == Cover.State.UNKNOWN) {
+        String nowUrl = now.url();
+        String beforeUrl = before.url();
+        if (before.state() == Cover.State.UNKNOWN) {
             // Every clause below compares against what was there. Without that, the only honest
             // statement is what is there now.
-            return now == null
+            return nowUrl == null
                     ? " The event has no cover image now. What it had before this call could not"
                     + " be read, so whether that is a change is unknown — check the event."
-                    : " The event's cover is now " + now + ". What it had before this call could"
-                    + " not be read, so whether this call set it is unknown — check the event.";
+                    : " The event's cover is now " + nowUrl + ". What it had before this call"
+                    + " could not be read, so whether this call set it is unknown — check the"
+                    + " event.";
         }
-        if (now == null) {
+        if (nowUrl == null) {
             // Losing a cover is a larger change than swapping one, so it must not share the
             // wording used for an event that never had a cover at all.
-            return before != null
-                    ? " The event's cover was REMOVED during this call — it had " + before
+            return beforeUrl != null
+                    ? " The event's cover was REMOVED during this call — it had " + beforeUrl
                     + " before and has none now. Check the event rather than re-uploading blind."
                     : " The event currently has no cover image.";
         }
-        if (now.equals(before)) {
+        if (nowUrl.equals(beforeUrl)) {
             return " The event still has the cover it had before this call.";
         }
-        if (before == null) {
+        if (beforeUrl == null) {
             // Knowable, and asymmetric the other way from a removal: it had none and now has one.
             // "CHANGED" is true but weaker than what the read supports. The concurrent-editor
             // hedge still applies, so it is kept verbatim.
-            return " The event's cover was ADDED during this call and is now " + now
+            return " The event's cover was ADDED during this call and is now " + nowUrl
                     + ". That may mean the request applied and only its response was lost, or that"
                     + " something else set it in the meantime — this cannot tell them apart, so"
                     + " check the event rather than re-uploading blind.";
@@ -1012,7 +1023,7 @@ public class ScheduledEventService {
         // identical from here, and nothing available correlates the current image with the bytes
         // this call sent. Report the observation and let the caller look, rather than asserting
         // authorship of a change that may not be this one's.
-        return " The event's cover CHANGED during this call and is now " + now
+        return " The event's cover CHANGED during this call and is now " + nowUrl
                 + ". That may mean the request applied and only its response was lost, or that"
                 + " something else changed it in the meantime — this cannot tell them apart, so"
                 + " check the event rather than re-uploading blind.";

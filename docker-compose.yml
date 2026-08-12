@@ -17,14 +17,11 @@ services:
       DISCORD_MCP_DOWNLOAD_ROOT: ${DISCORD_MCP_DOWNLOAD_ROOT:-}
       # Uncomment together with the uploads volume below to enable local-path uploads. Until
       # then send_file and set_guild_scheduled_event_image both refuse local paths — the latter
-      # still works via its imageUrl.
-      #
-      # Shipped commented rather than propagated-but-empty, because this variable was not
-      # declared here before: a compose operator who once put DISCORD_MCP_FILE_ROOT in .env,
-      # saw nothing happen, and left it there would have it start reaching the container on
-      # upgrade. If that value is the downloads path — which exists in the container — the
-      # upgrade would silently switch on the chained read-and-write root this file argues
-      # against, and hand it to send_file, which has no format check at all.
+      # still works via its imageUrl. Commented rather than propagated-but-empty on purpose:
+      # this variable was not declared here before, so an upgrade must not begin delivering a
+      # value someone left in .env back when it did nothing. Read DISCORD_MCP_FILE_ROOT under
+      # "Security notes" in the README before uncommenting; do not point it at the downloads
+      # directory.
       #DISCORD_MCP_FILE_ROOT: ${DISCORD_MCP_FILE_ROOT:-}
     volumes:
       # A named volume, because the app writes downloads and they should survive `docker rm`.
