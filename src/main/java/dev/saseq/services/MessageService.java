@@ -14,12 +14,10 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermissions;
@@ -187,7 +185,7 @@ public class MessageService {
         // accept a local path cannot reintroduce either gap by writing its own version. See the
         // class doc there for why that is not hypothetical.
         Path path = LocalFileGuard.resolveWithinRoot(filePath, allowedRoot(), "filePath", "upload");
-        byte[] bytes = LocalFileGuard.readBounded(path, MAX_UPLOAD_BYTES, "File");
+        byte[] bytes = LocalFileGuard.readBounded(path, MAX_UPLOAD_BYTES, "file");
         String name = overrideName != null ? overrideName : path.getFileName().toString();
         return new ResolvedFile(bytes, name);
     }

@@ -26,6 +26,17 @@ public final class LocalFileGuard {
     }
 
     /**
+     * A file that was rejected for its size alone, so a caller can add advice specific to what it
+     * was reading. Mirrors {@link RemoteFetchGuard.TooLargeException}: still an
+     * {@link IllegalArgumentException}, so callers that do not care are unaffected.
+     */
+    public static class TooLargeException extends IllegalArgumentException {
+        public TooLargeException(String message) {
+            super(message);
+        }
+    }
+
+    /**
      * Resolve a configured root directory, rejecting the shapes that would confine nothing.
      *
      * @param configured   the raw configured value
@@ -97,7 +108,10 @@ public final class LocalFileGuard {
      *
      * @param real     a path already resolved by {@link #resolveWithinRoot}
      * @param maxBytes the largest body to accept
-     * @param what     what the file is, for the error message
+     * @param what     a lowercase noun for what is being read ("file", "cover image"). It appears
+     *                 mid-sentence in one message and at the start of the other, so it is stored
+     *                 lowercase and capitalized at the point of use rather than reading as
+     *                 "Failed to read Cover image".
      */
     public static byte[] readBounded(Path real, int maxBytes, String what) {
         byte[] bytes;
@@ -107,9 +121,13 @@ public final class LocalFileGuard {
             throw new IllegalArgumentException("Failed to read " + what + ": " + e.getMessage());
         }
         if (bytes.length > maxBytes) {
-            throw new IllegalArgumentException(
-                    what + " exceeds the " + (maxBytes / (1024 * 1024)) + " MB limit.");
+            throw new TooLargeException(capitalize(what)
+                    + " exceeds the " + (maxBytes / (1024 * 1024)) + " MB limit.");
         }
         return bytes;
+    }
+
+    private static String capitalize(String s) {
+        return s.isEmpty() ? s : Character.toUpperCase(s.charAt(0)) + s.substring(1);
     }
 }

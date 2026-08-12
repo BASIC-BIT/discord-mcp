@@ -224,9 +224,9 @@ class ScheduledEventServiceTest {
     }
 
     @Test
-    void anOversizedCoverIsRefusedWithoutTouchingDiscord(@TempDir Path dir) throws IOException {
-        // The normal case, not an exotic one: the square poster masters this exists to publish run
-        // 6-17 MB before they are cropped.
+    void anOversizedCoverIsRefusedWithAdviceRatherThanJustALimit(@TempDir Path dir) throws IOException {
+        // The ordinary case, not an exotic one: a full-resolution master is usually both too big
+        // and the wrong shape, so the limit on its own leaves the caller stuck.
         Path root = Files.createDirectory(dir.resolve("uploads"));
         byte[] big = new byte[10 * 1024 * 1024 + 1];
         System.arraycopy(png(), 0, big, 0, png().length);
@@ -235,7 +235,8 @@ class ScheduledEventServiceTest {
 
         assertThatThrownBy(() -> service.setScheduledEventImage(null, "1", file.toString()))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("10 MB limit");
+                .hasMessageContaining("10 MB limit")
+                .hasMessageContaining("Crop it to 5:2");
     }
 
     private static byte[] png() {

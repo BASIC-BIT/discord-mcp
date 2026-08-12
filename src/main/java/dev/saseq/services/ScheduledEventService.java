@@ -45,6 +45,32 @@ public class ScheduledEventService {
     @Value("${DISCORD_GUILD_ID:}")
     private String defaultGuildId;
 
+    /**
+     * The only directory {@code set_guild_scheduled_event_image} may read a cover from.
+     *
+     * <p>The same variable {@code send_file} uses, and a separate field rather than a shared bean
+     * because Spring injects per-bean. Unset means this tool refuses; it has no other input, so
+     * there is nothing to fall back to. Package-private so tests can set it without Spring.
+     */
+    @Value("${DISCORD_MCP_FILE_ROOT:}")
+    String coverFileRoot;
+
+    /**
+     * A local pre-check on cover size, not an authoritative one.
+     *
+     * <p>Discord's own ceiling is not stated in the API docs, and {@link Icon} base64-encodes the
+     * body, so a file passing this check becomes a request about a third larger. A body between
+     * this limit and whatever Discord actually enforces is rejected remotely instead — which is
+     * why the write below reports Discord's refusal rather than letting a raw JDA exception
+     * surface. Same reasoning as {@code MAX_UPLOAD_BYTES}: Discord is the correct authority for a
+     * limit that cannot be determined locally, and this exists to catch the common case early.
+     *
+     * <p>Tripping it is an ordinary outcome rather than an unusual one: a source poster is
+     * commonly a full-resolution square or portrait master that has to be cropped to the display
+     * shape anyway, and those routinely exceed it. The error says so.
+     */
+    private static final int MAX_COVER_BYTES = 10 * 1024 * 1024;
+
     public ScheduledEventService(JDA jda) {
         this.jda = jda;
     }
@@ -332,13 +358,9 @@ public class ScheduledEventService {
         if (event.getDescription() != null && !event.getDescription().isEmpty()) {
             sb.append("\n  • Description: ").append(event.getDescription());
         }
-        // Reported for both states. "no cover image" is the more useful of the two answers and the
-        // one that was previously unobtainable: an event's cover was invisible here, so a caller
-        // asking what a listing showed could only guess. A stale cover looks identical to a
-        // correct one from the outside, and one of these events ran for six months showing a
-        // poster for a different month.
-        String image = event.getImageUrl();
-        sb.append("\n  • Cover image: ").append(image == null ? "none" : image);
+        // No cover line here on purpose. formatEvent's only caller is createScheduledEvent, on an
+        // event made moments earlier by a call that cannot set an image, so it could only ever
+        // print "none". listScheduledEvents reports the cover, from a live read.
         sb.append("\n  • Interested: ").append(event.getInterestedUserCount()).append(" users");
         return sb.toString();
     }
@@ -596,18 +618,6 @@ public class ScheduledEventService {
     }
 
     /**
-     * Discord's ceiling for a scheduled event cover.
-     *
-     * <p>Worth knowing when this fires: the posters this exists to crop are square masters at
-     * 4096px and up, which land between 6 MB and 17 MB. Hitting the limit is the normal case for
-     * an uncropped master, not an unusual one, so the error says what to do about it.
-     */
-    private static final int MAX_COVER_BYTES = 10 * 1024 * 1024;
-
-    @Value("${DISCORD_MCP_FILE_ROOT:}")
-    String coverFileRoot;
-
-    /**
      * Deliberately its own tool rather than an {@code image} parameter on
      * {@code edit_guild_scheduled_event}.
      *
@@ -617,7 +627,7 @@ public class ScheduledEventService {
      * acquire a local-file read. Splitting it keeps the two decisions separate: a deployment can
      * allow event edits and refuse cover uploads.
      */
-    @Tool(name = "set_guild_scheduled_event_image", description = "Replace a scheduled event's cover image with a local PNG or JPEG. The file must be under DISCORD_MCP_FILE_ROOT — use download_attachment to put a poster there first. Discord shows the middle 5:2 band of what you upload, so crop to that shape before calling. Max 10MB, no animation.")
+    @Tool(name = "set_guild_scheduled_event_image", description = "Replace a scheduled event's cover image with a local PNG or JPEG. The file must be under DISCORD_MCP_FILE_ROOT — use download_attachment to put a poster there first. Discord displays covers at 5:2 (800x320 recommended) and crops anything else, so crop to 5:2 yourself to control what is kept. Max 10MB, no animation.")
     public String setScheduledEventImage(
             @ToolParam(description = "Discord server ID", required = false) String guildId,
             @ToolParam(description = "ID of the scheduled event") String eventId,
@@ -637,7 +647,16 @@ public class ScheduledEventService {
         Path path = LocalFileGuard.resolveWithinRoot(
                 filePath, LocalFileGuard.resolveRoot(coverFileRoot, "DISCORD_MCP_FILE_ROOT"),
                 "filePath", "upload");
-        byte[] bytes = LocalFileGuard.readBounded(path, MAX_COVER_BYTES, "Cover image");
+        byte[] bytes;
+        try {
+            bytes = LocalFileGuard.readBounded(path, MAX_COVER_BYTES, "cover image");
+        } catch (LocalFileGuard.TooLargeException e) {
+            // The limit alone leaves the caller stuck: an oversized master is the ordinary input
+            // here, and the fix is the same crop the display shape needs anyway.
+            throw new IllegalArgumentException(e.getMessage()
+                    + " Crop it to 5:2 and scale it down first — a cover is displayed at 800x320,"
+                    + " so a full-resolution master is both too large and the wrong shape.");
+        }
         Icon.IconType type = coverType(bytes);
 
         Guild guild = getGuild(guildId);
@@ -657,7 +676,18 @@ public class ScheduledEventService {
             // event, and a failed read cannot support it.
         }
 
-        event.getManager().setImage(Icon.from(bytes, type)).complete();
+        try {
+            event.getManager().setImage(Icon.from(bytes, type)).complete();
+        } catch (RuntimeException e) {
+            // Discord's real ceiling is undocumented and applies to a base64 body a third larger
+            // than the file, so a size rejection can land here having passed MAX_COVER_BYTES. Say
+            // what was sent: a bare JDA error reads as a permissions or event problem, and the
+            // caller cannot tell it apart from one without knowing the size that was attempted.
+            throw new IllegalArgumentException("Discord rejected the cover image ("
+                    + e.getMessage() + "). Sent " + bytes.length / 1024 + " KB of "
+                    + type.name() + " from " + path.getFileName()
+                    + ". The event was not changed.", e);
+        }
 
         // Re-read rather than trusting the write. The manager reports success on an accepted
         // request, but the entity in memory keeps the old hash, so reporting from it would print
@@ -775,13 +805,16 @@ public class ScheduledEventService {
                     (response, request) -> response.getArray()).complete();
             for (int i = 0; i < raw.length(); i++) {
                 DataObject o = raw.getObject(i);
+                String id = o.getString("id");
                 DataObject rule = recurrenceOf(o);
                 if (rule != null) {
-                    rules.put(o.getString("id"), rule);
+                    rules.put(id, rule);
                 }
-                String hash = o.getString("image", null);
-                if (hash != null) {
-                    covers.put(o.getString("id"), coverUrl(o.getString("id"), hash));
+                // Same helper the write path uses, so "read the cover from a raw event" has one
+                // spelling rather than two that can drift apart.
+                String cover = coverUrlOf(o, id);
+                if (cover != null) {
+                    covers.put(id, cover);
                 }
             }
             rawKnown = true;

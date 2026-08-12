@@ -38,9 +38,9 @@ export SPRING_PROFILES_ACTIVE=http
 # not a host path — see Security notes.
 export DISCORD_MCP_DOWNLOAD_ROOT=/var/lib/discord-mcp/downloads
 # Only if you want local-path uploads: send_file's filePath, and
-# set_guild_scheduled_event_image, which has no other input. The same path as above
-# chains download_attachment into them; a different one keeps reads and writes apart.
-export DISCORD_MCP_FILE_ROOT=/var/lib/discord-mcp/downloads
+# set_guild_scheduled_event_image, which has no other input. Point it at a directory
+# holding nothing but uploads — see Security notes before pointing it at the one above.
+# export DISCORD_MCP_FILE_ROOT=/var/lib/discord-mcp/uploads
 ```
 
 > [!IMPORTANT]
@@ -185,6 +185,21 @@ filesystem root (`/`) is rejected, since it would confine nothing.
 
 Run the server as a dedicated unprivileged user regardless. The env var is a guard, not a
 substitute for one.
+
+**On upgrading:** a deployment that already set this for `send_file` gains
+`set_guild_scheduled_event_image` when the jar is updated, with no config change. That is a
+narrower case than the fallback `DISCORD_MCP_DOWNLOAD_ROOT` refuses below, and the
+difference is why it is allowed: the filesystem grant is identical — same root, same read,
+no new directory — and only the destination differs, bytes reaching a public CDN URL rather
+than a channel message. The magic-byte check narrows it further to real PNG and JPEG
+bodies. Deployments that filter tools by name do not acquire it at all until they list it.
+
+**Pointing this at `DISCORD_MCP_DOWNLOAD_ROOT`** is what chains `download_attachment` into
+`set_guild_scheduled_event_image`, and is the only way to get a poster from Discord onto an
+event without moving files by hand. It is also a real widening: `send_file` can then read
+anything `download_attachment` saved, and what it saved was chosen by whoever got the agent
+to call it. Worth doing deliberately, with the two tools' allowlisting in mind; not worth
+copying from a quickstart.
 
 ### `DISCORD_MCP_DOWNLOAD_ROOT`
 
