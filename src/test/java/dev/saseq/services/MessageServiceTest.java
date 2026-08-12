@@ -35,6 +35,25 @@ import static org.mockito.Mockito.when;
 
 class MessageServiceTest {
 
+    @Test
+    void onlyADirectoryMeantToBeReadFromBecomesARoot() throws NoSuchMethodException {
+        // LocalFileGuard.resolveWithinRoot confines against a Root, so a directory this service
+        // writes to must not be one — otherwise passing the download root there compiles, which is
+        // the chained read-and-write configuration the README's security notes argue against,
+        // reached by accident.
+        //
+        // A runtime check inside the caller could not carry this: it compared the root's own name
+        // against the literal it had just been built from, three statements above, in the same
+        // method. Tautologies read like guards. The compiler does not. Living beside the methods
+        // it names, so renaming one fails a test in the file being renamed.
+        assertThat(MessageService.class.getDeclaredMethod("allowedDownloadRoot").getReturnType())
+                .as("the download root is written to, so it must not be usable as a read root")
+                .isEqualTo(Path.class);
+        assertThat(MessageService.class.getDeclaredMethod("allowedRoot").getReturnType())
+                .as("the upload root is read from by caller-supplied path, so it is a Root")
+                .isEqualTo(LocalFileGuard.Root.class);
+    }
+
     private static final String CHANNEL_ID = "345678901234567890";
     private static final String MESSAGE_ID = "456789012345678901";
 

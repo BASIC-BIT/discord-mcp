@@ -695,7 +695,9 @@ public class ScheduledEventService {
      * occurrence while the series re-anchors, and this PATCHes the same endpoint — so if that
      * applies to {@code image} too, the read-back would show a hash that looks right for a cover
      * that landed somewhere the caller did not mean. Nobody has checked; saying so is cheaper
-     * than the reader assuming it was.
+     * than the reader assuming it was. Said in the {@code @Tool} description as well as here,
+     * because a caveat only a maintainer reads cannot act on anything: the description is the
+     * only text the model sees, and the success message otherwise reads as confirmation.
      *
      * <p>Takes {@code imageUrl} as well as {@code filePath} for a related reason. With only a
      * local path, the ordinary job — put a poster that is already in Discord onto an event —
@@ -704,7 +706,7 @@ public class ScheduledEventService {
      * README argues against. A tool whose safe configuration is the inconvenient one gets
      * configured unsafely.
      */
-    @Tool(name = "set_guild_scheduled_event_image", description = "Replace a scheduled event's cover image with a PNG or JPEG, from a direct imageUrl OR a local filePath under DISCORD_MCP_FILE_ROOT. Prefer imageUrl: a poster already posted to Discord has a CDN URL, and using it needs no local file at all. Discord displays covers at 5:2 (800x320 recommended) and crops anything else, so crop to 5:2 yourself to control what is kept. Max 5MB. Animation is never shown, so an animated GIF is refused and an animated PNG plays as a still.")
+    @Tool(name = "set_guild_scheduled_event_image", description = "Replace a scheduled event's cover image with a PNG or JPEG, from a direct imageUrl OR a local filePath under DISCORD_MCP_FILE_ROOT. Prefer imageUrl: a poster already posted to Discord has a CDN URL, and using it needs no local file at all. Discord displays covers at 5:2 (800x320 recommended) and crops anything else, so crop to 5:2 yourself to control what is kept. Max 5MB. Animation is never shown, so an animated GIF is refused and an animated PNG plays as a still. On a recurring event the effect is unverified: editing one is known to change a single occurrence, so check the series after setting a cover on it.")
     public String setScheduledEventImage(
             @ToolParam(description = "Discord server ID", required = false) String guildId,
             @ToolParam(description = "ID of the scheduled event") String eventId,
@@ -859,35 +861,69 @@ public class ScheduledEventService {
         // but the catch's first sentence says one. The read before the write has its own
         // ParsingException catch to avoid exactly that claim; this is the same bar on the other
         // side. Both are practically unreachable, since Discord returns the hash it just stored.
-        String after = null;
-        boolean afterKnown = true;
+        String after;
+        CoverApplied outcome;
         try {
             after = coverUrlOf(applied, eventId);
+            outcome = after == null ? CoverApplied.ABSENT : CoverApplied.CONFIRMED;
         } catch (ParsingException unreadable) {
-            afterKnown = false;
+            after = null;
+            outcome = CoverApplied.UNREADABLE;
         }
-
         // `after` came from the PATCH response itself, so it is what Discord stored rather than
         // what was sent — no separate read-back, and no window in which someone else's change
         // could be reported as this call's result.
-        StringBuilder result = new StringBuilder("Set the cover image on ")
+        return describeCoverWrite(eventName, eventId, source, type, bytes.length, before, after,
+                outcome);
+    }
+
+    /**
+     * What a PATCH response established about the cover, which is not the same question as whether
+     * the write was accepted. One value rather than a URL and a flag, so the sentence that names
+     * the outcome and the line that reports it cannot disagree.
+     */
+    enum CoverApplied {
+        /** The response carried a cover URL. That is what Discord has. */
+        CONFIRMED,
+        /** The response parsed and carried no cover at all. */
+        ABSENT,
+        /** The response would not parse, so it establishes nothing about the event. */
+        UNREADABLE
+    }
+
+    /**
+     * What a cover write can be said to have achieved.
+     *
+     * <p>Separated from the call for the reason {@code describeOutcome} was: every line here is a
+     * claim, and no test can reach this through a live PATCH. "Set the cover image on X" above
+     * "Now: no cover image" is two answers to one question, which is what an unconditional
+     * headline produced.
+     */
+    static String describeCoverWrite(String eventName, String eventId, String source,
+                                     Icon.IconType type, int sentBytes, String before,
+                                     String after, CoverApplied outcome) {
+        StringBuilder result = new StringBuilder(outcome == CoverApplied.CONFIRMED
+                        // "Set" only when the response showed the cover Discord stored. Accepted
+                        // and confirmed are different facts, and this sentence states the second.
+                        ? "Set the cover image on " : "Sent the cover image to ")
                 .append(eventName).append(" (ID: ").append(eventId).append(")")
                 .append("\n  • From: ").append(source)
-                .append(" (").append(type.name()).append(", ").append(FileSizes.format(bytes.length)).append(")")
+                .append(" (").append(type.name()).append(", ").append(FileSizes.format(sentBytes)).append(")")
                 .append("\n  • Was: ").append(before == null ? "no cover image" : before)
-                // Absence at read-back does not establish a cause. The write was accepted, so the
-                // upload may well have landed and then been removed or replaced by someone else
-                // between the two calls. "Discord did not keep it" named one explanation and would
-                // prompt a retry that could overwrite a deliberate change — the same
-                // over-attribution the failure path above stopped making.
                 .append("\n  • Now: ")
-                .append(!afterKnown
-                        // Not "no cover image": the response said something this could not read,
-                        // which establishes nothing about what the event now has.
-                        ? "applied, but Discord's response did not carry a readable cover — check"
-                        + " the event"
-                        : after == null ? "no cover image — check the event before re-uploading" : after);
-        if (after != null && after.equals(before)) {
+                .append(switch (outcome) {
+                    case CONFIRMED -> after;
+                    // Absence does not establish a cause. The write was accepted, so the upload
+                    // may well have landed and then been removed or replaced by someone else.
+                    // "Discord did not keep it" names one explanation and would prompt a retry
+                    // that could overwrite a deliberate change.
+                    case ABSENT -> "no cover image — check the event before re-uploading";
+                    // Not "no cover image": the response said something this could not read, which
+                    // establishes nothing about what the event now has.
+                    case UNREADABLE -> "unknown — Discord accepted the write, but its response did"
+                            + " not carry a readable cover";
+                });
+        if (outcome == CoverApplied.CONFIRMED && after.equals(before)) {
             // An unchanged hash is worth saying out loud: the likeliest cause is uploading the
             // file that was already there, and the call would otherwise read as a successful
             // change. Whether Discord derives the hash from content or mints one per upload is
@@ -1022,9 +1058,13 @@ public class ScheduledEventService {
                     .append(c.terminal() == 1 ? "it" : "them");
         }
         if (c.unlisted() > 0) {
+            // No cause named. A lagging cache is the likeliest one, but a missing intent, a
+            // permission-scoped view and a gateway gap look identical from here, and every other
+            // clause in this function is careful not to attribute — describeOutcome will not even
+            // claim authorship of a cover change for the same reason.
             join(sb).append("Discord returned ").append(c.unlisted()).append(" event")
                     .append(c.unlisted() == 1 ? "" : "s").append(" not in this list, so the list is")
-                    .append(" incomplete — the cache has not caught up");
+                    .append(" incomplete");
         }
         if (c.unidentifiable() > 0) {
             // Its own clause because it belongs to no event. Folding it into unreadable would

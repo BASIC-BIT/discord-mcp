@@ -221,9 +221,12 @@ class ScheduledEventServiceTest {
     void anEventDiscordReturnedButTheCacheLacksIsSaidToBeMissingFromTheList() {
         // The stronger skew: such an event has no row at all, so there is nowhere to hang a
         // per-event caveat and the list would otherwise read as complete.
+        //
+        // The fact, not a cause. A lagging cache is the likeliest explanation and not the only
+        // one, and naming it sends the reader to wait for something that may never arrive.
         assertThat(ScheduledEventService.coverCaveat(new CoverCounts(3, 0, 0, 0, 0, 2, 0, 0), true))
                 .isEqualTo("\n(Discord returned 2 events not in this list, so the list is"
-                        + " incomplete — the cache has not caught up.)");
+                        + " incomplete.)");
     }
 
     @Test
@@ -389,6 +392,50 @@ class ScheduledEventServiceTest {
         assertThatThrownBy(() -> ScheduledEventService.coverUrlOf(
                 DataObject.empty().put("image", ""), "1"))
                 .isInstanceOf(ParsingException.class);
+    }
+
+    private static final String COVER_URL = "https://cdn.discordapp.com/guild-events/11/aaa.png";
+
+    @Test
+    void onlyAResponseThatCarriedTheCoverSaysItWasSet() {
+        // The headline and the "Now:" line answer the same question, and only one arrangement of
+        // them is honest in each case. An unconditional "Set the cover image on X" sat above
+        // "Now: no cover image" — a confirmation and a contradiction in the same message.
+        assertThat(ScheduledEventService.describeCoverWrite("Community Night", "11", "poster.png",
+                Icon.IconType.PNG, 2048, null, COVER_URL, ScheduledEventService.CoverApplied.CONFIRMED))
+                .startsWith("Set the cover image on Community Night (ID: 11)")
+                .contains("• Was: no cover image")
+                .contains("• Now: " + COVER_URL);
+
+        // Accepted, and the event came back with no cover. The write is not disputed; what it
+        // achieved is, so the sentence stops short of claiming the cover is in place.
+        assertThat(ScheduledEventService.describeCoverWrite("Community Night", "11", "poster.png",
+                Icon.IconType.PNG, 2048, null, null, ScheduledEventService.CoverApplied.ABSENT))
+                .startsWith("Sent the cover image to Community Night (ID: 11)")
+                .contains("• Now: no cover image — check the event")
+                .doesNotContain("Set the cover image");
+
+        // The response would not parse. That establishes nothing at all — least of all that there
+        // is no cover, which is the claim the ABSENT wording above makes.
+        assertThat(ScheduledEventService.describeCoverWrite("Community Night", "11", "poster.png",
+                Icon.IconType.PNG, 2048, COVER_URL, null, ScheduledEventService.CoverApplied.UNREADABLE))
+                .startsWith("Sent the cover image to")
+                .contains("• Was: " + COVER_URL)
+                .contains("• Now: unknown")
+                .doesNotContain("no cover image —");
+    }
+
+    @Test
+    void aCoverHashThatDidNotMoveIsCalledOut() {
+        // Uploading the file that was already there is the likeliest cause, and the message would
+        // otherwise read as a successful change. Only reachable when the response confirmed the
+        // hash — the other two states have no "after" to compare.
+        assertThat(ScheduledEventService.describeCoverWrite("Community Night", "11", "poster.png",
+                Icon.IconType.PNG, 2048, COVER_URL, COVER_URL, ScheduledEventService.CoverApplied.CONFIRMED))
+                .contains("• Unchanged: the event's cover hash did not move");
+        assertThat(ScheduledEventService.describeCoverWrite("Community Night", "11", "poster.png",
+                Icon.IconType.PNG, 2048, null, COVER_URL, ScheduledEventService.CoverApplied.CONFIRMED))
+                .doesNotContain("Unchanged");
     }
 
     @Test
