@@ -688,11 +688,15 @@ public class ScheduledEventService {
         // was the deviation, and it dragged in a cache dependency that made the flow the tool
         // description recommends — create an event, then cover it — fail on first try whenever the
         // gateway had not caught up.
-        String resolvedGuild = resolveGuildId(guildId);
-        if (resolvedGuild == null || resolvedGuild.isEmpty()) {
-            throw new IllegalArgumentException("guildId cannot be null");
-        }
-        if (eventId == null || eventId.isEmpty()) {
+        // getGuild, not just a blank check: the gateway-lag argument for bypassing the cache is
+        // about which events exist, not about which guilds the bot is in, and the cache is
+        // authoritative for the latter. A mistyped guildId is refused here for free rather than
+        // after a fetch and a round trip.
+        Guild guild = getGuild(guildId);
+        String resolvedGuild = guild.getId();
+        // isBlank, matching the source arguments above: "   " is not a supplied id, and treating
+        // it as one encodes it into the route and spends a request to be told so.
+        if (eventId == null || eventId.isBlank()) {
             throw new IllegalArgumentException("eventId cannot be null");
         }
 
@@ -748,6 +752,12 @@ public class ScheduledEventService {
             }
             throw new IllegalArgumentException("Could not read that event before setting its cover"
                     + reason(discordSaidNo) + ". Nothing was changed.");
+        } catch (net.dv8tion.jda.api.exceptions.ParsingException malformed) {
+            // Discord answered; the answer would not parse. The listing keeps "returned but
+            // unparseable" distinct from "not returned" at some length, and collapsing them here
+            // would send the reader to check connectivity for a response that arrived.
+            throw new IllegalArgumentException("Discord returned that event but the response could"
+                    + " not be read" + reason(malformed) + ". Nothing was changed.");
         } catch (RuntimeException unreachable) {
             throw new IllegalArgumentException("Could not reach Discord to read that event before"
                     + " setting its cover" + reason(unreachable) + ". Nothing was changed.");
@@ -917,8 +927,9 @@ public class ScheduledEventService {
                     // be one of these: nothing matches it to a listed event, so "not in the live
                     // read" stops being knowable.
                     .append(c.unidentifiable() > 0
-                            ? " not matched to anything in the live read, and the entries with no"
-                            + " id may be among them, so "
+                            ? " not matched to anything in the live read, and the "
+                            + (c.unidentifiable() == 1 ? "entry" : "entries") + " with no id may be"
+                            + " among " + (c.absent() == 1 ? "it" : "them") + ", so "
                             : " not in the live read, so ")
                     .append(c.absent() == 1 ? "its cover is" : "their covers are").append(" unknown");
         }
@@ -950,10 +961,11 @@ public class ScheduledEventService {
                     .append(c.unidentifiable() == 1 ? " entry" : " entries")
                     .append(" could not be read at all, so ")
                     .append(c.unidentifiable() == 1 ? "it is" : "they are")
-                    // "as either of those", not "either way": the absent clause above says these
-                    // may be among the unmatched events, and "not counted either way" reads as
-                    // contradicting it rather than as saying which tallies exclude them.
-                    .append(" not counted as either of those");
+                    // Not "either of those": this clause emits whenever there are id-less entries,
+                    // including when neither neighbouring clause is present, and then "those" has
+                    // no antecedent. "Against any event" holds in both shapes, and still does not
+                    // contradict the absent clause's hedge that they may be among its events.
+                    .append(" not counted against any event");
         }
         if (c.recurrenceUnreadable() > 0) {
             join(sb).append(c.recurrenceUnreadable())
@@ -1073,17 +1085,44 @@ public class ScheduledEventService {
             // form of the lag `unlistedCount` reports below: an event created out of band exists
             // at Discord before the gateway delivers it here, and answering "no scheduled events"
             // then is the same mistake as calling an uncached event missing — just total.
-            int live;
+            net.dv8tion.jda.api.utils.data.DataArray live;
             try {
-                live = fetchRawList(guild.getId()).length();
+                live = fetchRawList(guild.getId());
             } catch (RuntimeException e) {
                 return "This server's cache holds no scheduled events, and the live list could not"
                         + " be read" + reason(e) + ", so whether there are none is unconfirmed.";
             }
-            return live == 0
-                    ? "No scheduled events found on this server."
-                    : "This server's cache holds no scheduled events, but Discord returned " + live
-                    + ". The cache has not caught up — retry shortly.";
+            if (live.length() == 0) {
+                return "No scheduled events found on this server.";
+            }
+            // The response is in hand, so render it rather than only counting it. A caller told
+            // "the cache has not caught up" and nothing else has no id to act on — and the flow
+            // the cover tool recommends is exactly create-then-cover, which needs one.
+            StringBuilder ahead = new StringBuilder("This server's cache holds no scheduled events,"
+                    + " but Discord returned " + live.length() + ". The cache has not caught up;"
+                    + " these came from the live read and can be acted on by ID:\n");
+            for (int i = 0; i < live.length(); i++) {
+                DataObject o;
+                String id;
+                try {
+                    o = live.getObject(i);
+                    id = o.getString("id", null);
+                } catch (RuntimeException malformed) {
+                    continue;
+                }
+                if (id == null || id.isBlank()) continue;
+                ahead.append("- **").append(o.getString("name", "(unnamed)"))
+                        .append("** (ID: ").append(id).append(")");
+                String cover = null;
+                try {
+                    cover = coverUrlOf(o, id);
+                } catch (RuntimeException malformed) {
+                    // Its cover is unreadable; its id still is not.
+                }
+                if (cover != null) ahead.append("\n  • Cover image: ").append(cover);
+                ahead.append("\n");
+            }
+            return ahead.toString().stripTrailing();
         }
 
         boolean includeUserCount = withUserCount == null || withUserCount.isEmpty() || Boolean.parseBoolean(withUserCount);
@@ -1095,7 +1134,12 @@ public class ScheduledEventService {
         // ScheduledEvent.getImageUrl() for two reasons: it costs nothing extra, and it is live. A
         // cover changed out of band is exactly the case this listing needs to be right about, and
         // that is the case where JDA's cached entity is stale.
-        java.util.Map<String, DataObject> rules = new java.util.HashMap<>();
+        // The rendered text, not the DataObject. recurrenceOf checks only the top-level shape,
+        // so a malformed by_weekday survives it and RecurrenceRule.describe throws — and describe
+        // used to run in the render lambda below, outside every per-entry catch, taking the whole
+        // listing down. Describing inside the guard means such an event reaches the
+        // recurrenceUnreadable caveat like any other unparseable one.
+        java.util.Map<String, String> rules = new java.util.HashMap<>();
         java.util.Map<String, String> covers = new java.util.HashMap<>();
         java.util.Set<String> described = new java.util.HashSet<>();
         // Every id Discord returned, whether or not its details parsed. Kept apart from
@@ -1150,12 +1194,13 @@ public class ScheduledEventService {
                 // entered `described`, so the summary counted the event as having no cover — a
                 // positive claim drawn from a read that failed, which is exactly what the
                 // described/returned split exists to prevent.
-                DataObject rule = null;
+                String rule = null;
                 String cover = null;
                 boolean recurrenceRead = false;
                 boolean coverRead = false;
                 try {
-                    rule = recurrenceOf(o);
+                    DataObject parsed = recurrenceOf(o);
+                    rule = parsed == null ? null : RecurrenceRule.describe(parsed);
                     recurrenceRead = true;
                 } catch (RuntimeException malformed) {
                     // Recurrence is lost for this event; its cover may still be readable.
@@ -1227,8 +1272,8 @@ public class ScheduledEventService {
                             sb.append("  • Type: ").append(e.getType()).append(" | Status: ").append(e.getStatus()).append("\n");
                             sb.append("  • Start: ").append(e.getStartTime());
                             if (e.getEndTime() != null) sb.append(" | End: ").append(e.getEndTime());
-                            DataObject rule = rules.get(e.getId());
-                            if (rule != null) sb.append("\n  • Recurs: ").append(RecurrenceRule.describe(rule));
+                            String rule = rules.get(e.getId());
+                            if (rule != null) sb.append("\n  • Recurs: ").append(rule);
                             // Only the URL, and only when there is one. A per-event "none" would
                             // be a line of nothing per coverless event on a listing with no result
                             // cap; the header count carries that once instead. The recurrence line

@@ -246,8 +246,8 @@ class ScheduledEventServiceTest {
         // "unreadable" (which names an event) nor folded into "not in the live read" (which would
         // blame the cache for a malformed response).
         assertThat(ScheduledEventService.coverCaveat(new CoverCounts(2, 0, 0, 0, 0, 0, 1, 0), true))
-                .isEqualTo("\n(1 entry could not be read at all, so it is not counted as"
-                        + " either of those.)");
+                .isEqualTo("\n(1 entry could not be read at all, so it is not counted against"
+                        + " any event.)");
     }
 
     @Test
@@ -279,9 +279,9 @@ class ScheduledEventServiceTest {
         // says the same thing without the contradiction. Only asserted separately before.
         assertThat(ScheduledEventService.coverCaveat(
                 new CoverCounts(1, 0, 0, 1, 0, 0, 1, 0), true))
-                .contains("may be among them")
-                .contains("not counted as either of those")
-                .doesNotContain("either way");
+                .contains("may be among it")
+                .contains("not counted against any event")
+                .doesNotContain("either of those");
     }
 
     @Test
@@ -305,7 +305,7 @@ class ScheduledEventServiceTest {
         // the one place the wording has to.
         assertThat(ScheduledEventService.coverCaveat(new CoverCounts(1, 0, 0, 1, 0, 0, 1, 0), true))
                 .contains("not matched to anything in the live read")
-                .contains("the entries with no id may be among them")
+                .contains("the entry with no id may be among it")
                 .doesNotContain("not in the live read, so");
         // With nothing unidentifiable, the flat claim is supported and stays.
         assertThat(ScheduledEventService.coverCaveat(new CoverCounts(1, 0, 0, 1, 0, 0, 0, 0), true))
@@ -449,10 +449,12 @@ class ScheduledEventServiceTest {
     }
 
     @Test
-    void anOversizedUrlAndAnOversizedFileFailIdentically() {
+    void anOversizedUrlReportsTheSameLimitAndAdviceAsAnOversizedFile() {
         // The multi-catch exists so both guards' size refusals read the same way. RemoteFetchGuard
         // says only "exceeds the maximum allowed size" — no limit, no capital, no period — so
-        // without this the two branches diverged for the same mistake.
+        // without this the two branches diverged for the same mistake. The file branch's half of
+        // the comparison is anOversizedCoverIsRefusedWithAdviceRatherThanJustALimit; this asserts
+        // the URL branch produces the same two strings, which is the claim the name now makes.
         service.coverFileRoot = "";
 
         try (MockedStatic<RemoteFetchGuard> guard = mockStatic(RemoteFetchGuard.class)) {
