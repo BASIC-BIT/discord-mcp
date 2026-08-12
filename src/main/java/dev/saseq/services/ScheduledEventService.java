@@ -701,8 +701,14 @@ public class ScheduledEventService {
 
         // From the live event, not event.getImageUrl(). JDA's cached entity keeps whatever hash it
         // last saw, so a cover changed out of band — by a human in the Discord UI, most likely —
-        // would be reported as the previous image and would defeat the unchanged check below.
-        // Best-effort: failing to read the old cover is no reason to refuse to set a new one.
+        // would be reported as the previous image.
+        //
+        // This is the third request a successful call makes, and it is kept for the failure path
+        // rather than for the "Was:" line it also feeds. Without it, a thrown write can only say
+        // what the event has now; with it, describeOutcome can separate "still the old cover" from
+        // "something moved" from "the cover was removed" — the difference between a caller who can
+        // act and one who has to go and look. Best-effort: failing to read it is no reason to
+        // refuse to set a new cover.
         String before = null;
         boolean beforeKnown = false;
         try {
@@ -785,7 +791,13 @@ public class ScheduledEventService {
      */
     static String describeOutcome(String now, String before, boolean beforeKnown) {
         if (now == null) {
-            return " The event currently has no cover image.";
+            // Losing a cover is a larger change than swapping one, so it must not share the
+            // wording used for an event that never had a cover at all. Claimable only when the
+            // previous one was actually read; without that there is nothing to compare against.
+            return beforeKnown && before != null
+                    ? " The event's cover was REMOVED during this call — it had " + before
+                    + " before and has none now. Check the event rather than re-uploading blind."
+                    : " The event currently has no cover image.";
         }
         if (!beforeKnown) {
             return " The event currently has cover " + now + ", but the previous one could not be"

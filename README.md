@@ -37,12 +37,15 @@ export SPRING_PROFILES_ACTIVE=http
 # Only if you want download_attachment. Must match the container path mounted below,
 # not a host path — see Security notes.
 export DISCORD_MCP_DOWNLOAD_ROOT=/var/lib/discord-mcp/downloads
-# Only if you want local-path uploads: send_file's filePath, and
-# set_guild_scheduled_event_image when not using its imageUrl. A directory of its own, so
-# that reading uploads and writing downloads stay separate grants — see Security notes
-# before pointing this at the download directory instead.
-export DISCORD_MCP_FILE_ROOT=/var/lib/discord-mcp/uploads
 ```
+
+> [!TIP]
+> There is deliberately no `DISCORD_MCP_FILE_ROOT` here. It is needed only for local-path
+> uploads — `send_file`'s `filePath`, and `set_guild_scheduled_event_image` when you are not
+> using its `imageUrl` — and a deployment that only ever covers events from a CDN link needs
+> no filesystem grant at all. To enable it, add
+> `export DISCORD_MCP_FILE_ROOT=/var/lib/discord-mcp/uploads` and the uploads mount below,
+> pointing it at a directory that holds nothing but uploads. See Security notes first.
 
 > [!IMPORTANT]
 > Instructions for creating a Discord bot and retrieving its token can be found [here](https://discordjs.guide/legacy/preparations/app-setup).
@@ -79,6 +82,10 @@ docker run -d -i \
 > because the operator puts files there and the app only reads them — a named volume cannot be
 > written from the host without `docker cp`, which makes "put the file there" impossible to
 > act on, and `:ro` enforces at the mount what the docs describe.
+>
+> Run `mkdir -p uploads` before the first start. Docker creates a missing bind-mount source
+> as `root:root`, which leaves you a directory needing `sudo` to write into — the opposite of
+> the point.
 
 Default MCP endpoint URL (HTTP profile): `http://localhost:8085/mcp`
 
@@ -199,11 +206,18 @@ substitute for one.
 
 **On upgrading:** a deployment that already set this for `send_file` gains
 `set_guild_scheduled_event_image` when the jar is updated, with no config change. That is a
-narrower case than the fallback `DISCORD_MCP_DOWNLOAD_ROOT` refuses below, and the
-difference is why it is allowed: the filesystem grant is identical — same root, same read,
-no new directory — and only the destination differs, bytes reaching a public CDN URL rather
-than a channel message. The magic-byte check narrows it further to real PNG and JPEG
-bodies. Deployments that filter tools by name do not acquire it at all until they list it.
+narrower case than the fallback `DISCORD_MCP_DOWNLOAD_ROOT` refuses below, for two reasons.
+The filesystem grant is identical — same root, same read, no new directory. And what can
+leave through it is bounded by format: the cover is rejected unless its bytes begin with a
+real PNG or JPEG signature, which no `.env` or `/proc/self/environ` will satisfy. That
+format check, not the destination, is what makes this acceptable.
+
+Be clear about the destination, though, because it is *wider* rather than narrower: an event
+cover is served from `guild-events/{event_id}/{hash}.png`, an unsigned, non-expiring,
+unauthenticated URL, where a message attachment sits behind a signed expiring link inside a
+permission-gated channel. Anything that does reach a cover is more durable and more public
+than the same bytes posted to a channel. Deployments that filter tools by name do not
+acquire this one at all until they list it.
 
 **You probably do not need this for `set_guild_scheduled_event_image`.** That tool takes an
 `imageUrl` as well as a `filePath`, and a poster already posted to Discord has a CDN URL, so

@@ -207,7 +207,7 @@ public class MessageService {
                     "Local filePath uploads are disabled. Set DISCORD_MCP_FILE_ROOT to an "
                             + "allowed directory, or supply fileUrl or base64 fileData instead.");
         }
-        return resolveRoot(fileRoot, "DISCORD_MCP_FILE_ROOT");
+        return LocalFileGuard.resolveRoot(fileRoot, "DISCORD_MCP_FILE_ROOT");
     }
 
     private Path allowedDownloadRoot() {
@@ -218,7 +218,7 @@ public class MessageService {
                             + "from DISCORD_MCP_FILE_ROOT on purpose: read and write are "
                             + "different grants.");
         }
-        Path root = resolveRoot(downloadRoot, "DISCORD_MCP_DOWNLOAD_ROOT");
+        Path root = LocalFileGuard.resolveRoot(downloadRoot, "DISCORD_MCP_DOWNLOAD_ROOT");
         // Existing and writable are different things, and a read-only bind mount is a common
         // way to get the first without the second. Without this probe the failure surfaces only
         // at createTempFile, by which point the whole 100 MB budget may already have been pulled
@@ -267,10 +267,6 @@ public class MessageService {
         } catch (IOException ignored) {
             // Nothing to do, and nothing worth failing the call over.
         }
-    }
-
-    private Path resolveRoot(String configured, String variableName) {
-        return LocalFileGuard.resolveRoot(configured, variableName);
     }
 
     private byte[] downloadFile(String url) {

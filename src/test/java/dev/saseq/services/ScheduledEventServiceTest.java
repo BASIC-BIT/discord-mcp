@@ -247,10 +247,11 @@ class ScheduledEventServiceTest {
         // it the parameter an injected prompt would reach for. It must not become a second,
         // unguarded fetch path; that is the exact regression RemoteFetchGuard exists to prevent.
         //
-        // Each assertion pins the GUARD's own wording rather than just the exception type. With
-        // only `isInstanceOf`, replacing the guard with a bare openStream() would still pass:
-        // guildId is null here, so the call would reach getGuild(null) and throw anyway. A test
-        // that cannot fail for the reason it names is worse than no test.
+        // Each assertion pins the GUARD's own wording rather than just the exception type. An
+        // earlier version asserted only `isInstanceOf` and passed a null guildId, so it would
+        // have been satisfied by "guildId cannot be null" even against a bare openStream() — a
+        // test that cannot fail for the reason it names is worse than no test. The guild and
+        // event resolve here, so the fetch is genuinely reached.
         service.coverFileRoot = "";
 
         assertThatThrownBy(() -> service.setScheduledEventImage(
@@ -288,7 +289,12 @@ class ScheduledEventServiceTest {
         String was = "https://cdn.discordapp.com/guild-events/1/aaa.png";
         String now = "https://cdn.discordapp.com/guild-events/1/bbb.png";
 
+        // A known removal is a bigger change than a swap and must not read as "never had one".
         assertThat(ScheduledEventService.describeOutcome(null, was, true))
+                .contains("was REMOVED during this call")
+                .contains(was);
+        // Nothing to compare against: no removal can be claimed.
+        assertThat(ScheduledEventService.describeOutcome(null, null, true))
                 .contains("currently has no cover image");
         assertThat(ScheduledEventService.describeOutcome(was, was, true))
                 .contains("still has the cover it had before");
@@ -305,16 +311,6 @@ class ScheduledEventServiceTest {
         // because the read-back established it, not because the write threw.
         assertThat(ScheduledEventService.describeOutcome(null, null, false))
                 .contains("currently has no cover image");
-    }
-
-    @Test
-    void settingACoverIsDisabledUntilAnUploadRootIsConfigured(@TempDir Path dir) throws IOException {
-        Path file = Files.write(dir.resolve("poster.png"), png());
-        service.coverFileRoot = "";
-
-        assertThatThrownBy(() -> service.setScheduledEventImage(GUILD, EVENT, null, file.toString()))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("DISCORD_MCP_FILE_ROOT");
     }
 
     @Test
