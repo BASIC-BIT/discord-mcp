@@ -688,12 +688,14 @@ public class ScheduledEventService {
             }
         } catch (LocalFileGuard.TooLargeException | RemoteFetchGuard.TooLargeException e) {
             // The limit alone leaves the caller stuck: an oversized master is the ordinary input
-            // here, and the fix is the same crop the display shape needs anyway. RemoteFetchGuard's
-            // message has no trailing period and LocalFileGuard's does, so one is added rather than
-            // running the advice onto the end of "…maximum allowed size Crop it to 5:2".
-            String limit = e.getMessage();
-            throw new IllegalArgumentException(
-                    (limit.endsWith(".") ? limit : limit + ".")
+            // here, and the fix is the same crop the display shape needs anyway.
+            //
+            // Both branches are made to read the same way. RemoteFetchGuard's message is generic
+            // ("cover image exceeds the maximum allowed size" — lowercase, no period, no number)
+            // while LocalFileGuard's names the limit, so a URL and a path failing for identical
+            // reasons produced visibly different errors. The size is stated here either way.
+            throw new IllegalArgumentException("Cover image exceeds the "
+                    + LocalFileGuard.formatFileSize(MAX_COVER_BYTES) + " limit."
                     + " Crop it to 5:2 and scale it down first — a cover is displayed at 800x320,"
                     + " so a full-resolution master is both too large and the wrong shape.");
         }
@@ -741,7 +743,7 @@ public class ScheduledEventService {
                         + " unknown — check the event before retrying.";
             }
             throw new IllegalArgumentException("Setting the cover image failed: " + e.getMessage()
-                    + ". Sent " + LocalFileGuard.formatSize(bytes.length) + " of " + type.name() + " from "
+                    + ". Sent " + LocalFileGuard.formatFileSize(bytes.length) + " of " + type.name() + " from "
                     + source + "." + outcome, e);
         }
 
@@ -762,7 +764,7 @@ public class ScheduledEventService {
         StringBuilder result = new StringBuilder("Set the cover image on ")
                 .append(event.getName()).append(" (ID: ").append(event.getId()).append(")")
                 .append("\n  • From: ").append(source)
-                .append(" (").append(type.name()).append(", ").append(LocalFileGuard.formatSize(bytes.length)).append(")")
+                .append(" (").append(type.name()).append(", ").append(LocalFileGuard.formatFileSize(bytes.length)).append(")")
                 .append("\n  • Was: ")
                 .append(!beforeKnown ? "could not be read" : before == null ? "no cover image" : before)
                 .append("\n  • Now: ").append(after == null ? "none — Discord did not keep it" : after);
@@ -949,7 +951,15 @@ public class ScheduledEventService {
             described.clear();
         }
 
-        String caveat = rawKnown ? ""
+        // Stated once rather than per event. A missing cover is worth surfacing — it is otherwise
+        // invisible, and a listing that only ever shows URLs cannot distinguish "has no cover"
+        // from "not reported" — but it does not need a line each on an uncapped listing.
+        long coverless = events.stream()
+                .filter(e -> described.contains(e.getId()) && !covers.containsKey(e.getId()))
+                .count();
+        String caveat = rawKnown
+                ? (coverless == 0 ? "" : "\n(" + coverless + " of " + events.size()
+                        + " have no cover image; the others show one below.)")
                 : "\n(Recurrence and cover images could not be read, so no event below is marked as"
                 + " recurring or as having a cover even if it is.)";
         return "Retrieved " + events.size() + " scheduled events:" + caveat + "\n" +
@@ -962,17 +972,12 @@ public class ScheduledEventService {
                             if (e.getEndTime() != null) sb.append(" | End: ").append(e.getEndTime());
                             DataObject rule = rules.get(e.getId());
                             if (rule != null) sb.append("\n  • Recurs: ").append(RecurrenceRule.describe(rule));
-                            // Only claimed for an event the live response actually described.
-                            // "none" asserts the event has no cover, and neither a failed read nor
-                            // a response that omitted the event can support that. The recurrence
-                            // line above avoids the same trap by omitting itself.
-                            // `described` alone: it is cleared when the raw read fails, so it
-                            // is already empty in that case and a separate flag would guard
-                            // nothing. One condition, one reason.
-                            if (described.contains(e.getId())) {
-                                sb.append("\n  • Cover image: ")
-                                        .append(covers.getOrDefault(e.getId(), "none"));
-                            }
+                            // Only the URL, and only when there is one. A per-event "none" would
+                            // be a line of nothing per coverless event on a listing with no result
+                            // cap; the header count carries that once instead. The recurrence line
+                            // above omits itself for the same reason.
+                            String cover = covers.get(e.getId());
+                            if (cover != null) sb.append("\n  • Cover image: ").append(cover);
                             if (includeUserCount) sb.append("\n  • Interested: ").append(e.getInterestedUserCount()).append(" users");
                             return sb.toString();
                         })

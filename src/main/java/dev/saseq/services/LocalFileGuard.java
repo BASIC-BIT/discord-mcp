@@ -144,7 +144,7 @@ public final class LocalFileGuard {
         }
         if (bytes.length > maxBytes) {
             throw new TooLargeException(capitalize(what)
-                    + " exceeds the " + formatSize(maxBytes) + " limit.");
+                    + " exceeds the " + formatFileSize(maxBytes) + " limit.");
         }
         return bytes;
     }
@@ -154,18 +154,18 @@ public final class LocalFileGuard {
     }
 
     /**
-     * Size for a human, not integer megabytes.
+     * Size for a human.
      *
-     * <p>Both callers happen to pass at least a megabyte today, so {@code maxBytes / (1024*1024)}
-     * would read correctly for them. This is shared code: the download path already learned this
-     * the hard way, where a remaining budget under a megabyte rendered as "exceeded the 0 MB
-     * allowed for it", which reads as a bug rather than a limit. A third caller with a smaller
-     * cap should not have to rediscover that.
+     * <p>Lifted here rather than reinvented: {@code MessageService} and {@code UserService} each
+     * carried a private copy, and this class adding a third — coarser, whole-units — would have
+     * meant a 1.9 MB cover reported as "1 MB" next to a limit quoted in MB. Integer division is
+     * the specific trap: the download path already shipped "exceeded the 0 MB allowed for it",
+     * which reads as a bug rather than a limit. One spelling, in the class both callers share.
      */
-    static String formatSize(int bytes) {
-        if (bytes >= 1024 * 1024) {
-            return bytes / (1024 * 1024) + " MB";
-        }
-        return bytes >= 1024 ? bytes / 1024 + " KB" : bytes + " bytes";
+    public static String formatFileSize(long bytes) {
+        if (bytes < 1024) return bytes + " B";
+        if (bytes < 1024 * 1024) return String.format("%.1f KB", bytes / 1024.0);
+        if (bytes < 1024 * 1024 * 1024) return String.format("%.1f MB", bytes / (1024.0 * 1024));
+        return String.format("%.1f GB", bytes / (1024.0 * 1024 * 1024));
     }
 }

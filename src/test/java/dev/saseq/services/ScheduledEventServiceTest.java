@@ -338,7 +338,7 @@ class ScheduledEventServiceTest {
 
         assertThatThrownBy(() -> service.setScheduledEventImage(GUILD, EVENT, null, file.toString()))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("5 MB limit")
+                .hasMessageContaining("Cover image exceeds the 5.0 MB limit.")
                 .hasMessageContaining("Crop it to 5:2");
     }
 

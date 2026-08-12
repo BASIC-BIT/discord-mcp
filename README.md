@@ -112,17 +112,25 @@ DISCORD_TOKEN=<YOUR_DISCORD_BOT_TOKEN>
 DISCORD_GUILD_ID=<OPTIONAL_DEFAULT_SERVER_ID>
 # Optional, enables download_attachment. Container path, matching the named volume.
 DISCORD_MCP_DOWNLOAD_ROOT=/var/lib/discord-mcp/downloads
-# Optional, enables local-path uploads. Container path, matching the ./uploads bind mount.
-# set_guild_scheduled_event_image works via imageUrl without this; it is only needed for
-# filePath. See Security notes before pointing it at the download path instead.
-DISCORD_MCP_FILE_ROOT=/var/lib/discord-mcp/uploads
+# Optional, enables local-path uploads. Uncomment to grant it — send_file's filePath and
+# set_guild_scheduled_event_image's filePath. The latter works via imageUrl without this, so
+# a deployment covering events from CDN links should leave it off. Container path, matching
+# the ./uploads bind mount. See Security notes before pointing it at the download path.
+#DISCORD_MCP_FILE_ROOT=/var/lib/discord-mcp/uploads
 EOF
 ```
 
 #### 4) Start one shared MCP server container
 ```bash
+mkdir -p uploads
 docker compose up -d --build
 ```
+
+> [!TIP]
+> `mkdir -p uploads` first: the compose file bind-mounts `./uploads` read-only, and Docker
+> creates a missing bind-mount source as `root:root` — leaving you a directory you need
+> `sudo` to put posters into, which is the opposite of the point. The mount is inert until
+> `DISCORD_MCP_FILE_ROOT` is set.
 
 #### 5) Verify
 ```bash
@@ -209,8 +217,10 @@ substitute for one.
 narrower case than the fallback `DISCORD_MCP_DOWNLOAD_ROOT` refuses below, for two reasons.
 The filesystem grant is identical — same root, same read, no new directory. And what can
 leave through it is bounded by format: the cover is rejected unless its bytes begin with a
-real PNG or JPEG signature, which no `.env` or `/proc/self/environ` will satisfy. That
-format check, not the destination, is what makes this acceptable.
+PNG or JPEG signature, which no `.env` or `/proc/self/environ` will satisfy. State that
+precisely, though — it is a check on the first 3–8 bytes, not image validation. A file that
+does not *start* like an image cannot leave; a real image with data appended to it still
+can. That check, not the destination, is what makes this acceptable.
 
 Be clear about the destination, though, because it is *wider* rather than narrower: an event
 cover is served from `guild-events/{event_id}/{hash}.png`, an unsigned, non-expiring,
