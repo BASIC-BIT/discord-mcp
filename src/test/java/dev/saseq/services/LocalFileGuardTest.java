@@ -114,6 +114,24 @@ class LocalFileGuardTest {
     }
 
     @Test
+    void anUnsetRootIsNotTheWorkingDirectory() {
+        // The shape that made this necessary: Paths.get("") is a relative empty path, so
+        // toRealPath() resolves it against wherever the JVM was launched and hands back a valid
+        // Root over the process's working directory. Nobody configured that directory, and a
+        // caller that trusted the result would confine reads to the deployment's install dir.
+        // Spring's `${VAR:}` default makes "" the ordinary shape of an unset variable.
+        assertThatThrownBy(() -> LocalFileGuard.resolveRoot("", "VAR"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("VAR is not set");
+        assertThatThrownBy(() -> LocalFileGuard.resolveRoot("   ", "VAR"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("VAR is not set");
+        assertThatThrownBy(() -> LocalFileGuard.resolveRoot(null, "VAR"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("VAR is not set");
+    }
+
+    @Test
     void aFilesystemRootWouldConfineNothing(@TempDir Path dir) {
         assertThatThrownBy(() -> LocalFileGuard.resolveRoot(dir.getRoot().toString(), "VAR"))
                 .isInstanceOf(IllegalArgumentException.class)

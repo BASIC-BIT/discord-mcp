@@ -304,7 +304,9 @@ and writing to it are different grants. An existing deployment set `DISCORD_MCP_
 to allow local-path *uploads*; if downloads inherited it, upgrading the jar would hand an
 LLM-driven tool write access to that directory with no configuration change and nothing to
 notice. Point both at the same directory if you want that — but as a decision, not a
-default.
+default, and note that `set_guild_scheduled_event_image` refuses a local `filePath` when the
+two overlap, for the reason given under `DISCORD_MCP_FILE_ROOT` above. `send_file` and
+`download_attachment` still work on a shared root; covers must come from `imageUrl` there.
 
 Files are named `<attachmentId>-<sanitized original name>`. The attachment ID makes names
 unique across attachments; re-downloading the same one replaces its own file. Uploader

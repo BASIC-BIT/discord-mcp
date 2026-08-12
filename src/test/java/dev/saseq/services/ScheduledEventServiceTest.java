@@ -652,6 +652,34 @@ class ScheduledEventServiceTest {
     }
 
     @Test
+    void anUnsetDownloadRootCollidesWithNothing() throws IOException {
+        // The deployment the README recommends: no downloads configured, uploads under the
+        // service's working directory. Spring hands an unset variable "" rather than null, and
+        // Paths.get("") resolves to the working directory — so the overlap check compared the
+        // upload root against the process CWD and refused every filePath cover on that layout,
+        // naming a variable the operator never set.
+        //
+        // Created under target/ so it is genuinely below the working directory, which is the
+        // whole point; a @TempDir lives under the system tmpdir and cannot reproduce this.
+        Path underCwd = Files.createTempDirectory(Path.of("target").toAbsolutePath(), "cover-root");
+        try {
+            Files.write(underCwd.resolve("poster.png"), png());
+            service.coverFileRoot = underCwd.toString();
+            service.downloadRoot = "";
+
+            assertThatThrownBy(() -> service.setScheduledEventImage(
+                    GUILD, EVENT, null, underCwd.resolve("poster.png").toString()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    // Past the roots and the read, stopped at the event the mock cannot serve.
+                    .hasMessageContaining("Could not reach Discord")
+                    .hasMessageNotContaining("overlap");
+        } finally {
+            Files.deleteIfExists(underCwd.resolve("poster.png"));
+            Files.deleteIfExists(underCwd);
+        }
+    }
+
+    @Test
     void separateRootsAreNotRefused(@TempDir Path dir) throws IOException {
         // The other half of the check: an ordinary two-directory deployment must reach the file.
         // Without this, a comparison that refused everything would pass the test above.

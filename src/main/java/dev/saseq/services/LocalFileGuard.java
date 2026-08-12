@@ -66,6 +66,16 @@ public final class LocalFileGuard {
      * @return the fully resolved real path of the root
      */
     public static Root resolveRoot(String configured, String variableName) {
+        // Blank first, and not left to the callers. Paths.get("") is a relative empty path, so
+        // toRealPath() resolves it against the directory the JVM was launched from and returns a
+        // perfectly valid Root over the process's working directory — a root nobody configured,
+        // confining to wherever the deployment happens to run. Spring's `${VAR:}` default makes ""
+        // the ordinary shape of an unset variable rather than an exotic one. Every caller gates on
+        // blank today; this class already declines to rely on that for filePath, and the root side
+        // is where getting it wrong fails open.
+        if (configured == null || configured.isBlank()) {
+            throw new IllegalArgumentException(variableName + " is not set");
+        }
         Path root;
         try {
             root = Paths.get(configured).toRealPath();

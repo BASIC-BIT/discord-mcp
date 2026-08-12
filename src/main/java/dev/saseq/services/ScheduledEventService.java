@@ -1250,14 +1250,20 @@ public class ScheduledEventService {
         }
         LocalFileGuard.Root root =
                 LocalFileGuard.resolveRoot(coverFileRoot, "DISCORD_MCP_FILE_ROOT");
+        if (downloadRoot == null || downloadRoot.isBlank()) {
+            // download_attachment writes nowhere, so there is nothing to collide with. Gated here
+            // rather than left to the catch below: an unset variable is this method's ordinary
+            // case, and the empty string resolves to the process's working directory, which would
+            // refuse every upload root beneath it — including the layout the README recommends.
+            return root;
+        }
         Path downloads;
         try {
-            downloads = LocalFileGuard.resolveRoot(downloadRoot == null ? "" : downloadRoot,
-                    "DISCORD_MCP_DOWNLOAD_ROOT").path();
-        } catch (RuntimeException downloadsNotConfigured) {
-            // Unset, or set to something that does not resolve. Either way it is not a directory
-            // this server writes into, so there is nothing to collide with. Downloads being
-            // misconfigured is download_attachment's problem to report, not this tool's.
+            downloads = LocalFileGuard.resolveRoot(downloadRoot, "DISCORD_MCP_DOWNLOAD_ROOT").path();
+        } catch (RuntimeException downloadsUnusable) {
+            // Set to something that does not resolve: a missing directory, an unparseable path.
+            // Nothing is being written there either, so there is still nothing to collide with,
+            // and a broken download root is download_attachment's to report, not this tool's.
             return root;
         }
         // Containment either way, not equality: downloads written inside the upload root are
