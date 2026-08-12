@@ -1020,6 +1020,6 @@ public class MessageService {
     // long rather than int: a per-call total can exceed Integer.MAX_VALUE even though
     // any single attachment cannot. Widening is source-compatible with the int callers.
     private String formatFileSize(long bytes) {
-        return LocalFileGuard.formatFileSize(bytes);
+        return FileSizes.format(bytes);
     }
 }

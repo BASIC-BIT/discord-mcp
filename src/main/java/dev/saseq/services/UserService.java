@@ -480,6 +480,6 @@ public class UserService {
     }
 
     private String formatFileSize(int bytes) {
-        return LocalFileGuard.formatFileSize(bytes);
+        return FileSizes.format(bytes);
     }
 }

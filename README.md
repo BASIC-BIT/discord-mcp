@@ -122,15 +122,16 @@ EOF
 
 #### 4) Start one shared MCP server container
 ```bash
-mkdir -p uploads
 docker compose up -d --build
 ```
 
 > [!TIP]
-> `mkdir -p uploads` first: the compose file bind-mounts `./uploads` read-only, and Docker
-> creates a missing bind-mount source as `root:root` — leaving you a directory you need
-> `sudo` to put posters into, which is the opposite of the point. The mount is inert until
-> `DISCORD_MCP_FILE_ROOT` is set.
+> For local-path uploads, uncomment **both** `DISCORD_MCP_FILE_ROOT` in `.env` and the
+> `./uploads` volume line in `docker-compose.yml`, and run `mkdir -p uploads` first. Docker
+> creates a missing bind-mount source as `root:root`, which would leave you a directory
+> needing `sudo` to put posters into — the opposite of the point. Both stay commented by
+> default so a deployment that covers events from CDN links gets neither the filesystem grant
+> nor a stray root-owned directory.
 
 #### 5) Verify
 ```bash
@@ -228,6 +229,14 @@ unauthenticated URL, where a message attachment sits behind a signed expiring li
 permission-gated channel. Anything that does reach a cover is more durable and more public
 than the same bytes posted to a channel. Deployments that filter tools by name do not
 acquire this one at all until they list it.
+
+**The `imageUrl` path needs no configuration**, so it is worth naming what it permits by
+default: a model that has been talked into it can fetch any public HTTPS image under 5 MB and
+pin it to a permanent, unauthenticated `discordapp.com` URL. That is bounded — two formats,
+one cover per event, `MANAGE_EVENTS` required, and the tool is name-filterable — and it is
+the same shape as what `send_file`'s `fileUrl` already allows. Worth knowing rather than
+worth blocking, but the section above reasons about local files leaving, and this is the path
+that is on out of the box.
 
 **You probably do not need this for `set_guild_scheduled_event_image`.** That tool takes an
 `imageUrl` as well as a `filePath`, and a poster already posted to Discord has a CDN URL, so

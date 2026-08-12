@@ -6,7 +6,6 @@ import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.Locale;
 
 /**
  * Confine caller-supplied local file reads to an allowlisted root.
@@ -126,8 +125,8 @@ public final class LocalFileGuard {
      *
      * <p>Reads one byte past the limit rather than consulting the file's size: a size check
      * followed by a full read is a time-of-check/time-of-use gap, and {@code readAllBytes} on a
-     * path the caller chose would exhaust the heap long before any check could reject it. This
-     * process runs with a 320 MB heap.
+     * path the caller chose would exhaust the heap long before any check could reject it, on a
+     * JVM that may be running with only a few hundred megabytes.
      *
      * @param real     a path already resolved by {@link #resolveWithinRoot}
      * @param maxBytes the largest body to accept
@@ -157,7 +156,7 @@ public final class LocalFileGuard {
         }
         if (bytes.length > maxBytes) {
             throw new TooLargeException(capitalize(what)
-                    + " exceeds the " + formatFileSize(maxBytes) + " limit.");
+                    + " exceeds the " + FileSizes.format(maxBytes) + " limit.");
         }
         return bytes;
     }
@@ -166,22 +165,4 @@ public final class LocalFileGuard {
         return s.isEmpty() ? s : Character.toUpperCase(s.charAt(0)) + s.substring(1);
     }
 
-    /**
-     * Size for a human.
-     *
-     * <p>Lifted here rather than reinvented: {@code MessageService} and {@code UserService} each
-     * carried a private copy, and this class adding a third — coarser, whole-units — would have
-     * meant a 1.9 MB cover reported as "1 MB" next to a limit quoted in MB. Integer division is
-     * the specific trap: the download path already shipped "exceeded the 0 MB allowed for it",
-     * which reads as a bug rather than a limit. One spelling, in the class both callers share.
-     */
-    public static String formatFileSize(long bytes) {
-        // Locale.ROOT: the default locale would render "5,0 MB" on a comma-decimal host, which
-        // changes an error message by deployment and breaks assertions that pin it. This is the
-        // one copy now, so fixing it here fixes it for every caller.
-        if (bytes < 1024) return bytes + " B";
-        if (bytes < 1024 * 1024) return String.format(Locale.ROOT, "%.1f KB", bytes / 1024.0);
-        if (bytes < 1024 * 1024 * 1024) return String.format(Locale.ROOT, "%.1f MB", bytes / (1024.0 * 1024));
-        return String.format(Locale.ROOT, "%.1f GB", bytes / (1024.0 * 1024 * 1024));
-    }
 }

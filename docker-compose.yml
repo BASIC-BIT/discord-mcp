@@ -24,16 +24,18 @@ services:
     volumes:
       # A named volume, because the app writes downloads and they should survive `docker rm`.
       - discord-mcp-downloads:/var/lib/discord-mcp/downloads
-      # ON UPGRADE: this mount is new and unconditional. Run `mkdir -p uploads` before the
-      # next `up`, or Docker creates ./uploads as root:root in your deployment directory.
-      # Harmless if DISCORD_MCP_FILE_ROOT is unset — nothing reads it — but annoying to undo.
+      # Uncomment together with DISCORD_MCP_FILE_ROOT above to enable local-path uploads.
+      # Shipped commented rather than left inert: an unconditional bind mount would have Docker
+      # create ./uploads as root:root in the deployment directory of every existing operator on
+      # their next `up`, needing sudo to remove, for a feature they did not turn on. Run
+      # `mkdir -p uploads` before uncommenting, for the same reason.
       #
-      # A read-only bind mount, because the opposite is true of uploads: the operator puts files
-      # here and the app only ever reads them. A named volume would be the wrong shape — nothing
-      # on the host can write into one without `docker cp` or a helper container, which makes
-      # "put the file there" advice impossible to follow. `:ro` also enforces at the mount what
-      # the docs describe, so this path cannot become a second place the app writes.
-      - ./uploads:/var/lib/discord-mcp/uploads:ro
+      # A read-only bind mount, because the operator puts files here and the app only ever reads
+      # them. A named volume would be the wrong shape — nothing on the host can write into one
+      # without `docker cp` or a helper container, which makes "put the file there" advice
+      # impossible to follow. `:ro` also enforces at the mount what the docs describe, so this
+      # path cannot become a second place the app writes.
+      #- ./uploads:/var/lib/discord-mcp/uploads:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8085/actuator/health | grep -q '\"status\":\"UP\"'"]
       interval: 30s

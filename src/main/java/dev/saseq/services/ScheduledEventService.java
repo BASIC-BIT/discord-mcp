@@ -695,9 +695,9 @@ public class ScheduledEventService {
             // while LocalFileGuard's names the limit, so a URL and a path failing for identical
             // reasons produced visibly different errors. The size is stated here either way.
             throw new IllegalArgumentException("Cover image exceeds the "
-                    + LocalFileGuard.formatFileSize(MAX_COVER_BYTES) + " limit."
+                    + FileSizes.format(MAX_COVER_BYTES) + " limit."
                     + " Crop it to 5:2 and scale it down first — a cover is displayed at 800x320,"
-                    + " so a full-resolution master is both too large and the wrong shape.");
+                    + " so a full-resolution master is both too large and the wrong shape.", e);
         }
         Icon.IconType type = coverType(bytes, hasUrl ? "imageUrl" : "filePath");
 
@@ -743,7 +743,7 @@ public class ScheduledEventService {
                         + " unknown — check the event before retrying.";
             }
             throw new IllegalArgumentException("Setting the cover image failed: " + e.getMessage()
-                    + ". Sent " + LocalFileGuard.formatFileSize(bytes.length) + " of " + type.name() + " from "
+                    + ". Sent " + FileSizes.format(bytes.length) + " of " + type.name() + " from "
                     + source + "." + outcome, e);
         }
 
@@ -764,7 +764,7 @@ public class ScheduledEventService {
         StringBuilder result = new StringBuilder("Set the cover image on ")
                 .append(event.getName()).append(" (ID: ").append(event.getId()).append(")")
                 .append("\n  • From: ").append(source)
-                .append(" (").append(type.name()).append(", ").append(LocalFileGuard.formatFileSize(bytes.length)).append(")")
+                .append(" (").append(type.name()).append(", ").append(FileSizes.format(bytes.length)).append(")")
                 .append("\n  • Was: ")
                 .append(!beforeKnown ? "could not be read" : before == null ? "no cover image" : before)
                 // Absence at read-back does not establish a cause. The write was accepted, so the
@@ -987,7 +987,6 @@ public class ScheduledEventService {
                     .compile(guild.getId());
             var raw = new RestActionImpl<net.dv8tion.jda.api.utils.data.DataArray>(jda, route,
                     (response, request) -> response.getArray()).complete();
-            liveCount = raw.length();
             for (int i = 0; i < raw.length(); i++) {
                 DataObject o = raw.getObject(i);
                 // Defaulted rather than demanded. Discord always sends id, but this loop now runs
@@ -996,6 +995,10 @@ public class ScheduledEventService {
                 // unreadable — losing recurrence and covers for every other event too.
                 String id = o.getString("id", null);
                 if (id == null) continue;
+                // Counted after the guard, not from raw.length(): an unparseable entry would
+                // otherwise inflate "Discord returned N events not in this list", which is a
+                // different problem from the one that number names.
+                liveCount++;
                 DataObject rule = recurrenceOf(o);
                 if (rule != null) {
                     rules.put(id, rule);
