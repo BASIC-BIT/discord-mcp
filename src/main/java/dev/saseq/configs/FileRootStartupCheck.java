@@ -19,6 +19,11 @@ import org.springframework.stereotype.Component;
  * <p>A warning and not a failure. {@code send_file} and {@code download_attachment} work on a
  * shared root and always have, so refusing to start would break deployments that chose this
  * deliberately over a capability they already had.
+ *
+ * <p>How far the audience argument reaches depends on the profile. Under {@code http} — what
+ * Compose runs — this lands on the console and so in {@code docker logs}. Under the stdio
+ * profile it goes to the log file only, which a container does not expose, and there it is about
+ * as reachable as the tool refusal it was written to replace.
  */
 @Component
 public class FileRootStartupCheck implements ApplicationRunner {
@@ -33,14 +38,18 @@ public class FileRootStartupCheck implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
-        if (fileRoot == null || fileRoot.isBlank() || downloadRoot == null || downloadRoot.isBlank()) {
-            return;
-        }
-        LocalFileGuard.Root uploads = resolved(fileRoot, "DISCORD_MCP_FILE_ROOT");
-        LocalFileGuard.Root downloads = resolved(downloadRoot, "DISCORD_MCP_DOWNLOAD_ROOT");
+        // Each root on its own first. Whether DISCORD_MCP_FILE_ROOT points at a directory that
+        // exists has nothing to do with whether downloads are configured, and gating both checks
+        // on both variables meant a deployment that enables uploads and leaves downloads off —
+        // a shape the README presents as supported — got no warning about a missing upload root
+        // at all, which is the case this class was written for.
+        LocalFileGuard.Root uploads = isSet(fileRoot)
+                ? resolved(fileRoot, "DISCORD_MCP_FILE_ROOT") : null;
+        LocalFileGuard.Root downloads = isSet(downloadRoot)
+                ? resolved(downloadRoot, "DISCORD_MCP_DOWNLOAD_ROOT") : null;
         if (uploads == null || downloads == null) {
-            // Half a comparison establishes nothing about overlap, so nothing is claimed from it.
-            // The failure itself was already reported by resolved().
+            // Unset, or unusable and already reported. Either way there is nothing to compare
+            // against, and half a comparison establishes nothing about overlap.
             return;
         }
         if (LocalFileGuard.overlaps(uploads, downloads)) {
@@ -62,6 +71,10 @@ public class FileRootStartupCheck implements ApplicationRunner {
      * commented produces exactly it — and it has the same property this class exists for: the
      * only signal is a tool refusal, which reaches the model and not the operator.
      */
+    private static boolean isSet(String configured) {
+        return configured != null && !configured.isBlank();
+    }
+
     private LocalFileGuard.Root resolved(String configured, String variableName) {
         try {
             return LocalFileGuard.resolveRoot(configured, variableName);

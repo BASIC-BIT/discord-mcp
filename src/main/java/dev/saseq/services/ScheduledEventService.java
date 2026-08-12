@@ -1450,7 +1450,10 @@ public class ScheduledEventService {
         if (events.isEmpty() && rawKnown && returned.isEmpty() && unidentifiable == 0) {
             return "No scheduled events found on this server.";
         }
-        String header = "Retrieved " + events.size() + " scheduled events:" + caveat;
+        // Singular when there is one. The caveat below agrees its own has/have and event/events
+        // across seven clauses; the line above it should not be the one that does not.
+        String header = "Retrieved " + events.size()
+                + (events.size() == 1 ? " scheduled event:" : " scheduled events:") + caveat;
         String rows = events.stream()
                 .map(e -> renderEvent(e, rules, covers, includeUserCount))
                 .collect(Collectors.joining("\n"));

@@ -92,6 +92,22 @@ class FileRootStartupCheckTest {
     }
 
     @Test
+    void anUnusableUploadRootIsReportedEvenWithDownloadsOff(@TempDir Path dir) {
+        // Whether the upload root exists has nothing to do with whether downloads are configured.
+        // Gating both checks on both variables left a deployment that enables uploads and leaves
+        // downloads off — which the README presents as supported — with no warning at all, back
+        // to the tool-refusal-only signal this class exists to escape.
+        check.fileRoot = dir.resolve("never-created").toString();
+        check.downloadRoot = "";
+
+        check.run(null);
+
+        assertThat(warnings())
+                .contains("DISCORD_MCP_FILE_ROOT is set but unusable")
+                .doesNotContain("overlap");
+    }
+
+    @Test
     void aRootThatIsSetButUnusableIsWorthSayingOnItsOwn(@TempDir Path dir) throws IOException {
         // The more common misconfiguration of the two — the compose bind mount left commented
         // produces exactly it — and it has the property this class exists for: the only other

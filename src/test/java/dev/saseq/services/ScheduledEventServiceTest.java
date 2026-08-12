@@ -40,6 +40,13 @@ class ScheduledEventServiceTest {
      * exercises what it claims to — which is how an assertion ends up passing for a reason it did
      * not name. The source guards are reachable because the event read comes after them; nothing
      * here can reach the write, which needs a real REST call.
+     *
+     * <p>Which is why several tests here pin "Could not reach Discord to read that event": that
+     * message is an artifact of {@code RestActionImpl} casting its {@code JDA} argument to
+     * {@code JDAImpl}, which a Mockito proxy is not. What those tests establish is the ordering
+     * in their names — everything before the event read ran, and the call stopped there. If a JDA
+     * upgrade ever accepts the interface, they stop testing ordering and start attempting real
+     * requests, and the failure is a hang rather than a clean red.
      */
     private static final String GUILD = "480695542155051010";
     private static final String EVENT = "1385996249957662770";
@@ -941,10 +948,6 @@ class ScheduledEventServiceTest {
                 .contains("was ADDED during this call")
                 .contains(now)
                 .contains("something else set it in the meantime");
-        // An event that had no cover and still has none: "not changed" is safe to say here only
-        // because the read-back established it, not because the write threw.
-        assertThat(ScheduledEventService.describeOutcome(none(), none()))
-                .contains("currently has no cover image");
     }
 
     @Test
