@@ -40,9 +40,9 @@ record LiveEventDetails(Map<String, String> rules, Map<String, String> covers,
         int unidentifiable = 0;
 
         for (int i = 0; i < entries.length(); i++) {
-            // The array is walked here rather than converted to a list by the caller: that put one
-            // getObject per element outside every guard below, so a single non-object element took
-            // down the whole read — including every entry already parsed.
+            // The array is walked here rather than converted to a list by the caller. Converting
+            // it there puts one getObject per element outside every guard below, where a single
+            // non-object element discards the whole read, entries already parsed included.
             DataObject o;
             try {
                 o = entries.getObject(i);
@@ -83,9 +83,9 @@ record LiveEventDetails(Map<String, String> rules, Map<String, String> covers,
 
             // Parsed independently, and tracked independently. Separate try blocks stop one
             // malformed field discarding the other's value; separate flags stop one field's
-            // success standing in as proof the other was read. A single shared flag did the
-            // second thing: a field that failed still entered `described`, so the summary counted
-            // the event as having no cover — a positive claim drawn from a read that failed.
+            // success standing in as proof the other was read. Under one shared flag, a field
+            // that failed would still enter `described`, and the summary would count the event as
+            // having no cover — a positive claim drawn from a read that failed.
             //
             // The reachable failure is the recurrence. `image` goes through getString, which
             // coerces rather than throwing, so its guard is defensive; the recurrence read throws
@@ -95,8 +95,8 @@ record LiveEventDetails(Map<String, String> rules, Map<String, String> covers,
             try {
                 DataObject parsed = RecurrenceRule.of(o);
                 // Rendered here, not at display time: RecurrenceRule.of checks only the top-level
-                // shape, so a malformed nested field survives it and describe throws — outside
-                // this guard that took down the whole listing.
+                // shape, so a malformed nested field survives it and describe throws. Outside this
+                // guard, that throw takes the whole listing down.
                 rule = parsed == null ? null : RecurrenceRule.describe(parsed);
                 recurrenceRead = true;
             } catch (RuntimeException malformed) {

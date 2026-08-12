@@ -338,9 +338,10 @@ class ScheduledEventServiceTest {
     void anEndedOrCancelledEventExplainsItsMissingCoverRatherThanShowingNone() {
         // Discord stops returning an event once it is over or cancelled, so its cover cannot be
         // read from the live listing. "Ended or been cancelled" because a cancelled event may
-        // never have started — calling it finished contradicts its own Status: CANCELED row. Counting it as "not in the live read" blamed a cache gap for an event
-        // simply being finished; dropping it entirely left a row with no cover URL and nothing to
-        // say why, which reads as "this event has no cover". Its own clause says what is true.
+        // never have started — calling it finished contradicts its own Status: CANCELED row.
+        // Counting it as "not in the live read" blames a cache gap for an event simply being
+        // finished; dropping it entirely leaves a row with no cover URL and nothing to say why,
+        // which reads as "this event has no cover". Its own clause says what is true.
         assertThat(ScheduledEventService.coverCaveat(new CoverCounts(2, 0, 0, 0, 1, 0, 0, 0), true))
                 .isEqualTo("\n(1 event has ended or been cancelled, so Discord no longer returns it and no"
                         + " cover is shown below for it.)");
@@ -402,7 +403,7 @@ class ScheduledEventServiceTest {
         // them is honest in each case. An unconditional "Set the cover image on X" sat above
         // "Now: no cover image" — a confirmation and a contradiction in the same message.
         assertThat(ScheduledEventService.describeCoverWrite("Community Night", "11", "poster.png",
-                Icon.IconType.PNG, 2048, null, COVER_URL, ScheduledEventService.CoverApplied.CONFIRMED))
+                Icon.IconType.PNG, 2048, none(), present(COVER_URL)))
                 .startsWith("Set the cover image on Community Night (ID: 11)")
                 .contains("• Was: no cover image")
                 .contains("• Now: " + COVER_URL);
@@ -410,7 +411,7 @@ class ScheduledEventServiceTest {
         // Accepted, and the event came back with no cover. The write is not disputed; what it
         // achieved is, so the sentence stops short of claiming the cover is in place.
         assertThat(ScheduledEventService.describeCoverWrite("Community Night", "11", "poster.png",
-                Icon.IconType.PNG, 2048, null, null, ScheduledEventService.CoverApplied.ABSENT))
+                Icon.IconType.PNG, 2048, none(), none()))
                 .startsWith("Sent the cover image to Community Night (ID: 11)")
                 .contains("• Now: no cover image — check the event")
                 .doesNotContain("Set the cover image");
@@ -418,11 +419,25 @@ class ScheduledEventServiceTest {
         // The response would not parse. That establishes nothing at all — least of all that there
         // is no cover, which is the claim the ABSENT wording above makes.
         assertThat(ScheduledEventService.describeCoverWrite("Community Night", "11", "poster.png",
-                Icon.IconType.PNG, 2048, COVER_URL, null, ScheduledEventService.CoverApplied.UNREADABLE))
+                Icon.IconType.PNG, 2048, present(COVER_URL), unknown()))
                 .startsWith("Sent the cover image to")
                 .contains("• Was: " + COVER_URL)
                 .contains("• Now: unknown")
                 .doesNotContain("no cover image —");
+    }
+
+    @Test
+    void anUnreadablePreviousCoverDoesNotBecomeNoCoverImage() {
+        // The pre-write read establishes that the event exists and captures what it had. A cover
+        // field that will not parse costs the second job only — the write still goes ahead, and
+        // the line that would have reported it says what happened instead of inventing a value.
+        assertThat(ScheduledEventService.describeCoverWrite("Community Night", "11", "poster.png",
+                Icon.IconType.PNG, 2048, unknown(), present(COVER_URL)))
+                .startsWith("Set the cover image on")
+                .contains("• Was: unknown — the event's previous cover could not be read")
+                .contains("• Now: " + COVER_URL)
+                // Nothing to compare against, so the unchanged note cannot fire.
+                .doesNotContain("Unchanged");
     }
 
     @Test
@@ -431,10 +446,10 @@ class ScheduledEventServiceTest {
         // otherwise read as a successful change. Only reachable when the response confirmed the
         // hash — the other two states have no "after" to compare.
         assertThat(ScheduledEventService.describeCoverWrite("Community Night", "11", "poster.png",
-                Icon.IconType.PNG, 2048, COVER_URL, COVER_URL, ScheduledEventService.CoverApplied.CONFIRMED))
+                Icon.IconType.PNG, 2048, present(COVER_URL), present(COVER_URL)))
                 .contains("• Unchanged: the event's cover hash did not move");
         assertThat(ScheduledEventService.describeCoverWrite("Community Night", "11", "poster.png",
-                Icon.IconType.PNG, 2048, null, COVER_URL, ScheduledEventService.CoverApplied.CONFIRMED))
+                Icon.IconType.PNG, 2048, none(), present(COVER_URL)))
                 .doesNotContain("Unchanged");
     }
 
@@ -522,9 +537,9 @@ class ScheduledEventServiceTest {
         // which the mocked JDA cannot serve — RestActionImpl casts its JDA argument to JDAImpl and
         // a Mockito proxy is not one. So the exact string pinned below is an artifact of the mock,
         // not something production produces; what the test establishes is the ordering in its
-        // name. If a JDA upgrade validates earlier, this fails loudly rather than passing wrongly. What is asserted is the message, not the absence of a
-        // write — nothing here could observe a PATCH, since the same mock that fails the read
-        // would fail it too.
+        // name. If a JDA upgrade validates earlier, this fails loudly rather than passing
+        // wrongly. What is asserted is the message, not the absence of a write — nothing here
+        // could observe a PATCH, since the same mock that fails the read would fail it too.
         Path root = Files.createDirectory(dir.resolve("uploads"));
         Files.write(root.resolve("poster.png"), png());
         service.coverFileRoot = root.toString();
@@ -646,7 +661,8 @@ class ScheduledEventServiceTest {
                 GUILD, "not-a-snowflake", "http://169.254.169.254/", null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("eventId must be a Discord snowflake");
-        // "   " used to fail with "eventId cannot be null", naming a condition that did not fire.
+        // Blank is not "null" either: a message naming a condition that did not fire sends the
+        // caller to check the wrong thing.
         assertThatThrownBy(() -> service.setScheduledEventImage(
                 GUILD, "   ", "https://example.com/x.png", null))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -736,30 +752,65 @@ class ScheduledEventServiceTest {
         String now = "https://cdn.discordapp.com/guild-events/1/bbb.png";
 
         // A known removal is a bigger change than a swap and must not read as "never had one".
-        assertThat(ScheduledEventService.describeOutcome(null, was))
+        assertThat(ScheduledEventService.describeOutcome(none(), present(was)))
                 .contains("was REMOVED during this call")
                 .contains(was);
         // Nothing to compare against: no removal can be claimed.
-        assertThat(ScheduledEventService.describeOutcome(null, null))
+        assertThat(ScheduledEventService.describeOutcome(none(), none()))
                 .contains("currently has no cover image");
-        assertThat(ScheduledEventService.describeOutcome(was, was))
+        assertThat(ScheduledEventService.describeOutcome(present(was), present(was)))
                 .contains("still has the cover it had before");
-        assertThat(ScheduledEventService.describeOutcome(now, was))
+        assertThat(ScheduledEventService.describeOutcome(present(now), present(was)))
                 .contains("CHANGED during this call")
                 .contains(now)
                 // Must NOT claim this request made the change: a genuine rejection followed by a
                 // concurrent edit reaches the same branch, and nothing here can tell them apart.
                 .contains("something else changed it in the meantime");
         // Added, not merely "changed": it had none and now has one. Knowable, and asymmetric the
-        // other way from a removal — the branch the outcome block had no case for.
-        assertThat(ScheduledEventService.describeOutcome(now, null))
+        // other way from a removal.
+        assertThat(ScheduledEventService.describeOutcome(present(now), none()))
                 .contains("was ADDED during this call")
                 .contains(now)
                 .contains("something else set it in the meantime");
         // An event that had no cover and still has none: "not changed" is safe to say here only
         // because the read-back established it, not because the write threw.
-        assertThat(ScheduledEventService.describeOutcome(null, null))
+        assertThat(ScheduledEventService.describeOutcome(none(), none()))
                 .contains("currently has no cover image");
+    }
+
+    @Test
+    void anUnreadableCoverOnEitherSideIsNotComparedAgainstAnything() {
+        String was = "https://cdn.discordapp.com/guild-events/1/aaa.png";
+        String now = "https://cdn.discordapp.com/guild-events/1/bbb.png";
+
+        // The read-back reached the event and not its cover. REMOVED, CHANGED and "still has"
+        // are all comparisons, and there is nothing here to compare — including the one that
+        // would otherwise fire: `now == null` reads as a removal.
+        assertThat(ScheduledEventService.describeOutcome(unknown(), present(was)))
+                .contains("whether this call applied is unknown")
+                .doesNotContain("REMOVED");
+        // The other side: the write's own read-back is fine, but what was there before was never
+        // established, so neither ADDED nor CHANGED can be claimed.
+        assertThat(ScheduledEventService.describeOutcome(present(now), unknown()))
+                .contains(now)
+                .contains("could not be read")
+                .doesNotContain("ADDED")
+                .doesNotContain("CHANGED");
+        assertThat(ScheduledEventService.describeOutcome(none(), unknown()))
+                .contains("has no cover image now")
+                .doesNotContain("REMOVED");
+    }
+
+    private static ScheduledEventService.Cover present(String url) {
+        return new ScheduledEventService.Cover(url, ScheduledEventService.Cover.State.PRESENT);
+    }
+
+    private static ScheduledEventService.Cover none() {
+        return new ScheduledEventService.Cover(null, ScheduledEventService.Cover.State.ABSENT);
+    }
+
+    private static ScheduledEventService.Cover unknown() {
+        return new ScheduledEventService.Cover(null, ScheduledEventService.Cover.State.UNKNOWN);
     }
 
     @Test

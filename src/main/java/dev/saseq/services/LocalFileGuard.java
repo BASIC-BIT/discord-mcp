@@ -97,8 +97,8 @@ public final class LocalFileGuard {
      * <p>Be precise about how strong that is. {@code resolveRoot} will build a {@code Root} over
      * any directory, the download one included, so this does not make the chained read-and-write
      * configuration unrepresentable. What it removes is the shape in which it happens by accident:
-     * passing {@code allowedDownloadRoot()} where an upload root belongs no longer compiles.
-     * Reaching it now takes writing {@code resolveRoot(downloadRoot, …)} at the call site, which
+     * passing {@code allowedDownloadRoot()} where an upload root belongs does not compile.
+     * Reaching it takes writing {@code resolveRoot(downloadRoot, …)} at the call site, which
      * is a decision rather than a slip.
      *
      * <p>Symmetric to {@link ConfinedPath}, and for the same reason. {@code resolveWithinRoot}
@@ -249,11 +249,10 @@ public final class LocalFileGuard {
         try (InputStream in = Files.newInputStream(real, LinkOption.NOFOLLOW_LINKS)) {
             bytes = in.readNBytes(maxBytes + 1);
         } catch (IOException e) {
-            // The file name, not just the noun and not the absolute path. The extraction dropped
-            // send_file's "at filePath", and for a tool taking both a URL and a path the noun
-            // alone does not identify what failed. The name does; the full path would put the
-            // deployment's directory layout into a string that goes back to the model and often
-            // onward into a channel.
+            // The file name, not just the noun and not the absolute path. For a tool taking both
+            // a URL and a path, the noun alone does not identify what failed; the name does. The
+            // full path would put the deployment's directory layout into a string that goes back
+            // to the model and often onward into a channel.
             // The class name, not e.getMessage(). For the exceptions this catch actually sees —
             // NoSuchFileException, AccessDeniedException, FileSystemException — getMessage() IS
             // the absolute path, which would put back exactly what naming only the file withholds.

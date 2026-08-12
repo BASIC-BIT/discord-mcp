@@ -173,8 +173,10 @@ public class ScheduledEventService {
      */
     private static String requireSnowflake(String id, String paramName) {
         if (!isSnowflake(id)) {
+            // Both halves named: "digits only" alone tells the caller of a 20-digit id that its
+            // digits are the problem, and the obvious next move is to send it again.
             throw new IllegalArgumentException(paramName
-                    + " must be a Discord snowflake (ASCII digits only)");
+                    + " must be a Discord snowflake: ASCII digits, within 64-bit range");
         }
         return id;
     }
@@ -639,7 +641,7 @@ public class ScheduledEventService {
             patchRecurrence(guild, event, DataObject.empty().put("recurrence_rule", newRule), applied);
             result.append("\n  • Recurrence set: ").append(RecurrenceRule.describe(newRule));
         } else if (existingRecurrence != null && movingStart) {
-            // The bug this tool used to have. A recurring event's series is anchored by
+            // A recurring event's series is anchored by
             // recurrence_rule.start, not by scheduled_start_time. Moving only the latter shifts the
             // next occurrence and then the series snaps back to its old time, while the tool
             // reported plain success. Move the anchor with it and say so.
@@ -795,11 +797,15 @@ public class ScheduledEventService {
         // Fail-closed, not best-effort: it is the existence check, so proceeding without it would
         // mean PATCHing an event that may not be there and losing the one answer that says so.
         String eventName;
-        String before;
+        Cover before;
         try {
             DataObject current = fetchRaw(resolvedGuild, eventId);
             eventName = current.getString("name", eventId);
-            before = coverUrlOf(current, eventId);
+            // Cover.of, which absorbs an unreadable image field rather than throwing out of this
+            // try. The event was read — that is what this call is for — and a cosmetic field that
+            // will not parse must not refuse a write the caller is entitled to make. It costs the
+            // "Was:" line, which then says so.
+            before = Cover.of(current, eventId);
         } catch (ErrorResponseException discordSaidNo) {
             if (discordSaidNo.getErrorResponse() == ErrorResponse.UNKNOWN_SCHEDULED_EVENT) {
                 throw new IllegalArgumentException("Scheduled event not found by eventId");
@@ -846,7 +852,7 @@ public class ScheduledEventService {
             String outcome;
             try {
                 outcome = describeOutcome(
-                        coverUrlOf(fetchRaw(resolvedGuild, eventId), eventId), before);
+                        Cover.of(fetchRaw(resolvedGuild, eventId), eventId), before);
             } catch (RuntimeException unverifiable) {
                 outcome = " Could not read the event back, so whether the cover was applied is"
                         + " unknown — check the event before retrying.";
@@ -856,39 +862,48 @@ public class ScheduledEventService {
                     + source + "." + outcome, e);
         }
 
-        // Parsed outside the try above, for the same reason Icon.from sits outside it: the write
+        // Read outside the try above, for the same reason Icon.from sits outside it: the write
         // returned, so the change landed, and a response this cannot read is not a failed write —
-        // but the catch's first sentence says one. The read before the write has its own
-        // ParsingException catch to avoid exactly that claim; this is the same bar on the other
-        // side. Both are practically unreachable, since Discord returns the hash it just stored.
-        String after;
-        CoverApplied outcome;
-        try {
-            after = coverUrlOf(applied, eventId);
-            outcome = after == null ? CoverApplied.ABSENT : CoverApplied.CONFIRMED;
-        } catch (ParsingException unreadable) {
-            after = null;
-            outcome = CoverApplied.UNREADABLE;
-        }
-        // `after` came from the PATCH response itself, so it is what Discord stored rather than
-        // what was sent — no separate read-back, and no window in which someone else's change
-        // could be reported as this call's result.
-        return describeCoverWrite(eventName, eventId, source, type, bytes.length, before, after,
-                outcome);
+        // but the catch's first sentence says one.
+        //
+        // This came from the PATCH response itself, so it is what Discord stored rather than what
+        // was sent — no separate read-back, and no window in which someone else's change could be
+        // reported as this call's result.
+        return describeCoverWrite(eventName, eventId, source, type, bytes.length, before,
+                Cover.of(applied, eventId));
     }
 
     /**
-     * What a PATCH response established about the cover, which is not the same question as whether
-     * the write was accepted. One value rather than a URL and a flag, so the sentence that names
-     * the outcome and the line that reports it cannot disagree.
+     * What a response established about an event's cover.
+     *
+     * <p>One value rather than a URL and a flag beside it, so the sentence naming the state and
+     * the line printing the URL cannot disagree. Both sides of the write produce one, because both
+     * fail the same three ways: the read that captures what was there, and the response that says
+     * what is there now.
+     *
+     * @param url the cover URL, present only in state {@link State#PRESENT}
      */
-    enum CoverApplied {
-        /** The response carried a cover URL. That is what Discord has. */
-        CONFIRMED,
-        /** The response parsed and carried no cover at all. */
-        ABSENT,
-        /** The response would not parse, so it establishes nothing about the event. */
-        UNREADABLE
+    record Cover(String url, State state) {
+
+        enum State {
+            /** The response carried a cover URL. That is what Discord has. */
+            PRESENT,
+            /** The response parsed, and the event has no cover at all. */
+            ABSENT,
+            /** The cover field would not parse, so it establishes nothing about the event. */
+            UNKNOWN
+        }
+
+        static Cover of(DataObject raw, String eventId) {
+            try {
+                String url = coverUrlOf(raw, eventId);
+                return url == null ? new Cover(null, State.ABSENT) : new Cover(url, State.PRESENT);
+            } catch (ParsingException unreadable) {
+                // Only this field failed. Whatever else the response carried was read, so this
+                // must not stand in for a response that could not be read at all.
+                return new Cover(null, State.UNKNOWN);
+            }
+        }
     }
 
     /**
@@ -900,19 +915,25 @@ public class ScheduledEventService {
      * headline produced.
      */
     static String describeCoverWrite(String eventName, String eventId, String source,
-                                     Icon.IconType type, int sentBytes, String before,
-                                     String after, CoverApplied outcome) {
-        StringBuilder result = new StringBuilder(outcome == CoverApplied.CONFIRMED
+                                     Icon.IconType type, int sentBytes, Cover before, Cover after) {
+        StringBuilder result = new StringBuilder(after.state() == Cover.State.PRESENT
                         // "Set" only when the response showed the cover Discord stored. Accepted
                         // and confirmed are different facts, and this sentence states the second.
                         ? "Set the cover image on " : "Sent the cover image to ")
                 .append(eventName).append(" (ID: ").append(eventId).append(")")
                 .append("\n  • From: ").append(source)
                 .append(" (").append(type.name()).append(", ").append(FileSizes.format(sentBytes)).append(")")
-                .append("\n  • Was: ").append(before == null ? "no cover image" : before)
+                .append("\n  • Was: ")
+                .append(switch (before.state()) {
+                    case PRESENT -> before.url();
+                    case ABSENT -> "no cover image";
+                    // The event was read; its cover field was not. Saying "no cover image" here
+                    // would invent the one fact this call failed to establish.
+                    case UNKNOWN -> "unknown — the event's previous cover could not be read";
+                })
                 .append("\n  • Now: ")
-                .append(switch (outcome) {
-                    case CONFIRMED -> after;
+                .append(switch (after.state()) {
+                    case PRESENT -> after.url();
                     // Absence does not establish a cause. The write was accepted, so the upload
                     // may well have landed and then been removed or replaced by someone else.
                     // "Discord did not keep it" names one explanation and would prompt a retry
@@ -920,10 +941,10 @@ public class ScheduledEventService {
                     case ABSENT -> "no cover image — check the event before re-uploading";
                     // Not "no cover image": the response said something this could not read, which
                     // establishes nothing about what the event now has.
-                    case UNREADABLE -> "unknown — Discord accepted the write, but its response did"
+                    case UNKNOWN -> "unknown — Discord accepted the write, but its response did"
                             + " not carry a readable cover";
                 });
-        if (outcome == CoverApplied.CONFIRMED && after.equals(before)) {
+        if (after.state() == Cover.State.PRESENT && after.url().equals(before.url())) {
             // An unchanged hash is worth saying out loud: the likeliest cause is uploading the
             // file that was already there, and the call would otherwise read as a successful
             // change. Whether Discord derives the hash from content or mints one per upload is
@@ -942,16 +963,32 @@ public class ScheduledEventService {
      * write took effect, this is the block most likely to be reworded into saying the wrong one,
      * and exercising it in place would mean mocking JDA's request construction.
      *
-     * @param now    the cover the event has now, or null if it has none
-     * @param before the cover it had before the write, or null if it had none. Always read: the
-     *               call cannot get this far without it, since the same read proves the event
-     *               exists.
+     * @param now    what the read-back established about the cover
+     * @param before what the read before the write established about it. The event itself was
+     *               read — the call cannot get this far otherwise — but its cover field may not
+     *               have been, and then there is nothing to compare against.
      */
-    static String describeOutcome(String now, String before) {
+    static String describeOutcome(Cover nowRead, Cover beforeRead) {
+        if (nowRead.state() == Cover.State.UNKNOWN) {
+            // The event came back and its cover field did not parse. Nothing about the write
+            // follows from that — least of all that it did not take.
+            return " The event was read back, but its cover could not be, so whether this call"
+                    + " applied is unknown — check the event before retrying.";
+        }
+        String now = nowRead.url();
+        String before = beforeRead.url();
+        if (beforeRead.state() == Cover.State.UNKNOWN) {
+            // Every clause below compares against what was there. Without that, the only honest
+            // statement is what is there now.
+            return now == null
+                    ? " The event has no cover image now. What it had before this call could not"
+                    + " be read, so whether that is a change is unknown — check the event."
+                    : " The event's cover is now " + now + ". What it had before this call could"
+                    + " not be read, so whether this call set it is unknown — check the event.";
+        }
         if (now == null) {
             // Losing a cover is a larger change than swapping one, so it must not share the
-            // wording used for an event that never had a cover at all. Claimable only when the
-            // previous one was actually read; without that there is nothing to compare against.
+            // wording used for an event that never had a cover at all.
             return before != null
                     ? " The event's cover was REMOVED during this call — it had " + before
                     + " before and has none now. Check the event rather than re-uploading blind."
@@ -1218,11 +1255,10 @@ public class ScheduledEventService {
         // ScheduledEvent.getImageUrl() for two reasons: it costs nothing extra, and it is live. A
         // cover changed out of band is exactly the case this listing needs to be right about, and
         // that is the case where JDA's cached entity is stale.
-        // The rendered text, not the DataObject. RecurrenceRule.of checks only the top-level shape,
-        // so a malformed by_weekday survives it and RecurrenceRule.describe throws — and describe
-        // used to run in the render lambda below, outside every per-entry catch, taking the whole
-        // listing down. Describing inside the guard means such an event reaches the
-        // recurrenceUnreadable caveat like any other unparseable one.
+        // The rendered text, not the DataObject. RecurrenceRule.of checks only the top-level
+        // shape, so a malformed by_weekday survives it and RecurrenceRule.describe throws. Rendered
+        // inside the per-entry guard, that costs one event its schedule line and reaches the
+        // recurrenceUnreadable caveat; rendered at display time it would take the listing down.
         // One REST call per listing, including on a guild with nothing cached — where this used
         // to return immediately. Deliberate, and worth naming against REVIEW.md's "no unmetered
         // call patterns": it is one bounded call through JDA's limiter, and it buys the ability to
@@ -1266,11 +1302,11 @@ public class ScheduledEventService {
                         .map(ScheduledEvent::getId).collect(Collectors.toSet()),
                 returned, described, covers.keySet(), recurrenceFailed, unidentifiable);
         String caveat = coverCaveat(counts, rawKnown);
-        // An empty cache is no longer an early return. The main path already reports exactly that
-        // case: with nothing listed, every event Discord returned lands in `unlisted`, whose
-        // clause says the list is incomplete because the cache has not caught up. A branch of its
-        // own meant a second renderer with its own field set, its own failure policy and no
-        // accounting for the entries it skipped. One renderer cannot drift from itself.
+        // An empty cache is not an early return. The main path already reports that case: with
+        // nothing listed, every event Discord returned lands in `unlisted`, whose clause says the
+        // list is incomplete. A branch of its own would mean a second renderer with its own field
+        // set, its own failure policy and no accounting for the entries it skipped. One renderer
+        // cannot drift from itself.
         //
         // "None" is still a claim, so it is only made when the live read agreed there are none.
         // unidentifiable too: entries that came back with no usable id are not in `returned`, so

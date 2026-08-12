@@ -52,8 +52,9 @@ class LiveEventDetailsTest {
 
     @Test
     void aMalformedRecurrenceDoesNotDiscardAGoodCoverOrTheEvent() {
-        // The direction that is actually reachable: recurrence_rule as a scalar makes getObject throw. The cover is
-        // still read, so the event is described and its URL kept; only its schedule is unknown.
+        // The direction that is actually reachable: recurrence_rule as a scalar makes getObject
+        // throw. The cover is still read, so the event is described and its URL kept; only its
+        // schedule is unknown.
         LiveEventDetails d = LiveEventDetails.read(live(
                 event("1").put("recurrence_rule", "weekly").put("image", "aaa")));
 
@@ -66,9 +67,9 @@ class LiveEventDetailsTest {
 
     @Test
     void aRecurrenceThatParsesButWillNotRenderIsCaughtToo() {
-        // RecurrenceRule.of checks only the top-level shape. describe() is what trips over a malformed
-        // nested field, and it used to run at display time, outside every guard, taking the whole
-        // listing down rather than costing this one event its schedule line.
+        // RecurrenceRule.of checks only the top-level shape. describe() is what trips over a
+        // malformed nested field, so it runs inside the per-entry guard: outside it, at display
+        // time, this event costs the whole listing instead of its own schedule line.
         LiveEventDetails d = LiveEventDetails.read(live(
                 event("1").put("recurrence_rule", DataObject.empty()
                         .put("frequency", 2).put("interval", 1)
@@ -131,9 +132,9 @@ class LiveEventDetailsTest {
 
     @Test
     void anElementThatIsNotAnEventObjectCostsOnlyItself() {
-        // The array is walked here rather than converted by the caller. When the caller did it,
-        // this element's getObject threw one level up — outside every per-entry guard — so the
-        // whole live read was discarded and both good events lost their covers.
+        // read() walks the array itself. Converting it in the caller puts this element's
+        // getObject one level up, outside every per-entry guard, where it discards the whole live
+        // read and both good events lose their covers.
         LiveEventDetails d = LiveEventDetails.read(live(
                 event("11").put("image", "aaa"),
                 "not-an-object",
