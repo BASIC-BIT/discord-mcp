@@ -228,14 +228,14 @@ class ScheduledEventServiceTest {
         // The ordinary case, not an exotic one: a full-resolution master is usually both too big
         // and the wrong shape, so the limit on its own leaves the caller stuck.
         Path root = Files.createDirectory(dir.resolve("uploads"));
-        byte[] big = new byte[10 * 1024 * 1024 + 1];
+        byte[] big = new byte[5 * 1024 * 1024 + 1];
         System.arraycopy(png(), 0, big, 0, png().length);
         Path file = Files.write(root.resolve("master.png"), big);
         service.coverFileRoot = root.toString();
 
         assertThatThrownBy(() -> service.setScheduledEventImage(null, "1", file.toString()))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("10 MB limit")
+                .hasMessageContaining("5 MB limit")
                 .hasMessageContaining("Crop it to 5:2");
     }
 

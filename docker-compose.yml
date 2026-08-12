@@ -16,13 +16,14 @@ services:
       # when the container is recreated.
       DISCORD_MCP_DOWNLOAD_ROOT: ${DISCORD_MCP_DOWNLOAD_ROOT:-}
       # Unset by default, which leaves send_file refusing local paths and
-      # set_guild_scheduled_event_image refusing outright. Pointing it at the same
-      # container path as DOWNLOAD_ROOT is what chains download_attachment into
-      # set_guild_scheduled_event_image. Deliberately a second opt-in rather than a
-      # fallback: reading a directory and writing to it are different grants.
+      # set_guild_scheduled_event_image refusing outright. Its own volume below, so
+      # reading uploads and writing downloads stay separate grants. Pointing it at the
+      # downloads path instead is what chains download_attachment into
+      # set_guild_scheduled_event_image, and is a decision rather than a default.
       DISCORD_MCP_FILE_ROOT: ${DISCORD_MCP_FILE_ROOT:-}
     volumes:
       - discord-mcp-downloads:/var/lib/discord-mcp/downloads
+      - discord-mcp-uploads:/var/lib/discord-mcp/uploads
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8085/actuator/health | grep -q '\"status\":\"UP\"'"]
       interval: 30s
@@ -32,3 +33,4 @@ services:
 
 volumes:
   discord-mcp-downloads:
+  discord-mcp-uploads:

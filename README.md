@@ -38,9 +38,10 @@ export SPRING_PROFILES_ACTIVE=http
 # not a host path — see Security notes.
 export DISCORD_MCP_DOWNLOAD_ROOT=/var/lib/discord-mcp/downloads
 # Only if you want local-path uploads: send_file's filePath, and
-# set_guild_scheduled_event_image, which has no other input. Point it at a directory
-# holding nothing but uploads — see Security notes before pointing it at the one above.
-# export DISCORD_MCP_FILE_ROOT=/var/lib/discord-mcp/uploads
+# set_guild_scheduled_event_image, which has no other input. A directory of its own, so
+# that reading uploads and writing downloads stay separate grants — see Security notes
+# before pointing this at the download directory instead.
+export DISCORD_MCP_FILE_ROOT=/var/lib/discord-mcp/uploads
 ```
 
 > [!IMPORTANT]
@@ -63,14 +64,18 @@ docker run -d -i \
   -e DISCORD_MCP_DOWNLOAD_ROOT \
   -e DISCORD_MCP_FILE_ROOT \
   -v discord-mcp-downloads:/var/lib/discord-mcp/downloads \
+  -v discord-mcp-uploads:/var/lib/discord-mcp/uploads \
   saseq/discord-mcp:latest
 ```
 
 > [!TIP]
-> The `-e DISCORD_MCP_DOWNLOAD_ROOT` and `-v` lines are only needed for `download_attachment`,
-> and `-e DISCORD_MCP_FILE_ROOT` for local-path uploads (`send_file`'s `filePath` and
-> `set_guild_scheduled_event_image`). Leave any of them off and those tools refuse; nothing
-> else changes. The named volume is what keeps saved attachments across `docker rm` — a
+> `-e DISCORD_MCP_DOWNLOAD_ROOT` and the downloads `-v` are only needed for
+> `download_attachment`; `-e DISCORD_MCP_FILE_ROOT` and the uploads `-v` only for local-path
+> uploads (`send_file`'s `filePath` and `set_guild_scheduled_event_image`). Leave either pair
+> off and those tools refuse; nothing else changes. Two volumes rather than one because
+> reading uploads and writing downloads are separate grants — sharing a single path is what
+> lets `download_attachment` stage a cover image directly, and is worth deciding on rather
+> than inheriting. The named volumes are also what keep files across `docker rm`; a
 > container-local path loses them on recreate.
 
 Default MCP endpoint URL (HTTP profile): `http://localhost:8085/mcp`
@@ -534,7 +539,7 @@ mvn -Dtest=DiscordLiveIntegrationTest test
 #### Scheduled Events Management
 - [`create_guild_scheduled_event`](): Schedule a new event on the server (voice, stage, or external), optionally recurring
 - [`edit_guild_scheduled_event`](): Modify event details or change its status (start, complete, cancel), including the recurrence rule
-- [`set_guild_scheduled_event_image`](): Replace an event's cover image with a local PNG or JPEG (max 10MB, no animation). Requires [`DISCORD_MCP_FILE_ROOT`](#-security-notes). Separate from `edit_guild_scheduled_event` so a deployment can allow event edits without granting a local-file read
+- [`set_guild_scheduled_event_image`](): Replace an event's cover image with a local PNG or JPEG (max 5MB, no animation; covers display at 5:2, so crop first). Requires [`DISCORD_MCP_FILE_ROOT`](#-security-notes). Separate from `edit_guild_scheduled_event` so a deployment can allow event edits without granting a local-file read
 - [`delete_guild_scheduled_event`](): Permanently delete a scheduled event
 - [`list_guild_scheduled_events`](): List all active and scheduled events on the server, showing which ones recur and their cover image URL
 

@@ -56,20 +56,26 @@ public class ScheduledEventService {
     String coverFileRoot;
 
     /**
-     * A local pre-check on cover size, not an authoritative one.
+     * A local pre-check on cover size, set deliberately low.
      *
-     * <p>Discord's own ceiling is not stated in the API docs, and {@link Icon} base64-encodes the
-     * body, so a file passing this check becomes a request about a third larger. A body between
-     * this limit and whatever Discord actually enforces is rejected remotely instead — which is
-     * why the write below reports Discord's refusal rather than letting a raw JDA exception
-     * surface. Same reasoning as {@code MAX_UPLOAD_BYTES}: Discord is the correct authority for a
-     * limit that cannot be determined locally, and this exists to catch the common case early.
+     * <p>What is known: Discord does not document a ceiling for this endpoint; {@link Icon}
+     * base64-encodes the body into a JSON PATCH, so the request is about a third larger than the
+     * file; and oversized JSON bodies are refused with error 40005 at a threshold that is also
+     * undocumented. What that adds up to is a band of files that pass a generous local check and
+     * are then rejected remotely, after the upload has been spent.
+     *
+     * <p>So this is not an attempt to mirror Discord's limit. It is sized against what a cover
+     * actually is: an image displayed at 800x320, which is around a megabyte as a 2048-wide PNG.
+     * Several times that is already far past anything that has been cropped and scaled for the
+     * slot, so rejecting it locally — with advice, before spending the upload — is more useful
+     * than forwarding it. Raise it if a real ceiling is ever established; the failure it trades
+     * away is the expensive one.
      *
      * <p>Tripping it is an ordinary outcome rather than an unusual one: a source poster is
      * commonly a full-resolution square or portrait master that has to be cropped to the display
-     * shape anyway, and those routinely exceed it. The error says so.
+     * shape anyway, and those routinely exceed it.
      */
-    private static final int MAX_COVER_BYTES = 10 * 1024 * 1024;
+    private static final int MAX_COVER_BYTES = 5 * 1024 * 1024;
 
     public ScheduledEventService(JDA jda) {
         this.jda = jda;
@@ -627,7 +633,7 @@ public class ScheduledEventService {
      * acquire a local-file read. Splitting it keeps the two decisions separate: a deployment can
      * allow event edits and refuse cover uploads.
      */
-    @Tool(name = "set_guild_scheduled_event_image", description = "Replace a scheduled event's cover image with a local PNG or JPEG. The file must be under DISCORD_MCP_FILE_ROOT — use download_attachment to put a poster there first. Discord displays covers at 5:2 (800x320 recommended) and crops anything else, so crop to 5:2 yourself to control what is kept. Max 10MB, no animation.")
+    @Tool(name = "set_guild_scheduled_event_image", description = "Replace a scheduled event's cover image with a local PNG or JPEG. The file must already be under DISCORD_MCP_FILE_ROOT; where a deployment points that at its download directory, download_attachment can stage one there, but on split roots the file has to be put there out of band. Discord displays covers at 5:2 (800x320 recommended) and crops anything else, so crop to 5:2 yourself to control what is kept. Max 5MB, no animation — a full-resolution master is usually both too large and the wrong shape, so crop and scale first.")
     public String setScheduledEventImage(
             @ToolParam(description = "Discord server ID", required = false) String guildId,
             @ToolParam(description = "ID of the scheduled event") String eventId,
@@ -679,14 +685,39 @@ public class ScheduledEventService {
         try {
             event.getManager().setImage(Icon.from(bytes, type)).complete();
         } catch (RuntimeException e) {
-            // Discord's real ceiling is undocumented and applies to a base64 body a third larger
-            // than the file, so a size rejection can land here having passed MAX_COVER_BYTES. Say
-            // what was sent: a bare JDA error reads as a permissions or event problem, and the
-            // caller cannot tell it apart from one without knowing the size that was attempted.
-            throw new IllegalArgumentException("Discord rejected the cover image ("
-                    + e.getMessage() + "). Sent " + bytes.length / 1024 + " KB of "
-                    + type.name() + " from " + path.getFileName()
-                    + ". The event was not changed.", e);
+            // Same rule as patchRecurrence above: a thrown request does not prove the change did
+            // not happen, since a lost response after Discord applied the image looks identical
+            // from here. Read the event back and report what is true rather than asserting an
+            // outcome this cannot know.
+            //
+            // The cause is deliberately not characterised. A size rejection, a missing
+            // MANAGE_EVENTS, and a completed or cancelled event all arrive as the same exception,
+            // and naming one of them points the caller at the wrong fix. The size and format are
+            // context, not a diagnosis.
+            String outcome;
+            try {
+                String now = coverUrlOf(fetchRaw(guild.getId(), event.getId()), event.getId());
+                if (now == null) {
+                    outcome = " The event currently has no cover image.";
+                } else if (beforeKnown && now.equals(before)) {
+                    outcome = " The event still has the cover it had before this call.";
+                } else if (beforeKnown) {
+                    // Reached when the write landed and the response was lost. Saying "failed"
+                    // and leaving it there would send someone to re-upload a change that took.
+                    outcome = " The event's cover DID change despite the error, and is now " + now
+                            + " — the request was applied and its response lost.";
+                } else {
+                    outcome = " The event currently has cover " + now
+                            + ", but the previous one could not be read, so whether this call"
+                            + " changed it is unknown.";
+                }
+            } catch (RuntimeException unverifiable) {
+                outcome = " Could not read the event back, so whether the cover was applied is"
+                        + " unknown — check the event before retrying.";
+            }
+            throw new IllegalArgumentException("Setting the cover image failed: " + e.getMessage()
+                    + ". Sent " + formatSize(bytes.length) + " of " + type.name() + " from "
+                    + path.getFileName() + "." + outcome, e);
         }
 
         // Re-read rather than trusting the write. The manager reports success on an accepted
@@ -706,17 +737,25 @@ public class ScheduledEventService {
         StringBuilder result = new StringBuilder("Set the cover image on ")
                 .append(event.getName()).append(" (ID: ").append(event.getId()).append(")")
                 .append("\n  • From: ").append(path.getFileName())
-                .append(" (").append(type.name()).append(", ").append(bytes.length / 1024).append(" KB)")
+                .append(" (").append(type.name()).append(", ").append(formatSize(bytes.length)).append(")")
                 .append("\n  • Was: ")
                 .append(!beforeKnown ? "could not be read" : before == null ? "no cover image" : before)
                 .append("\n  • Now: ").append(after == null ? "none — Discord did not keep it" : after);
         if (beforeKnown && after != null && after.equals(before)) {
-            // Same hash means identical bytes, which is worth saying out loud: the likeliest cause
-            // is uploading the file that was already there, and the call would otherwise read as a
-            // successful change.
-            result.append("\n  • Unchanged: that is the image the event already had.");
+            // An unchanged hash is worth saying out loud: the likeliest cause is uploading the
+            // file that was already there, and the call would otherwise read as a successful
+            // change. Whether Discord derives the hash from content or mints one per upload is
+            // not documented, so this may simply never fire — a branch that stays quiet, not a
+            // wrong answer, and the reported before/after URLs are correct either way.
+            result.append("\n  • Unchanged: the event's cover hash did not move, so this is"
+                    + " the image it already had.");
         }
         return result.toString();
+    }
+
+    /** Bytes below a kilobyte reported as bytes, so a small but valid file is not shown as "0 KB". */
+    private static String formatSize(int bytes) {
+        return bytes < 1024 ? bytes + " bytes" : bytes / 1024 + " KB";
     }
 
     /** The cover image URL from a raw event object, or null if it has no cover. */
@@ -797,6 +836,7 @@ public class ScheduledEventService {
         // that is the case where JDA's cached entity is stale.
         java.util.Map<String, DataObject> rules = new java.util.HashMap<>();
         java.util.Map<String, String> covers = new java.util.HashMap<>();
+        java.util.Set<String> described = new java.util.HashSet<>();
         boolean rawKnown = false;
         try {
             Route.CompiledRoute route = Route.custom(Method.GET, "guilds/{guild_id}/scheduled-events")
@@ -810,6 +850,12 @@ public class ScheduledEventService {
                 if (rule != null) {
                     rules.put(id, rule);
                 }
+                // Every event the live response described, whether or not it has a cover. The
+                // events being listed come from JDA's cache, so one can be present there and
+                // absent here — deleted out of band, or a stale cache. Keying "none" off this set
+                // rather than off a missing map entry keeps that case from turning a response
+                // that said nothing about an event into a claim that it has no cover.
+                described.add(id);
                 // Same helper the write path uses, so "read the cover from a raw event" has one
                 // spelling rather than two that can drift apart.
                 String cover = coverUrlOf(o, id);
@@ -826,13 +872,15 @@ public class ScheduledEventService {
             // information.
             rules.clear();
             covers.clear();
+            described.clear();
         }
 
         String caveat = rawKnown ? ""
                 : "\n(Recurrence and cover images could not be read, so no event below is marked as"
                 + " recurring or as having a cover even if it is.)";
-        // The flag is assigned inside the try above, so it is not effectively final and cannot be
-        // read from the lambda directly.
+        // Assigned inside the try above, so not effectively final and unreadable from the lambda.
+        // Only used to keep the whole-read failure from reaching the per-event check below; the
+        // `described` set is what decides each individual line.
         final boolean coversKnown = rawKnown;
         return "Retrieved " + events.size() + " scheduled events:" + caveat + "\n" +
                 events.stream()
@@ -844,9 +892,11 @@ public class ScheduledEventService {
                             if (e.getEndTime() != null) sb.append(" | End: ").append(e.getEndTime());
                             DataObject rule = rules.get(e.getId());
                             if (rule != null) sb.append("\n  • Recurs: ").append(RecurrenceRule.describe(rule));
-                            // Only claimed when the raw read succeeded. "none" is an assertion that
-                            // the event has no cover, and a failed read cannot support it.
-                            if (coversKnown) {
+                            // Only claimed for an event the live response actually described.
+                            // "none" asserts the event has no cover, and neither a failed read nor
+                            // a response that omitted the event can support that. The recurrence
+                            // line above avoids the same trap by omitting itself.
+                            if (coversKnown && described.contains(e.getId())) {
                                 sb.append("\n  • Cover image: ")
                                         .append(covers.getOrDefault(e.getId(), "none"));
                             }
