@@ -821,6 +821,51 @@ public class ScheduledEventService {
     }
 
 
+    /**
+     * The one-line cover summary for a listing.
+     *
+     * <p>Stated once rather than per event: a missing cover is worth surfacing, since it is
+     * otherwise invisible and a listing that only ever prints URLs cannot distinguish "has no
+     * cover" from "not reported" — but it does not need a line each on a listing with no result
+     * cap.
+     *
+     * <p>The counts are kept apart because they support different claims. Events come from JDA's
+     * cache and covers from a live REST read, so an event can be listed and yet absent from that
+     * response — deleted out of band, or a stale cache. Such an event has no cover line, and
+     * without a word here that is indistinguishable from having no cover, which is the claim the
+     * whole {@code described} set exists to avoid making. Counting it in the denominator would
+     * make the same mistake more quietly: "2 of 5 have no cover" implies three URLs follow when
+     * only one does.
+     *
+     * <p>Extracted and tested for the same reason as {@code describeOutcome}: every clause is a
+     * claim about what the reader is looking at, and testing it in place would mean mocking JDA's
+     * request construction.
+     *
+     * @param total          events being listed, from the cache
+     * @param described      how many of those the live response actually described
+     * @param coverless      how many described events have no cover
+     * @param rawKnown       whether the live read succeeded at all
+     */
+    static String coverCaveat(int total, int described, int coverless, boolean rawKnown) {
+        if (!rawKnown) {
+            return "\n(Recurrence and cover images could not be read, so no event below is marked as"
+                    + " recurring or as having a cover even if it is.)";
+        }
+        StringBuilder sb = new StringBuilder();
+        if (coverless > 0) {
+            sb.append(coverless).append(" of ").append(described)
+                    .append(described == 1 ? " event has" : " events have").append(" no cover image");
+        }
+        int missing = total - described;
+        if (missing > 0) {
+            sb.append(sb.length() == 0 ? "" : "; ")
+                    .append(missing).append(missing == 1 ? " event was" : " events were")
+                    .append(" not in the live read, so ")
+                    .append(missing == 1 ? "its cover is" : "their covers are").append(" unknown");
+        }
+        return sb.length() == 0 ? "" : "\n(" + sb + ".)";
+    }
+
     /** The cover image URL from a raw event object, or null if it has no cover. */
     // Package-private for the same reason as resolveEndTime and coverType: testable without a
     // live event.
@@ -831,8 +876,12 @@ public class ScheduledEventService {
 
     private static String coverUrl(String eventId, String hash) {
         // JDA's own template, so the CDN host and path stay in one place rather than being spelled
-        // out here. Always png: Discord serves any accepted cover at that extension.
-        return String.format(ScheduledEvent.IMAGE_URL, eventId, hash, "png");
+        // out here — and its extension rule too, rather than borrowing the template and then
+        // diverging on the one part of it that is conditional. An "a_" hash means animated, which
+        // a cover set through this tool can never be; but a hash this did not write, or a
+        // Discord-side change, would otherwise produce a URL that 404s everywhere it is printed.
+        return String.format(ScheduledEvent.IMAGE_URL, eventId, hash,
+                hash.startsWith("a_") ? "gif" : "png");
     }
 
     /**
@@ -951,17 +1000,11 @@ public class ScheduledEventService {
             described.clear();
         }
 
-        // Stated once rather than per event. A missing cover is worth surfacing — it is otherwise
-        // invisible, and a listing that only ever shows URLs cannot distinguish "has no cover"
-        // from "not reported" — but it does not need a line each on an uncapped listing.
-        long coverless = events.stream()
+        int describedCount = (int) events.stream().filter(e -> described.contains(e.getId())).count();
+        int coverlessCount = (int) events.stream()
                 .filter(e -> described.contains(e.getId()) && !covers.containsKey(e.getId()))
                 .count();
-        String caveat = rawKnown
-                ? (coverless == 0 ? "" : "\n(" + coverless + " of " + events.size()
-                        + " have no cover image; the others show one below.)")
-                : "\n(Recurrence and cover images could not be read, so no event below is marked as"
-                + " recurring or as having a cover even if it is.)";
+        String caveat = coverCaveat(events.size(), describedCount, coverlessCount, rawKnown);
         return "Retrieved " + events.size() + " scheduled events:" + caveat + "\n" +
                 events.stream()
                         .map(e -> {
