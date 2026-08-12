@@ -201,6 +201,9 @@ Default MCP endpoint URL (HTTP profile): `http://localhost:8085/mcp`
 Optional. The single directory that `send_file` and `set_guild_scheduled_event_image` may
 read local `filePath` uploads from.
 
+> **Two rules, and the rest of this section is why.** Point it at a directory only you write
+> to. Never point it at `DISCORD_MCP_DOWNLOAD_ROOT`, or at a directory containing it.
+
 **Unset (default), local paths are refused.** `send_file` still works via `fileUrl` or
 base64 `fileData`, and `set_guild_scheduled_event_image` still works via `imageUrl` —
 unset refuses only local `filePath`. Set this only if you need local-path uploads, and

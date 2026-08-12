@@ -5,6 +5,7 @@ import net.dv8tion.jda.api.utils.data.DataObject;
 
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
 
@@ -35,7 +36,9 @@ record LiveEventDetails(Map<String, String> rules, Map<String, String> covers,
         Map<String, String> rules = new HashMap<>();
         Map<String, String> covers = new HashMap<>();
         Set<String> described = new HashSet<>();
-        Set<String> returned = new HashSet<>();
+        // Insertion-ordered: the caveat names unlisted ids, and the order Discord
+        // returned them in is the only order this has any claim to.
+        Set<String> returned = new LinkedHashSet<>();
         Set<String> recurrenceFailed = new HashSet<>();
         int unidentifiable = 0;
 

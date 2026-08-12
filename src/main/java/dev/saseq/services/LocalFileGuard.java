@@ -97,6 +97,17 @@ public final class LocalFileGuard {
     }
 
     /**
+     * Whether two configured roots are the same directory, or one inside the other.
+     *
+     * <p>Shared because two places need the same answer — the cover tool, which refuses the
+     * overlap, and the startup check, which warns about it — and a second copy of "is one path
+     * inside the other" is how the two would come to disagree about what overlap means.
+     */
+    public static boolean overlaps(Root a, Root b) {
+        return a.path().startsWith(b.path()) || b.path().startsWith(a.path());
+    }
+
+    /**
      * A directory that has been through {@link #resolveRoot}.
      *
      * <p>This type is what {@code resolveWithinRoot} confines against, so only a directory

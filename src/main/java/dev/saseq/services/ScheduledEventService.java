@@ -810,9 +810,15 @@ public class ScheduledEventService {
         // mean PATCHing an event that may not be there and losing the one answer that says so.
         String eventName;
         Cover before;
+        String terminalState;
         try {
             DataObject current = fetchRaw(resolvedGuild, eventId);
             eventName = current.getString("name", eventId);
+            // Read here because it is free here: this response already carries the status, and a
+            // cover write on an event that is over is a plausible mistake rather than an exotic
+            // one. Used only if the write fails, where it is the one candidate cause this call
+            // can actually observe.
+            terminalState = terminalStateOf(current);
             // Cover.of, which absorbs an unreadable image field rather than throwing out of this
             // try. The event was read — that is what this call is for — and a cosmetic field that
             // will not parse must not refuse a write the caller is entitled to make. It costs the
@@ -869,9 +875,15 @@ public class ScheduledEventService {
                 outcome = " Could not read the event back, so whether the cover was applied is"
                         + " unknown — check the event before retrying.";
             }
+            // Stated as what was observed, not as the diagnosis. The read a moment earlier saw
+            // this state; whether Discord refuses covers on a finished event is not something
+            // this code has established, and the exception does not say. Naming the observation
+            // is what the paragraph above declines to do for the causes it cannot see.
+            String state = terminalState == null ? ""
+                    : " The event was already " + terminalState + " when this call read it.";
             throw new IllegalArgumentException("Setting the cover image failed" + reason(e)
                     + ". Sent " + FileSizes.format(bytes.length) + " of " + type.name() + " from "
-                    + source + "." + outcome, e);
+                    + source + "." + state + outcome, e);
         }
 
         // Read outside the try above, for the same reason Icon.from sits outside it: the write
@@ -1114,8 +1126,13 @@ public class ScheduledEventService {
             // clause in this function is careful not to attribute — describeOutcome will not even
             // claim authorship of a cover change for the same reason.
             join(sb).append("Discord returned ").append(c.unlisted()).append(" event")
-                    .append(c.unlisted() == 1 ? "" : "s").append(" not in this list, so the list is")
-                    .append(" incomplete");
+                    .append(c.unlisted() == 1 ? "" : "s").append(" not in this list (")
+                    // Named, unlike every other clause. The others describe events that have a row
+                    // below with an id in it; these have no row at all, so a bare count leaves the
+                    // reader knowing something is missing and with no way to reach it — while this
+                    // call had the ids in hand.
+                    .append(namedIds(c.unlistedIds()))
+                    .append("), so the list is incomplete");
         }
         if (c.unidentifiable() > 0) {
             // Its own clause because it belongs to no event. Folding it into unreadable would
@@ -1146,6 +1163,25 @@ public class ScheduledEventService {
         return sb.length() == 0 ? sb : sb.append("; ");
     }
 
+    /** How many ids a caveat will name before it starts counting instead. */
+    private static final int MAX_NAMED_IDS = 10;
+
+    /**
+     * Ids a caller can act on, bounded, and explicit about any it drops.
+     *
+     * <p>The listing itself has no result cap, so an unbounded id list is not absurd here — but a
+     * cold cache on a busy guild would put a hundred snowflakes in a header that exists to be read
+     * at a glance. Ten is enough to act on; the remainder is stated rather than silently cut,
+     * which is the difference between a bounded answer and a wrong one.
+     */
+    private static String namedIds(List<String> ids) {
+        if (ids.size() <= MAX_NAMED_IDS) {
+            return "IDs: " + String.join(", ", ids);
+        }
+        return "IDs: " + String.join(", ", ids.subList(0, MAX_NAMED_IDS))
+                + ", and " + (ids.size() - MAX_NAMED_IDS) + " more";
+    }
+
     /**
      * An exception's message as a trailing clause, or nothing when it has none.
      *
@@ -1159,8 +1195,30 @@ public class ScheduledEventService {
 
     /** Over, so the live listing no longer carries it and its cover cannot be read from there. */
     private static boolean isTerminal(ScheduledEvent event) {
-        return event.getStatus() == ScheduledEvent.Status.COMPLETED
-                || event.getStatus() == ScheduledEvent.Status.CANCELED;
+        return isTerminal(event.getStatus());
+    }
+
+    private static boolean isTerminal(ScheduledEvent.Status status) {
+        return status == ScheduledEvent.Status.COMPLETED || status == ScheduledEvent.Status.CANCELED;
+    }
+
+    /**
+     * The event's state when it was read, named only when it is one worth knowing about before
+     * blaming a failed write. Null otherwise, the unreadable case included.
+     *
+     * <p>JDA's own key mapping rather than the integers, so the two places this file decides what
+     * "over" means agree by construction.
+     */
+    static String terminalStateOf(DataObject raw) {
+        ScheduledEvent.Status status;
+        try {
+            status = ScheduledEvent.Status.fromKey(raw.getInt("status", -1));
+        } catch (RuntimeException unreadable) {
+            // A cosmetic field on the way to a write. Losing it costs a sentence of context, and
+            // refusing over it would repeat the mistake the cover field already made here.
+            return null;
+        }
+        return isTerminal(status) ? status.name() : null;
     }
 
     /** The cover image URL from a raw event object, or null if it has no cover. */
@@ -1265,19 +1323,20 @@ public class ScheduledEventService {
             // refuse every upload root beneath it — including the layout the README recommends.
             return root;
         }
-        Path downloads;
+        LocalFileGuard.Root downloads;
         try {
-            downloads = LocalFileGuard.resolveRoot(downloadRoot, "DISCORD_MCP_DOWNLOAD_ROOT").path();
+            downloads = LocalFileGuard.resolveRoot(downloadRoot, "DISCORD_MCP_DOWNLOAD_ROOT");
         } catch (RuntimeException downloadsUnusable) {
             // Set to something that does not resolve: a missing directory, an unparseable path.
             // Nothing is being written there either, so there is still nothing to collide with,
             // and a broken download root is download_attachment's to report, not this tool's.
             return root;
         }
-        // Containment either way, not equality: downloads written inside the upload root are
-        // readable from it just as surely, and an upload root inside the downloads directory is
-        // the same arrangement seen from the other end. Both sides are already toRealPath()d.
-        if (root.path().startsWith(downloads) || downloads.startsWith(root.path())) {
+        // The shared predicate, which the startup warning uses too. Containment either way, not
+        // equality: downloads written inside the upload root are readable from it just as surely,
+        // and an upload root inside the downloads directory is the same arrangement seen from the
+        // other end.
+        if (LocalFileGuard.overlaps(root, downloads)) {
             throw new IllegalArgumentException(
                     "DISCORD_MCP_FILE_ROOT and DISCORD_MCP_DOWNLOAD_ROOT overlap, so this server "
                             + "would read covers out of a directory it also writes downloads "

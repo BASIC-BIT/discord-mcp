@@ -2,6 +2,7 @@ package dev.saseq.services;
 
 import java.util.Collection;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -25,14 +26,22 @@ import java.util.Set;
  * @param terminal   listed events Discord did not return because they have ended or been
  *                   cancelled — a different fact from {@code absent}, and one that explains a
  *                   missing cover rather than reporting a gap
- * @param unlisted   events Discord returned that the listing does not contain
+ * @param unlistedIds ids Discord returned that the listing does not contain, in the order it
+ *                   returned them. Ids rather than a count because this is the one bucket with
+ *                   no row of its own: every other clause points the reader at something printed
+ *                   below it, and this one had nothing to point at.
  * @param unidentifiable entries Discord returned with no usable id, which cannot be matched to a
  *                       listed event in either direction
  * @param recurrenceUnreadable listed events whose recurrence would not parse, so a missing
  *                             "Recurs:" line means unknown rather than absent
  */
 record CoverCounts(int described, int coverless, int unreadable, int absent, int terminal,
-                   int unlisted, int unidentifiable, int recurrenceUnreadable) {
+                   List<String> unlistedIds, int unidentifiable, int recurrenceUnreadable) {
+
+    /** How many events Discord returned that the listing does not contain. */
+    int unlisted() {
+        return unlistedIds.size();
+    }
 
     /**
      * @param listed         every listed event's id, in listing order
@@ -46,22 +55,16 @@ record CoverCounts(int described, int coverless, int unreadable, int absent, int
     static CoverCounts tally(Collection<String> listed, Set<String> terminalIds,
                              Set<String> returned, Set<String> described, Set<String> withCovers,
                              Set<String> recurrenceFailed, int unidentifiable) {
-        // Distinct, because `unlisted` subtracts this from returned.size(). A duplicate id in the
-        // listing would make listedAndReturned outrun a Set and render "Discord returned -1
-        // events not in this list" — nonsense from a function whose whole purpose is not making
-        // claims it cannot support. Nothing in Collection<String> stops a caller passing one.
+        // Distinct, so a duplicate id in the listing cannot be counted into two buckets at once.
+        // Nothing in Collection<String> stops a caller passing one.
         Set<String> unique = new LinkedHashSet<>(listed);
         int describedCount = 0;
         int coverless = 0;
         int unreadable = 0;
         int absent = 0;
         int terminal = 0;
-        int listedAndReturned = 0;
         int recurrenceUnreadable = 0;
         for (String id : unique) {
-            if (returned.contains(id)) {
-                listedAndReturned++;
-            }
             if (described.contains(id)) {
                 describedCount++;
                 if (!withCovers.contains(id)) {
@@ -84,15 +87,17 @@ record CoverCounts(int described, int coverless, int unreadable, int absent, int
                 recurrenceUnreadable++;
             }
         }
-        // Returned minus those that are actually in the listing: events Discord has and the cache
-        // does not. These have no row at all, so there is nowhere to hang a per-event note.
-        int unlisted = returned.size() - listedAndReturned;
-        return new CoverCounts(describedCount, coverless, unreadable, absent, terminal, unlisted,
+        // Returned minus those actually in the listing: events Discord has and the cache does
+        // not. A set difference rather than a subtraction of two counts, which is both the ids the
+        // caveat needs and a shape that cannot render "Discord returned -1 events" however the
+        // caller's collections overlap.
+        List<String> unlistedIds = returned.stream().filter(id -> !unique.contains(id)).toList();
+        return new CoverCounts(describedCount, coverless, unreadable, absent, terminal, unlistedIds,
                 unidentifiable, recurrenceUnreadable);
     }
 
     /** Nothing to say: the live read accounted for every listed event, and all of them have covers. */
     static CoverCounts none() {
-        return new CoverCounts(0, 0, 0, 0, 0, 0, 0, 0);
+        return new CoverCounts(0, 0, 0, 0, 0, List.of(), 0, 0);
     }
 }

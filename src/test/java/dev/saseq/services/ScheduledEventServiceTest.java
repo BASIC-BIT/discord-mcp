@@ -203,7 +203,7 @@ class ScheduledEventServiceTest {
         // The denominator is described events, not listed ones. Events come from JDA's cache and
         // covers from a live REST read, so "2 of 5 have no cover" would imply three URLs follow
         // when only one does.
-        assertThat(ScheduledEventService.coverCaveat(new CoverCounts(3, 2, 0, 2, 0, 0, 0, 0), true))
+        assertThat(ScheduledEventService.coverCaveat(new CoverCounts(3, 2, 0, 2, 0, unlistedIds(0), 0, 0), true))
                 .isEqualTo("\n(2 of 3 events have no cover image; 2 events were not in the live"
                         + " read, so their covers are unknown.)");
     }
@@ -213,7 +213,7 @@ class ScheduledEventServiceTest {
         // A caveat gated on coverless events alone goes empty here, and an undescribed event then
         // renders with no cover line and no explanation — exactly "this event has no cover", the
         // claim the described set exists to avoid.
-        assertThat(ScheduledEventService.coverCaveat(new CoverCounts(3, 0, 0, 1, 0, 0, 0, 0), true))
+        assertThat(ScheduledEventService.coverCaveat(new CoverCounts(3, 0, 0, 1, 0, unlistedIds(0), 0, 0), true))
                 .isEqualTo("\n(1 event was not in the live read, so its cover is unknown.)");
     }
 
@@ -224,9 +224,26 @@ class ScheduledEventServiceTest {
         //
         // The fact, not a cause. A lagging cache is the likeliest explanation and not the only
         // one, and naming it sends the reader to wait for something that may never arrive.
-        assertThat(ScheduledEventService.coverCaveat(new CoverCounts(3, 0, 0, 0, 0, 2, 0, 0), true))
-                .isEqualTo("\n(Discord returned 2 events not in this list, so the list is"
-                        + " incomplete.)");
+        // Named, which no other clause does: these events have no row below carrying their id, so
+        // a bare count tells the reader something is missing and gives them no way to reach it.
+        assertThat(ScheduledEventService.coverCaveat(new CoverCounts(3, 0, 0, 0, 0, unlistedIds(2), 0, 0), true))
+                .isEqualTo("\n(Discord returned 2 events not in this list (IDs: 900000000000000000,"
+                        + " 900000000000000001), so the list is incomplete.)");
+    }
+
+    @Test
+    void aLongListOfUnlistedIdsIsCutWithTheRemainderStated() {
+        // The listing has no result cap, so this could run to a hundred snowflakes in a header
+        // meant to be read at a glance. Ten is enough to act on — and the rest is counted rather
+        // than dropped, because a silently truncated list reads as the whole of it.
+        String caveat = ScheduledEventService.coverCaveat(
+                new CoverCounts(0, 0, 0, 0, 0, unlistedIds(13), 0, 0), true);
+
+        assertThat(caveat)
+                .contains("Discord returned 13 events not in this list")
+                .contains("900000000000000009")
+                .contains(", and 3 more)")
+                .doesNotContain("900000000000000010");
     }
 
     @Test
@@ -234,10 +251,10 @@ class ScheduledEventServiceTest {
         // The distinction this set of counters exists for. Discord DID return the event; its
         // details would not parse. Reporting that as "not in the live read" describes a cache lag
         // that did not happen, and sends whoever reads it to look in the wrong place.
-        assertThat(ScheduledEventService.coverCaveat(new CoverCounts(2, 0, 1, 0, 0, 0, 0, 0), true))
+        assertThat(ScheduledEventService.coverCaveat(new CoverCounts(2, 0, 1, 0, 0, unlistedIds(0), 0, 0), true))
                 .isEqualTo("\n(1 event was returned but could not be read, so its cover is unknown.)");
         // Both at once, each named as itself.
-        assertThat(ScheduledEventService.coverCaveat(new CoverCounts(2, 1, 1, 1, 0, 0, 0, 0), true))
+        assertThat(ScheduledEventService.coverCaveat(new CoverCounts(2, 1, 1, 1, 0, unlistedIds(0), 0, 0), true))
                 // "1 of 2 events HAS": the noun counts the described events, the verb agrees with
                 // the coverless one. Taking both from the same number gets one of them wrong.
                 .isEqualTo("\n(1 of 2 events has no cover image; 1 event was returned but could"
@@ -250,7 +267,7 @@ class ScheduledEventServiceTest {
         // It cannot be matched to a listed event in either direction, so it can be neither
         // "unreadable" (which names an event) nor folded into "not in the live read" (which would
         // blame the cache for a malformed response).
-        assertThat(ScheduledEventService.coverCaveat(new CoverCounts(2, 0, 0, 0, 0, 0, 1, 0), true))
+        assertThat(ScheduledEventService.coverCaveat(new CoverCounts(2, 0, 0, 0, 0, unlistedIds(0), 1, 0), true))
                 .isEqualTo("\n(1 entry could not be read at all, so it is not counted against"
                         + " any event.)");
     }
@@ -260,7 +277,7 @@ class ScheduledEventServiceTest {
         // A malformed recurrence_rule beside a readable image: the event lists, its cover counts,
         // and it renders with no "Recurs:" line. Without this clause that reads as "does not
         // recur" — the silent claim the listing's outer catch already refuses to make.
-        assertThat(ScheduledEventService.coverCaveat(new CoverCounts(2, 0, 0, 0, 0, 0, 0, 1), true))
+        assertThat(ScheduledEventService.coverCaveat(new CoverCounts(2, 0, 0, 0, 0, unlistedIds(0), 0, 1), true))
                 .isEqualTo("\n(1 event's recurrence could not be read, so it shows no schedule"
                         + " below even if it recurs.)");
     }
@@ -271,7 +288,7 @@ class ScheduledEventServiceTest {
         // counted as unreadable-for-covers and
         // nothing claims anything about its schedule — in particular `recurrenceUnreadable` stays
         // 0, because the recurrence was read. Only its cover is unknown.
-        assertThat(ScheduledEventService.coverCaveat(new CoverCounts(2, 0, 1, 0, 0, 0, 0, 0), true))
+        assertThat(ScheduledEventService.coverCaveat(new CoverCounts(2, 0, 1, 0, 0, unlistedIds(0), 0, 0), true))
                 .isEqualTo("\n(1 event was returned but could not be read, so its cover is unknown.)")
                 .doesNotContain("recurrence");
     }
@@ -284,7 +301,7 @@ class ScheduledEventServiceTest {
         // thing without contradicting it. Asserted together, because each clause is defensible on
         // its own and it is the pair that has to be read.
         assertThat(ScheduledEventService.coverCaveat(
-                new CoverCounts(1, 0, 0, 1, 0, 0, 1, 0), true))
+                new CoverCounts(1, 0, 0, 1, 0, unlistedIds(0), 1, 0), true))
                 .contains("may be that one")
                 .contains("not counted against any event")
                 .doesNotContain("either of those");
@@ -295,12 +312,12 @@ class ScheduledEventServiceTest {
         // Same argument as the absent clause: an entry that came back with no usable id might be
         // this very event, so "Discord no longer returns it" stops being knowable once one exists.
         assertThat(ScheduledEventService.coverCaveat(
-                new CoverCounts(1, 0, 0, 0, 1, 0, 1, 0), true))
+                new CoverCounts(1, 0, 0, 0, 1, unlistedIds(0), 1, 0), true))
                 .contains("nothing in the live read matched")
                 .doesNotContain("so Discord no longer returns");
         // With nothing unidentifiable, the flat claim is supported and stays.
         assertThat(ScheduledEventService.coverCaveat(
-                new CoverCounts(1, 0, 0, 0, 1, 0, 0, 0), true))
+                new CoverCounts(1, 0, 0, 0, 1, unlistedIds(0), 0, 0), true))
                 .contains("so Discord no longer returns it");
     }
 
@@ -309,12 +326,12 @@ class ScheduledEventServiceTest {
         // The unidentifiable entry could be the absent event. Nothing matches them up, so the
         // flat claim stops being knowable — the one place the counter split cannot help, and so
         // the one place the wording has to.
-        assertThat(ScheduledEventService.coverCaveat(new CoverCounts(1, 0, 0, 1, 0, 0, 1, 0), true))
+        assertThat(ScheduledEventService.coverCaveat(new CoverCounts(1, 0, 0, 1, 0, unlistedIds(0), 1, 0), true))
                 .contains("not matched to anything in the live read")
                 .contains("the entry with no id may be that one")
                 .doesNotContain("not in the live read, so");
         // With nothing unidentifiable, the flat claim is supported and stays.
-        assertThat(ScheduledEventService.coverCaveat(new CoverCounts(1, 0, 0, 1, 0, 0, 0, 0), true))
+        assertThat(ScheduledEventService.coverCaveat(new CoverCounts(1, 0, 0, 1, 0, unlistedIds(0), 0, 0), true))
                 .contains("1 event was not in the live read");
     }
 
@@ -324,14 +341,14 @@ class ScheduledEventServiceTest {
         // live read that described every listed event. With one described-and-coverless beside
         // two absent, it asserted something about two events it never saw — in the same sentence
         // that then called those two unknown.
-        assertThat(ScheduledEventService.coverCaveat(new CoverCounts(1, 1, 0, 2, 0, 0, 0, 0), true))
+        assertThat(ScheduledEventService.coverCaveat(new CoverCounts(1, 1, 0, 2, 0, unlistedIds(0), 0, 0), true))
                 // "1 of 1 event", singular on both. Reachable precisely because the shorthand
                 // above also requires nothing unreadable, absent or unidentifiable.
                 .isEqualTo("\n(1 of 1 event has no cover image; 2 events were not in the live"
                         + " read, so their covers are unknown.)")
                 .doesNotContain("no event here");
         // Nothing missing, so the claim is supported and the shorthand stands.
-        assertThat(ScheduledEventService.coverCaveat(new CoverCounts(3, 3, 0, 0, 0, 0, 0, 0), true))
+        assertThat(ScheduledEventService.coverCaveat(new CoverCounts(3, 3, 0, 0, 0, unlistedIds(0), 0, 0), true))
                 .isEqualTo("\n(no event here has a cover image.)");
     }
 
@@ -343,12 +360,12 @@ class ScheduledEventServiceTest {
         // Counting it as "not in the live read" blames a cache gap for an event simply being
         // finished; dropping it entirely leaves a row with no cover URL and nothing to say why,
         // which reads as "this event has no cover". Its own clause says what is true.
-        assertThat(ScheduledEventService.coverCaveat(new CoverCounts(2, 0, 0, 0, 1, 0, 0, 0), true))
+        assertThat(ScheduledEventService.coverCaveat(new CoverCounts(2, 0, 0, 0, 1, unlistedIds(0), 0, 0), true))
                 .isEqualTo("\n(1 event has ended or been cancelled, so Discord no longer returns it,"
                         + " and no cover is shown below for it.)");
         // And it suppresses the all-coverless shorthand, which would otherwise claim over an
         // event whose cover was never read.
-        assertThat(ScheduledEventService.coverCaveat(new CoverCounts(2, 2, 0, 0, 1, 0, 0, 0), true))
+        assertThat(ScheduledEventService.coverCaveat(new CoverCounts(2, 2, 0, 0, 1, unlistedIds(0), 0, 0), true))
                 .doesNotContain("no event here")
                 .contains("2 of 2 events have no cover image")
                 .contains("ended or been cancelled");
@@ -356,14 +373,14 @@ class ScheduledEventServiceTest {
 
     @Test
     void aFullyDescribedListingWithEveryCoverPresentSaysNothing() {
-        assertThat(ScheduledEventService.coverCaveat(new CoverCounts(3, 0, 0, 0, 0, 0, 0, 0), true)).isEmpty();
+        assertThat(ScheduledEventService.coverCaveat(new CoverCounts(3, 0, 0, 0, 0, unlistedIds(0), 0, 0), true)).isEmpty();
     }
 
     @Test
     void theOrdinaryCaseOfNoCoversAtAllSkipsTheArithmetic() {
         // Covers are rare, so "3 of 3 events have no cover image" is what most listings would
         // carry, and the numbers in it say nothing a reader can use.
-        assertThat(ScheduledEventService.coverCaveat(new CoverCounts(3, 3, 0, 0, 0, 0, 0, 0), true))
+        assertThat(ScheduledEventService.coverCaveat(new CoverCounts(3, 3, 0, 0, 0, unlistedIds(0), 0, 0), true))
                 .isEqualTo("\n(no event here has a cover image.)");
     }
 
@@ -371,7 +388,7 @@ class ScheduledEventServiceTest {
     void aFailedLiveReadCaveatsEverythingRatherThanCounting() {
         // Counts drawn from a read that did not happen are all zero, which would render as "every
         // event has a cover" — the failure mode the caveat exists for.
-        assertThat(ScheduledEventService.coverCaveat(new CoverCounts(0, 0, 0, 0, 0, 0, 0, 0), false))
+        assertThat(ScheduledEventService.coverCaveat(new CoverCounts(0, 0, 0, 0, 0, unlistedIds(0), 0, 0), false))
                 .contains("could not be read")
                 .contains("as having a cover even if it is");
     }
@@ -439,6 +456,29 @@ class ScheduledEventServiceTest {
                 .contains("• Now: " + COVER_URL)
                 // Nothing to compare against, so the unchanged note cannot fire.
                 .doesNotContain("Unchanged");
+    }
+
+    @Test
+    void anEventThatIsOverIsNamedAsSuchRatherThanLeftToTheGenericFailure() {
+        // The one candidate cause the pre-write read can actually see. A size rejection, a missing
+        // MANAGE_EVENTS and a finished event all arrive as the same exception, so the failure
+        // message names none of them — but the status came back in the read a moment earlier, so
+        // that much is observed rather than guessed.
+        assertThat(ScheduledEventService.terminalStateOf(
+                DataObject.empty().put("status", 3))).isEqualTo("COMPLETED");
+        assertThat(ScheduledEventService.terminalStateOf(
+                DataObject.empty().put("status", 4))).isEqualTo("CANCELED");
+        // Live events say nothing: a cover on a running or upcoming event is ordinary.
+        assertThat(ScheduledEventService.terminalStateOf(
+                DataObject.empty().put("status", 1))).isNull();
+        assertThat(ScheduledEventService.terminalStateOf(
+                DataObject.empty().put("status", 2))).isNull();
+        // Absent or unreadable costs a sentence of context, never the write.
+        assertThat(ScheduledEventService.terminalStateOf(DataObject.empty())).isNull();
+        assertThat(ScheduledEventService.terminalStateOf(
+                DataObject.empty().put("status", "over"))).isNull();
+        assertThat(ScheduledEventService.terminalStateOf(
+                DataObject.empty().put("status", DataObject.empty()))).isNull();
     }
 
     @Test
@@ -684,6 +724,26 @@ class ScheduledEventServiceTest {
     }
 
     @Test
+    void aDownloadRootThatDoesNotResolveDisablesTheCheckRatherThanTheTool(@TempDir Path dir)
+            throws IOException {
+        // The branch that fails open, so the one worth pinning. A download root pointing at a
+        // directory that is not there means nothing is being written there, so there is nothing
+        // to collide with — and a broken download root is download_attachment's to report, with
+        // the parameter names its own caller used, not this tool's to refuse a cover over.
+        Path uploads = Files.createDirectory(dir.resolve("uploads"));
+        Files.write(uploads.resolve("poster.png"), png());
+        service.coverFileRoot = uploads.toString();
+        service.downloadRoot = dir.resolve("not-created").toString();
+
+        assertThatThrownBy(() -> service.setScheduledEventImage(
+                GUILD, EVENT, null, uploads.resolve("poster.png").toString()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Could not reach Discord")
+                .hasMessageNotContaining("overlap")
+                .hasMessageNotContaining("DISCORD_MCP_DOWNLOAD_ROOT");
+    }
+
+    @Test
     void separateRootsAreNotRefused(@TempDir Path dir) throws IOException {
         // The other half of the check: an ordinary two-directory deployment must reach the file.
         // Without this, a comparison that refused everything would pass the test above.
@@ -892,6 +952,13 @@ class ScheduledEventServiceTest {
         assertThat(ScheduledEventService.describeOutcome(none(), unknown()))
                 .contains("has no cover image now")
                 .doesNotContain("REMOVED");
+    }
+
+    /** N unlisted ids: these cases are about the count, and the ids only have to be distinct. */
+    private static java.util.List<String> unlistedIds(int n) {
+        return java.util.stream.IntStream.range(0, n)
+                .mapToObj(i -> String.valueOf(900000000000000000L + i))
+                .toList();
     }
 
     private static ScheduledEventService.Cover present(String url) {
