@@ -217,12 +217,12 @@ substitute for one.
 narrower case than the fallback `DISCORD_MCP_DOWNLOAD_ROOT` refuses below, for two reasons.
 The filesystem grant is identical — same root, same read, no new directory. And what can
 leave through it is bounded by format: the cover is rejected unless its bytes begin with a
-PNG or JPEG signature, which no `.env` or `/proc/self/environ` will satisfy. State that
-precisely, though — it is a check on the first 3–8 bytes, not image validation. A file that
-does not *start* like an image cannot leave; a real image with data appended to it still
-can. That check, not the destination, is what makes this acceptable.
+PNG or JPEG signature, which no `.env` or `/proc/self/environ` will satisfy. To be precise
+about what that buys you: it is a check on the first 3–8 bytes, not image validation. A file
+that does not *start* like an image cannot leave; a real image with data appended to it
+still can. That check, not the destination, is what makes this acceptable.
 
-Be clear about the destination, though, because it is *wider* rather than narrower: an event
+The destination is *wider* rather than narrower, which is worth knowing: an event
 cover is served from `guild-events/{event_id}/{hash}.png`, an unsigned, non-expiring,
 unauthenticated URL, where a message attachment sits behind a signed expiring link inside a
 permission-gated channel. Anything that does reach a cover is more durable and more public

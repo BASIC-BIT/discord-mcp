@@ -767,7 +767,13 @@ public class ScheduledEventService {
                 .append(" (").append(type.name()).append(", ").append(LocalFileGuard.formatFileSize(bytes.length)).append(")")
                 .append("\n  • Was: ")
                 .append(!beforeKnown ? "could not be read" : before == null ? "no cover image" : before)
-                .append("\n  • Now: ").append(after == null ? "none — Discord did not keep it" : after);
+                // Absence at read-back does not establish a cause. The write was accepted, so the
+                // upload may well have landed and then been removed or replaced by someone else
+                // between the two calls. "Discord did not keep it" named one explanation and would
+                // prompt a retry that could overwrite a deliberate change — the same
+                // over-attribution the failure path above stopped making.
+                .append("\n  • Now: ")
+                .append(after == null ? "no cover image — check the event before re-uploading" : after);
         if (beforeKnown && after != null && after.equals(before)) {
             // An unchanged hash is worth saying out loud: the likeliest cause is uploading the
             // file that was already there, and the call would otherwise read as a successful
@@ -844,9 +850,10 @@ public class ScheduledEventService {
      * @param total          events being listed, from the cache
      * @param described      how many of those the live response actually described
      * @param coverless      how many described events have no cover
+     * @param liveTotal      how many events the live response held in all
      * @param rawKnown       whether the live read succeeded at all
      */
-    static String coverCaveat(int total, int described, int coverless, boolean rawKnown) {
+    static String coverCaveat(int total, int described, int coverless, int liveTotal, boolean rawKnown) {
         if (!rawKnown) {
             return "\n(Recurrence and cover images could not be read, so no event below is marked as"
                     + " recurring or as having a cover even if it is.)";
@@ -862,6 +869,17 @@ public class ScheduledEventService {
                     .append(missing).append(missing == 1 ? " event was" : " events were")
                     .append(" not in the live read, so ")
                     .append(missing == 1 ? "its cover is" : "their covers are").append(" unknown");
+        }
+        // The opposite skew, and the stronger one: an event Discord returned that JDA's cache does
+        // not hold is absent from the listing entirely, with nothing to mark its absence. Not
+        // caveating that would let a listing read as complete when it is not — a worse version of
+        // the case above, since there is not even a row to attach a caveat to.
+        int unlisted = liveTotal - described;
+        if (unlisted > 0) {
+            sb.append(sb.length() == 0 ? "" : "; ")
+                    .append("Discord returned ").append(unlisted).append(" event")
+                    .append(unlisted == 1 ? "" : "s").append(" not in this list, so the list is")
+                    .append(" incomplete — the cache has not caught up");
         }
         return sb.length() == 0 ? "" : "\n(" + sb + ".)";
     }
@@ -962,15 +980,22 @@ public class ScheduledEventService {
         java.util.Map<String, DataObject> rules = new java.util.HashMap<>();
         java.util.Map<String, String> covers = new java.util.HashMap<>();
         java.util.Set<String> described = new java.util.HashSet<>();
+        int liveCount = 0;
         boolean rawKnown = false;
         try {
             Route.CompiledRoute route = Route.custom(Method.GET, "guilds/{guild_id}/scheduled-events")
                     .compile(guild.getId());
             var raw = new RestActionImpl<net.dv8tion.jda.api.utils.data.DataArray>(jda, route,
                     (response, request) -> response.getArray()).complete();
+            liveCount = raw.length();
             for (int i = 0; i < raw.length(); i++) {
                 DataObject o = raw.getObject(i);
-                String id = o.getString("id");
+                // Defaulted rather than demanded. Discord always sends id, but this loop now runs
+                // for every event rather than only recurring ones, so one malformed entry would
+                // throw ParsingException and the catch below would report the whole listing as
+                // unreadable — losing recurrence and covers for every other event too.
+                String id = o.getString("id", null);
+                if (id == null) continue;
                 DataObject rule = recurrenceOf(o);
                 if (rule != null) {
                     rules.put(id, rule);
@@ -998,13 +1023,15 @@ public class ScheduledEventService {
             rules.clear();
             covers.clear();
             described.clear();
+            liveCount = 0;
         }
 
+        final int liveTotal = liveCount;
         int describedCount = (int) events.stream().filter(e -> described.contains(e.getId())).count();
         int coverlessCount = (int) events.stream()
                 .filter(e -> described.contains(e.getId()) && !covers.containsKey(e.getId()))
                 .count();
-        String caveat = coverCaveat(events.size(), describedCount, coverlessCount, rawKnown);
+        String caveat = coverCaveat(events.size(), describedCount, coverlessCount, liveTotal, rawKnown);
         return "Retrieved " + events.size() + " scheduled events:" + caveat + "\n" +
                 events.stream()
                         .map(e -> {

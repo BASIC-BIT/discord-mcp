@@ -137,11 +137,23 @@ public final class LocalFileGuard {
      *                 "Failed to read Cover image".
      */
     public static byte[] readBounded(Path real, int maxBytes, String what) {
+        if (maxBytes < 0 || maxBytes == Integer.MAX_VALUE) {
+            // maxBytes + 1 overflows to negative at MAX_VALUE, and readNBytes would throw
+            // IllegalArgumentException from inside the try, where it would be reported as a read
+            // failure of the file rather than a caller mistake. RemoteFetchGuard.readBounded
+            // guards its own bound for the same reason; unreachable from either caller today.
+            throw new IllegalArgumentException("maxBytes must be between 0 and Integer.MAX_VALUE - 1,"
+                    + " was " + maxBytes);
+        }
         byte[] bytes;
         try (InputStream in = Files.newInputStream(real, LinkOption.NOFOLLOW_LINKS)) {
             bytes = in.readNBytes(maxBytes + 1);
         } catch (IOException e) {
-            throw new IllegalArgumentException("Failed to read " + what + ": " + e.getMessage());
+            // Names the resolved path, not just the noun. The extraction dropped send_file's
+            // "at filePath", and for a tool taking both a URL and a path the noun alone does not
+            // say which argument to fix — the path says it and locates the file besides.
+            throw new IllegalArgumentException(
+                    "Failed to read " + what + " at " + real + ": " + e.getMessage());
         }
         if (bytes.length > maxBytes) {
             throw new TooLargeException(capitalize(what)

@@ -193,7 +193,7 @@ class ScheduledEventServiceTest {
         // The denominator is described events, not listed ones. Events come from JDA's cache and
         // covers from a live REST read, so "2 of 5 have no cover" would imply three URLs follow
         // when only one does.
-        assertThat(ScheduledEventService.coverCaveat(5, 3, 2, true))
+        assertThat(ScheduledEventService.coverCaveat(5, 3, 2, 3, true))
                 .isEqualTo("\n(2 of 3 events have no cover image; 2 events were not in the live"
                         + " read, so their covers are unknown.)");
     }
@@ -203,20 +203,29 @@ class ScheduledEventServiceTest {
         // The case that made the earlier version wrong: with no coverless events the caveat went
         // empty, so an undescribed event rendered with no cover line and no explanation — exactly
         // "this event has no cover", the claim the described set exists to avoid.
-        assertThat(ScheduledEventService.coverCaveat(4, 3, 0, true))
+        assertThat(ScheduledEventService.coverCaveat(4, 3, 0, 3, true))
                 .isEqualTo("\n(1 event was not in the live read, so its cover is unknown.)");
     }
 
     @Test
+    void anEventDiscordReturnedButTheCacheLacksIsSaidToBeMissingFromTheList() {
+        // The stronger skew: such an event has no row at all, so there is nowhere to hang a
+        // per-event caveat and the list would otherwise read as complete.
+        assertThat(ScheduledEventService.coverCaveat(3, 3, 0, 5, true))
+                .isEqualTo("\n(Discord returned 2 events not in this list, so the list is"
+                        + " incomplete — the cache has not caught up.)");
+    }
+
+    @Test
     void aFullyDescribedListingWithEveryCoverPresentSaysNothing() {
-        assertThat(ScheduledEventService.coverCaveat(3, 3, 0, true)).isEmpty();
+        assertThat(ScheduledEventService.coverCaveat(3, 3, 0, 3, true)).isEmpty();
     }
 
     @Test
     void aFailedLiveReadCaveatsEverythingRatherThanCounting() {
         // Counts drawn from a read that did not happen are all zero, which would render as "every
         // event has a cover" — the failure mode the caveat exists for.
-        assertThat(ScheduledEventService.coverCaveat(5, 0, 0, false))
+        assertThat(ScheduledEventService.coverCaveat(5, 0, 0, 0, false))
                 .contains("could not be read")
                 .contains("as having a cover even if it is");
     }

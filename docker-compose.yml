@@ -24,6 +24,10 @@ services:
     volumes:
       # A named volume, because the app writes downloads and they should survive `docker rm`.
       - discord-mcp-downloads:/var/lib/discord-mcp/downloads
+      # ON UPGRADE: this mount is new and unconditional. Run `mkdir -p uploads` before the
+      # next `up`, or Docker creates ./uploads as root:root in your deployment directory.
+      # Harmless if DISCORD_MCP_FILE_ROOT is unset — nothing reads it — but annoying to undo.
+      #
       # A read-only bind mount, because the opposite is true of uploads: the operator puts files
       # here and the app only ever reads them. A named volume would be the wrong shape — nothing
       # on the host can write into one without `docker cp` or a helper container, which makes
