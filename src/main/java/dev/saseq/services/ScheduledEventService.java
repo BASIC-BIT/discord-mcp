@@ -642,7 +642,21 @@ public class ScheduledEventService {
 
         Guild guild = getGuild(guildId);
         ScheduledEvent event = getEvent(guild, eventId);
-        String before = event.getImageUrl();
+
+        // From the live event, not event.getImageUrl(). JDA's cached entity keeps whatever hash it
+        // last saw, so a cover changed out of band — by a human in the Discord UI, most likely —
+        // would be reported as the previous image and would defeat the unchanged check below.
+        // Best-effort: failing to read the old cover is no reason to refuse to set a new one.
+        String before = null;
+        boolean beforeKnown = false;
+        try {
+            before = coverUrlOf(fetchRaw(guild.getId(), event.getId()), event.getId());
+            beforeKnown = true;
+        } catch (RuntimeException ignored) {
+            // Reported as unread below rather than as absent. "no cover image" is a claim about the
+            // event, and a failed read cannot support it.
+        }
+
         event.getManager().setImage(Icon.from(bytes, type)).complete();
 
         // Re-read rather than trusting the write. The manager reports success on an accepted
@@ -652,9 +666,7 @@ public class ScheduledEventService {
         // Discord kept what it was given.
         String after;
         try {
-            DataObject raw = fetchRaw(guild.getId(), event.getId());
-            String hash = raw.getString("image", null);
-            after = hash == null ? null : String.format(ScheduledEvent.IMAGE_URL, event.getId(), hash, "png");
+            after = coverUrlOf(fetchRaw(guild.getId(), event.getId()), event.getId());
         } catch (RuntimeException e) {
             return "Set the cover image on " + event.getName() + " (ID: " + event.getId() + ") from "
                     + path.getFileName() + ", but could not read the event back to confirm it ("
@@ -665,15 +677,30 @@ public class ScheduledEventService {
                 .append(event.getName()).append(" (ID: ").append(event.getId()).append(")")
                 .append("\n  • From: ").append(path.getFileName())
                 .append(" (").append(type.name()).append(", ").append(bytes.length / 1024).append(" KB)")
-                .append("\n  • Was: ").append(before == null ? "no cover image" : before)
+                .append("\n  • Was: ")
+                .append(!beforeKnown ? "could not be read" : before == null ? "no cover image" : before)
                 .append("\n  • Now: ").append(after == null ? "none — Discord did not keep it" : after);
-        if (after != null && after.equals(before)) {
+        if (beforeKnown && after != null && after.equals(before)) {
             // Same hash means identical bytes, which is worth saying out loud: the likeliest cause
             // is uploading the file that was already there, and the call would otherwise read as a
             // successful change.
             result.append("\n  • Unchanged: that is the image the event already had.");
         }
         return result.toString();
+    }
+
+    /** The cover image URL from a raw event object, or null if it has no cover. */
+    // Package-private for the same reason as resolveEndTime and coverType: testable without a
+    // live event.
+    static String coverUrlOf(DataObject raw, String eventId) {
+        String hash = raw.getString("image", null);
+        return hash == null ? null : coverUrl(eventId, hash);
+    }
+
+    private static String coverUrl(String eventId, String hash) {
+        // JDA's own template, so the CDN host and path stay in one place rather than being spelled
+        // out here. Always png: Discord serves any accepted cover at that extension.
+        return String.format(ScheduledEvent.IMAGE_URL, eventId, hash, "png");
     }
 
     /**
@@ -733,8 +760,14 @@ public class ScheduledEventService {
 
         // One raw list call so recurrence is visible here. Without it a weekly class and a one-off
         // look identical, which is how a recurring event gets edited as though it were not one.
+        //
+        // The same response also carries the cover image hash, which is read here rather than from
+        // ScheduledEvent.getImageUrl() for two reasons: it costs nothing extra, and it is live. A
+        // cover changed out of band is exactly the case this listing needs to be right about, and
+        // that is the case where JDA's cached entity is stale.
         java.util.Map<String, DataObject> rules = new java.util.HashMap<>();
-        boolean recurrenceKnown = false;
+        java.util.Map<String, String> covers = new java.util.HashMap<>();
+        boolean rawKnown = false;
         try {
             Route.CompiledRoute route = Route.custom(Method.GET, "guilds/{guild_id}/scheduled-events")
                     .compile(guild.getId());
@@ -746,18 +779,28 @@ public class ScheduledEventService {
                 if (rule != null) {
                     rules.put(o.getString("id"), rule);
                 }
+                String hash = o.getString("image", null);
+                if (hash != null) {
+                    covers.put(o.getString("id"), coverUrl(o.getString("id"), hash));
+                }
             }
-            recurrenceKnown = true;
+            rawKnown = true;
         } catch (RuntimeException e) {
-            // Recurrence detail is an enhancement to this listing, not its purpose, so losing it
-            // must not turn a working list call into a failure. It must not silently read as
-            // "nothing recurs" either — that is indistinguishable from the real thing.
+            // Recurrence and cover detail are enhancements to this listing, not its purpose, so
+            // losing them must not turn a working list call into a failure. They must not silently
+            // read as "nothing recurs" and "no covers" either — that is indistinguishable from the
+            // real thing, and the whole point of reporting a missing cover is that its absence is
+            // information.
             rules.clear();
+            covers.clear();
         }
 
-        String caveat = recurrenceKnown ? ""
-                : "\n(Recurrence information could not be read, so no event below is marked as recurring"
-                + " even if it is.)";
+        String caveat = rawKnown ? ""
+                : "\n(Recurrence and cover images could not be read, so no event below is marked as"
+                + " recurring or as having a cover even if it is.)";
+        // The flag is assigned inside the try above, so it is not effectively final and cannot be
+        // read from the lambda directly.
+        final boolean coversKnown = rawKnown;
         return "Retrieved " + events.size() + " scheduled events:" + caveat + "\n" +
                 events.stream()
                         .map(e -> {
@@ -768,6 +811,12 @@ public class ScheduledEventService {
                             if (e.getEndTime() != null) sb.append(" | End: ").append(e.getEndTime());
                             DataObject rule = rules.get(e.getId());
                             if (rule != null) sb.append("\n  • Recurs: ").append(RecurrenceRule.describe(rule));
+                            // Only claimed when the raw read succeeded. "none" is an assertion that
+                            // the event has no cover, and a failed read cannot support it.
+                            if (coversKnown) {
+                                sb.append("\n  • Cover image: ")
+                                        .append(covers.getOrDefault(e.getId(), "none"));
+                            }
                             if (includeUserCount) sb.append("\n  • Interested: ").append(e.getInterestedUserCount()).append(" users");
                             return sb.toString();
                         })

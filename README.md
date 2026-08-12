@@ -37,6 +37,10 @@ export SPRING_PROFILES_ACTIVE=http
 # Only if you want download_attachment. Must match the container path mounted below,
 # not a host path — see Security notes.
 export DISCORD_MCP_DOWNLOAD_ROOT=/var/lib/discord-mcp/downloads
+# Only if you want local-path uploads: send_file's filePath, and
+# set_guild_scheduled_event_image, which has no other input. The same path as above
+# chains download_attachment into them; a different one keeps reads and writes apart.
+export DISCORD_MCP_FILE_ROOT=/var/lib/discord-mcp/downloads
 ```
 
 > [!IMPORTANT]
@@ -57,14 +61,17 @@ docker run -d -i \
   -e DISCORD_TOKEN \
   -e DISCORD_GUILD_ID \
   -e DISCORD_MCP_DOWNLOAD_ROOT \
+  -e DISCORD_MCP_FILE_ROOT \
   -v discord-mcp-downloads:/var/lib/discord-mcp/downloads \
   saseq/discord-mcp:latest
 ```
 
 > [!TIP]
-> The `-e DISCORD_MCP_DOWNLOAD_ROOT` and `-v` lines are only needed for `download_attachment`.
-> Leave them off and that tool refuses; nothing else changes. The named volume is what keeps
-> saved attachments across `docker rm` — a container-local path loses them on recreate.
+> The `-e DISCORD_MCP_DOWNLOAD_ROOT` and `-v` lines are only needed for `download_attachment`,
+> and `-e DISCORD_MCP_FILE_ROOT` for local-path uploads (`send_file`'s `filePath` and
+> `set_guild_scheduled_event_image`). Leave any of them off and those tools refuse; nothing
+> else changes. The named volume is what keeps saved attachments across `docker rm` — a
+> container-local path loses them on recreate.
 
 Default MCP endpoint URL (HTTP profile): `http://localhost:8085/mcp`
 

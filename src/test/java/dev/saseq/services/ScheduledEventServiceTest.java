@@ -151,6 +151,26 @@ class ScheduledEventServiceTest {
     }
 
     @Test
+    void theCoverUrlIsBuiltFromTheLiveEventObject() {
+        // Read from the raw response rather than ScheduledEvent.getImageUrl() so that a cover
+        // changed out of band is reported as it actually is, not as JDA last cached it.
+        DataObject raw = DataObject.empty().put("image", "8210694c9d4d01a72fafbdc9012675d1");
+
+        assertThat(ScheduledEventService.coverUrlOf(raw, "1385996249957662770"))
+                .isEqualTo("https://cdn.discordapp.com/guild-events/1385996249957662770"
+                        + "/8210694c9d4d01a72fafbdc9012675d1.png");
+    }
+
+    @Test
+    void anEventWithNoCoverIsDistinguishableFromOneWithAnUnreadableCover() {
+        // null here becomes "no cover image", which is a claim about the event. The caller turns a
+        // failed read into different wording, because an absent cover is information and a failed
+        // read is not.
+        assertThat(ScheduledEventService.coverUrlOf(DataObject.empty(), "1")).isNull();
+        assertThat(ScheduledEventService.coverUrlOf(DataObject.empty().putNull("image"), "1")).isNull();
+    }
+
+    @Test
     void aCoverImageIsIdentifiedFromItsBytesNotItsName() {
         // The name is caller-supplied text. Trusting it means building a PNG icon around a JPEG
         // body, which Discord rejects with an error that blames the request rather than the file.
