@@ -266,6 +266,17 @@ class ScheduledEventServiceTest {
     }
 
     @Test
+    void anUnreadableCoverDoesNotAlsoSuppressTheRecurrence() {
+        // The mirror of the test above, and the direction that was broken three times running:
+        // recurrence read fine, cover did not. The event is counted as unreadable-for-covers and
+        // nothing claims anything about its schedule — in particular `recurrenceUnreadable` stays
+        // 0, because the recurrence was read. Only its cover is unknown.
+        assertThat(ScheduledEventService.coverCaveat(2, 0, 1, 0, 0, 0, 0, true))
+                .isEqualTo("\n(1 event was returned but could not be read, so its cover is unknown.)")
+                .doesNotContain("recurrence");
+    }
+
+    @Test
     void aFullyDescribedListingWithEveryCoverPresentSaysNothing() {
         assertThat(ScheduledEventService.coverCaveat(3, 0, 0, 0, 0, 0, 0, true)).isEmpty();
     }

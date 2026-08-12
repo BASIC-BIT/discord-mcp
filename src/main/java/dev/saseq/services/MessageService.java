@@ -184,9 +184,10 @@ public class MessageService {
         // Confinement and the bounded read both live in LocalFileGuard so that the next tool to
         // accept a local path cannot reintroduce either gap by writing its own version. See the
         // class doc there for why that is not hypothetical.
-        Path path = LocalFileGuard.resolveWithinRoot(filePath, allowedRoot(), "filePath", "upload");
+        LocalFileGuard.ConfinedPath path =
+                LocalFileGuard.resolveWithinRoot(filePath, allowedRoot(), "filePath", "upload");
         byte[] bytes = LocalFileGuard.readBounded(path, MAX_UPLOAD_BYTES, "file");
-        String name = overrideName != null ? overrideName : path.getFileName().toString();
+        String name = overrideName != null ? overrideName : path.path().getFileName().toString();
         return new ResolvedFile(bytes, name);
     }
 

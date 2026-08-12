@@ -84,6 +84,23 @@ public final class LocalFileGuard {
     }
 
     /**
+     * A path that has been through {@link #resolveWithinRoot}.
+     *
+     * <p>Exists so the confinement is in the type rather than in a javadoc line. {@code readBounded}
+     * used to take a bare {@code Path} with "@param real a path already resolved by
+     * resolveWithinRoot" as the only thing stopping the next tool from handing it
+     * {@code Paths.get(filePath)} — an unconfined read with this class's name on the call site.
+     * That is the same shape of mistake this class was extracted to prevent: the convention did
+     * not hold last time either.
+     */
+    public record ConfinedPath(Path path) {
+        @Override
+        public String toString() {
+            return path.toString();
+        }
+    }
+
+    /**
      * Confine one caller-supplied path to an already-resolved root.
      *
      * <p>The returned path is the one the caller must open. Opening the requested path instead
@@ -99,7 +116,8 @@ public final class LocalFileGuard {
      *                  the upload directory.
      * @return the fully resolved real path
      */
-    public static Path resolveWithinRoot(String filePath, Path allowed, String paramName, String rootName) {
+    public static ConfinedPath resolveWithinRoot(String filePath, Path allowed, String paramName,
+                                                 String rootName) {
         Path real;
         try {
             // toRealPath, not normalize: normalize is purely lexical, so a symlink
@@ -123,7 +141,7 @@ public final class LocalFileGuard {
         if (!Files.isRegularFile(real, LinkOption.NOFOLLOW_LINKS)) {
             throw new IllegalArgumentException(paramName + " is not a regular file: " + filePath);
         }
-        return real;
+        return new ConfinedPath(real);
     }
 
     /** One answer for "no such file" and "not inside the root", so the pair cannot be probed. */
@@ -139,14 +157,16 @@ public final class LocalFileGuard {
      * path the caller chose would exhaust the heap long before any check could reject it, on a
      * JVM that may be running with only a few hundred megabytes.
      *
-     * @param real     a path already resolved by {@link #resolveWithinRoot}
+     * @param confined a path that has been through {@link #resolveWithinRoot}, which the type
+     *                 enforces rather than merely documenting
      * @param maxBytes the largest body to accept
      * @param what     a lowercase noun for what is being read ("file", "cover image"). It appears
      *                 mid-sentence in one message and at the start of the other, so it is stored
      *                 lowercase and capitalized at the point of use rather than reading as
      *                 "Failed to read Cover image".
      */
-    public static byte[] readBounded(Path real, int maxBytes, String what) {
+    public static byte[] readBounded(ConfinedPath confined, int maxBytes, String what) {
+        Path real = confined.path();
         if (maxBytes < 0 || maxBytes == Integer.MAX_VALUE) {
             // maxBytes + 1 overflows to negative at MAX_VALUE, and readNBytes would throw
             // IllegalArgumentException from inside the try, where it would be reported as a read

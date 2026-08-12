@@ -29,7 +29,7 @@ class LocalFileGuardTest {
         Path file = Files.writeString(root.resolve("poster.png"), "x");
 
         assertThat(LocalFileGuard.resolveWithinRoot(file.toString(), root.toRealPath(), "filePath", "upload"))
-                .isEqualTo(file.toRealPath());
+                .isEqualTo(new LocalFileGuard.ConfinedPath(file.toRealPath()));
     }
 
     @Test
@@ -80,6 +80,18 @@ class LocalFileGuardTest {
     }
 
     @Test
+    void onlyResolveWithinRootCanProduceWhatReadBoundedAccepts() {
+        // The confinement is in the type, not in a javadoc line. readBounded used to take a bare
+        // Path, so the next tool could hand it Paths.get(filePath) — an unconfined read with this
+        // class's name on the call site. This asserts the wrapper is the only way in, which is
+        // what a comment saying "already resolved" could never do.
+        assertThat(LocalFileGuard.class.getDeclaredMethods())
+                .filteredOn(m -> m.getName().equals("readBounded"))
+                .allSatisfy(m -> assertThat(m.getParameterTypes()[0])
+                        .isEqualTo(LocalFileGuard.ConfinedPath.class));
+    }
+
+    @Test
     void aFilesystemRootWouldConfineNothing(@TempDir Path dir) {
         assertThatThrownBy(() -> LocalFileGuard.resolveRoot(dir.getRoot().toString(), "VAR"))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -102,8 +114,8 @@ class LocalFileGuardTest {
     void readingStopsOneBytePastTheLimitRatherThanTrustingTheFileSize(@TempDir Path dir) throws IOException {
         Path file = Files.write(dir.resolve("f"), new byte[64]);
 
-        assertThat(LocalFileGuard.readBounded(file, 64, "file")).hasSize(64);
-        assertThatThrownBy(() -> LocalFileGuard.readBounded(file, 63, "cover image"))
+        assertThat(LocalFileGuard.readBounded(new LocalFileGuard.ConfinedPath(file), 64, "file")).hasSize(64);
+        assertThatThrownBy(() -> LocalFileGuard.readBounded(new LocalFileGuard.ConfinedPath(file), 63, "cover image"))
                 .isInstanceOf(LocalFileGuard.TooLargeException.class)
                 // Capitalized at the start of its own sentence, lowercase mid-sentence in the read
                 // failure. One noun cannot be spelled correctly for both without this.
@@ -114,7 +126,7 @@ class LocalFileGuardTest {
     void anUnreadableFileFailsWithTheNounInMidSentenceForm(@TempDir Path dir) throws IOException {
         Path missing = dir.resolve("gone");
 
-        assertThatThrownBy(() -> LocalFileGuard.readBounded(missing, 10, "cover image"))
+        assertThatThrownBy(() -> LocalFileGuard.readBounded(new LocalFileGuard.ConfinedPath(missing), 10, "cover image"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .isNotInstanceOf(LocalFileGuard.TooLargeException.class)
                 .hasMessageContaining("Failed to read cover image");
@@ -141,7 +153,7 @@ class LocalFileGuardTest {
     void theBytesReadAreTheFilesOwn(@TempDir Path dir) throws IOException {
         Path file = Files.writeString(dir.resolve("f"), "hello");
 
-        assertThat(new String(LocalFileGuard.readBounded(file, 1024, "file"), StandardCharsets.UTF_8))
+        assertThat(new String(LocalFileGuard.readBounded(new LocalFileGuard.ConfinedPath(file), 1024, "file"), StandardCharsets.UTF_8))
                 .isEqualTo("hello");
     }
 }

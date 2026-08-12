@@ -648,7 +648,7 @@ public class ScheduledEventService {
             @ToolParam(description = "Discord server ID", required = false) String guildId,
             @ToolParam(description = "ID of the scheduled event") String eventId,
             @ToolParam(description = "Direct URL to a PNG or JPEG, e.g. an attachment's CDN link. Needs no filesystem access.", required = false) String imageUrl,
-            @ToolParam(description = "Absolute path to a local PNG or JPEG, which must be under DISCORD_MCP_FILE_ROOT", required = false) String filePath) {
+            @ToolParam(description = "Path to a local PNG or JPEG, which must resolve to a file under DISCORD_MCP_FILE_ROOT", required = false) String filePath) {
         // isBlank, not isEmpty: "   " is not a supplied argument, and treating it as one
         // fails later with "File not found at filePath:    ". Matches requireCoverFileRoot below.
         boolean hasUrl = imageUrl != null && !imageUrl.isBlank();
@@ -687,9 +687,10 @@ public class ScheduledEventService {
                 bytes = RemoteFetchGuard.fetch(imageUrl, MAX_COVER_BYTES, "cover image");
                 source = imageUrl;
             } else {
-                Path path = LocalFileGuard.resolveWithinRoot(filePath, root, "filePath", "upload");
+                LocalFileGuard.ConfinedPath path =
+                        LocalFileGuard.resolveWithinRoot(filePath, root, "filePath", "upload");
                 bytes = LocalFileGuard.readBounded(path, MAX_COVER_BYTES, "cover image");
-                source = path.getFileName().toString();
+                source = path.path().getFileName().toString();
             }
         } catch (LocalFileGuard.TooLargeException | RemoteFetchGuard.TooLargeException e) {
             // The limit alone leaves the caller stuck: an oversized master is the ordinary input
@@ -1153,15 +1154,21 @@ public class ScheduledEventService {
                 } catch (RuntimeException malformed) {
                     // Likewise in reverse.
                 }
-                if (!recurrenceRead) {
-                    // Otherwise this event renders with no "Recurs:" line and nothing to say why,
-                    // which is the silent "nothing recurs" the outer catch's comment forbids.
-                    recurrenceUnreadable++;
-                }
-                if (!coverRead) continue;
+                // Recorded before the cover gate, not after. Separate try blocks and separate
+                // flags stopped a malformed field discarding its neighbour's value and vouching
+                // for its neighbour's success; this is the third face of the same invariant, and
+                // it was still broken: `continue` on an unreadable cover skipped rules.put, so a
+                // perfectly good recurrence vanished and the caveat blamed only the cover. That
+                // is the silent "does not recur" this counter exists to prevent, reached from the
+                // other side. Each field's knowledge is committed on its own terms.
                 if (rule != null) {
                     rules.put(id, rule);
                 }
+                if (!recurrenceRead) {
+                    // Otherwise this event renders with no "Recurs:" line and nothing to say why.
+                    recurrenceUnreadable++;
+                }
+                if (!coverRead) continue;
                 // Every event the live response described, whether or not it has a cover. The
                 // events being listed come from JDA's cache, so one can be present there and
                 // absent here — deleted out of band, or a stale cache. Keying "none" off this set
