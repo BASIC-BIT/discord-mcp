@@ -200,8 +200,12 @@ public final class LocalFileGuard {
             // alone does not identify what failed. The name does; the full path would put the
             // deployment's directory layout into a string that goes back to the model and often
             // onward into a channel.
-            throw new IllegalArgumentException(
-                    "Failed to read " + what + " " + real.getFileName() + ": " + e.getMessage());
+            // The class name, not e.getMessage(). For the exceptions this catch actually sees —
+            // NoSuchFileException, AccessDeniedException, FileSystemException — getMessage() IS
+            // the absolute path, so appending it put back exactly what the file name was chosen to
+            // withhold. The comment and the code disagreed; the comment was right.
+            throw new IllegalArgumentException("Failed to read " + what + " " + real.getFileName()
+                    + ": " + e.getClass().getSimpleName());
         }
         if (bytes.length > maxBytes) {
             throw new TooLargeException(capitalize(what)

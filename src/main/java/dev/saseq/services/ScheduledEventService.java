@@ -879,7 +879,10 @@ public class ScheduledEventService {
             // Covers are rare, so "N of N" is the ordinary case and its arithmetic says nothing.
             // Kept rather than suppressed: this line is why a stale or absent cover stops being
             // invisible, which is the whole reason the listing reads them.
-            if (coverless == described) {
+            // The absolute phrasing is only supportable when the live read described every listed
+            // event. With 1 of 3 described and coverless, "no event here has a cover image" makes
+            // a claim about the two it never saw — beside a clause that calls those two unknown.
+            if (coverless == described && unreadable == 0 && absent == 0 && unidentifiable == 0) {
                 sb.append("no event here has a cover image");
             } else {
                 // The noun counts `described` and the verb agrees with `coverless`: "1 of 3

@@ -132,12 +132,16 @@ docker compose up -d --build
 ```
 
 > [!TIP]
-> For local-path uploads, uncomment **both** `DISCORD_MCP_FILE_ROOT` in `.env` and the
-> `./uploads` volume line in `docker-compose.yml`, and run `mkdir -p uploads` first. Docker
-> creates a missing bind-mount source as `root:root`, which would leave you a directory
-> needing `sudo` to put posters into — the opposite of the point. Both stay commented by
-> default so a deployment that covers events from CDN links gets neither the filesystem grant
-> nor a stray root-owned directory.
+> For local-path uploads there are **three** commented lines, not two: `DISCORD_MCP_FILE_ROOT`
+> in `.env`, the matching `DISCORD_MCP_FILE_ROOT:` line under `environment:` in
+> `docker-compose.yml`, and the `./uploads` volume line below it. Miss the middle one and the
+> variable never reaches the container, so the tool refuses with "Set DISCORD_MCP_FILE_ROOT"
+> pointing at a variable you did set.
+>
+> Run `mkdir -p uploads` first: Docker creates a missing bind-mount source as `root:root`,
+> which would leave you a directory needing `sudo` to put posters into — the opposite of the
+> point. All three stay commented by default so a deployment that covers events from CDN links
+> gets neither the filesystem grant nor a stray root-owned directory.
 
 #### 5) Verify
 ```bash

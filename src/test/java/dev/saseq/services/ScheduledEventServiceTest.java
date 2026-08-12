@@ -291,6 +291,21 @@ class ScheduledEventServiceTest {
     }
 
     @Test
+    void theAbsoluteNoCoversPhrasingIsOnlyUsedWhenTheReadSawEverything() {
+        // "no event here has a cover image" is a claim about every listed event, so it needs a
+        // live read that described every listed event. With one described-and-coverless beside
+        // two absent, it asserted something about two events it never saw — in the same sentence
+        // that then called those two unknown.
+        assertThat(ScheduledEventService.coverCaveat(1, 1, 0, 2, 0, 0, 0, true))
+                .isEqualTo("\n(1 of 1 events has no cover image; 2 events were not in the live"
+                        + " read, so their covers are unknown.)")
+                .doesNotContain("no event here");
+        // Nothing missing, so the claim is supported and the shorthand stands.
+        assertThat(ScheduledEventService.coverCaveat(3, 3, 0, 0, 0, 0, 0, true))
+                .isEqualTo("\n(no event here has a cover image.)");
+    }
+
+    @Test
     void aFullyDescribedListingWithEveryCoverPresentSaysNothing() {
         assertThat(ScheduledEventService.coverCaveat(3, 0, 0, 0, 0, 0, 0, true)).isEmpty();
     }
