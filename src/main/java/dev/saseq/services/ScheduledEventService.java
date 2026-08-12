@@ -696,7 +696,6 @@ public class ScheduledEventService {
             throw new IllegalArgumentException("eventId cannot be null");
         }
 
-
         String source;
         byte[] bytes;
         try {
@@ -730,25 +729,13 @@ public class ScheduledEventService {
         }
         Icon.IconType type = coverType(bytes, hasUrl ? "imageUrl" : "filePath");
 
-        // From the live event, not event.getImageUrl(). JDA's cached entity keeps whatever hash it
-        // last saw, so a cover changed out of band — by a human in the Discord UI, most likely —
-        // would be reported as the previous image.
-        //
-        // This is the third request a successful call makes, and it is kept for the failure path
-        // rather than for the "Was:" line it also feeds. Without it, a thrown write can only say
-        // what the event has now; with it, describeOutcome can separate "still the old cover" from
-        // "something moved" from "the cover was removed" — the difference between a caller who can
-        // act and one who has to go and look. Best-effort: failing to read it is no reason to
-        // refuse to set a new cover.
-
-        // Built before the try, whose catch reports "Sent 1.2 MB of PNG from x" and reads the
-        // event back. Icon.from only fails on null arguments, unreachable here — but inside the
-        // try it would produce a message claiming bytes left the process that never did.
         // One read, doing two jobs: it establishes the event exists — authoritatively, from
-        // Discord rather than from a cache that lags — and it captures the cover being replaced.
-        // Reading the previous cover is what lets a failed write separate "still the old cover"
-        // from "something moved" from "the cover was removed", which is the difference between a
-        // caller who can act and one who has to go and look.
+        // Discord rather than from a cache that lags — and it captures the cover being replaced,
+        // which is what lets a failed write separate "still the old cover" from "something moved"
+        // from "the cover was removed".
+        //
+        // Fail-closed, not best-effort: it is the existence check, so proceeding without it would
+        // mean PATCHing an event that may not be there and losing the one answer that says so.
         String eventName;
         String before;
         try {
@@ -765,8 +752,10 @@ public class ScheduledEventService {
             throw new IllegalArgumentException("Could not reach Discord to read that event before"
                     + " setting its cover" + reason(unreachable) + ". Nothing was changed.");
         }
-        boolean beforeKnown = true;
 
+        // Outside the try below, whose catch reports "Sent 1.2 MB of PNG from …". Icon.from only
+        // fails on null arguments, unreachable here — but inside the try it would produce a
+        // message claiming bytes left the process that never did.
         Icon icon = Icon.from(bytes, type);
         String after;
         try {
@@ -790,7 +779,7 @@ public class ScheduledEventService {
             String outcome;
             try {
                 outcome = describeOutcome(
-                        coverUrlOf(fetchRaw(resolvedGuild, eventId), eventId), before, beforeKnown);
+                        coverUrlOf(fetchRaw(resolvedGuild, eventId), eventId), before);
             } catch (RuntimeException unverifiable) {
                 outcome = " Could not read the event back, so whether the cover was applied is"
                         + " unknown — check the event before retrying.";
@@ -807,8 +796,7 @@ public class ScheduledEventService {
                 .append(eventName).append(" (ID: ").append(eventId).append(")")
                 .append("\n  • From: ").append(source)
                 .append(" (").append(type.name()).append(", ").append(FileSizes.format(bytes.length)).append(")")
-                .append("\n  • Was: ")
-                .append(!beforeKnown ? "could not be read" : before == null ? "no cover image" : before)
+                .append("\n  • Was: ").append(before == null ? "no cover image" : before)
                 // Absence at read-back does not establish a cause. The write was accepted, so the
                 // upload may well have landed and then been removed or replaced by someone else
                 // between the two calls. "Discord did not keep it" named one explanation and would
@@ -816,7 +804,7 @@ public class ScheduledEventService {
                 // over-attribution the failure path above stopped making.
                 .append("\n  • Now: ")
                 .append(after == null ? "no cover image — check the event before re-uploading" : after);
-        if (beforeKnown && after != null && after.equals(before)) {
+        if (after != null && after.equals(before)) {
             // An unchanged hash is worth saying out loud: the likeliest cause is uploading the
             // file that was already there, and the call would otherwise read as a successful
             // change. Whether Discord derives the hash from content or mints one per upload is
@@ -835,23 +823,20 @@ public class ScheduledEventService {
      * write took effect, this is the block most likely to be reworded into saying the wrong one,
      * and exercising it in place would mean mocking JDA's request construction.
      *
-     * @param now         the cover the event has now, or null if it has none
-     * @param before      the cover it had before the write, or null if it had none
-     * @param beforeKnown whether {@code before} was actually read, as opposed to unavailable
+     * @param now    the cover the event has now, or null if it has none
+     * @param before the cover it had before the write, or null if it had none. Always read: the
+     *               call cannot get this far without it, since the same read proves the event
+     *               exists.
      */
-    static String describeOutcome(String now, String before, boolean beforeKnown) {
+    static String describeOutcome(String now, String before) {
         if (now == null) {
             // Losing a cover is a larger change than swapping one, so it must not share the
             // wording used for an event that never had a cover at all. Claimable only when the
             // previous one was actually read; without that there is nothing to compare against.
-            return beforeKnown && before != null
+            return before != null
                     ? " The event's cover was REMOVED during this call — it had " + before
                     + " before and has none now. Check the event rather than re-uploading blind."
                     : " The event currently has no cover image.";
-        }
-        if (!beforeKnown) {
-            return " The event currently has cover " + now + ", but the previous one could not be"
-                    + " read, so whether this call changed it is unknown.";
         }
         if (now.equals(before)) {
             return " The event still has the cover it had before this call.";
@@ -876,7 +861,6 @@ public class ScheduledEventService {
                 + " something else changed it in the meantime — this cannot tell them apart, so"
                 + " check the event rather than re-uploading blind.";
     }
-
 
     /**
      * The one-line cover summary for a listing.
@@ -1053,7 +1037,6 @@ public class ScheduledEventService {
                 + " is not a PNG or JPEG. Discord accepts only those for event covers.");
     }
 
-
     /** The upload root, or a refusal that points at the parameter which needs no filesystem. */
     private String requireCoverFileRoot() {
         if (coverFileRoot == null || coverFileRoot.isBlank()) {
@@ -1228,7 +1211,9 @@ public class ScheduledEventService {
         // was: it is where the subtle mistakes live — the absent/terminal split, and unlisted as
         // "returned minus those actually listed" — and a transposition here produces confidently
         // wrong text with nothing failing, because every caveat test calls the formatter directly.
-        CoverCounts counts = CoverCounts.tally(
+        // none() rather than tallying sets that were just cleared: on a failed read there is
+        // nothing to count, and coverCaveat says so from rawKnown alone.
+        CoverCounts counts = !rawKnown ? CoverCounts.none() : CoverCounts.tally(
                 events.stream().map(ScheduledEvent::getId).toList(),
                 events.stream().filter(ScheduledEventService::isTerminal)
                         .map(ScheduledEvent::getId).collect(Collectors.toSet()),

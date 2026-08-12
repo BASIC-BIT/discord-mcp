@@ -4,7 +4,6 @@ import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.Icon;
 import net.dv8tion.jda.api.entities.ScheduledEvent;
-import net.dv8tion.jda.api.managers.ScheduledEventManager;
 import net.dv8tion.jda.api.utils.data.DataObject;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -25,7 +24,6 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class ScheduledEventServiceTest {
@@ -33,17 +31,17 @@ class ScheduledEventServiceTest {
     private ScheduledEventService service;
 
     /**
-     * A guild and event that resolve, so the source checks are actually reached.
+     * A guild that resolves, so the guildId check is not what a test trips over.
      *
-     * <p>setScheduledEventImage looks the event up before touching the source, deliberately: a
-     * mistyped eventId should not cost a 5 MB transfer first. That means a test passing a null
-     * guildId stops at "guildId cannot be null" and never exercises what it claims to — which is
-     * how an assertion ends up passing for a reason it did not name.
+     * <p>setScheduledEventImage validates the ids, then reads the source, then reads the event
+     * from Discord. A test passing a null guildId stops at "guildId cannot be null" and never
+     * exercises what it claims to — which is how an assertion ends up passing for a reason it did
+     * not name. The source guards are reachable because the event read comes after them; nothing
+     * here can reach the write, which needs a real REST call.
      */
     private static final String GUILD = "480695542155051010";
     private static final String EVENT = "1385996249957662770";
 
-    private ScheduledEventManager manager;
     private Guild guild;
 
     @BeforeEach
@@ -51,12 +49,6 @@ class ScheduledEventServiceTest {
         JDA jda = mock(JDA.class);
         guild = mock(Guild.class);
         ScheduledEvent event = mock(ScheduledEvent.class);
-        // lenient() is inert here — this class uses plain mock() with no MockitoExtension, so no
-        // strictness is in effect to relax. Kept as a marker of which stubs are shared setup that
-        // not every test uses, and so the calls stay correct if the extension is ever added.
-        manager = mock(ScheduledEventManager.class);
-        lenient().when(event.getManager()).thenReturn(manager);
-        lenient().when(manager.setImage(any())).thenReturn(manager);
         lenient().when(jda.getGuildById(GUILD)).thenReturn(guild);
         lenient().when(guild.getId()).thenReturn(GUILD);
         lenient().when(guild.getScheduledEventById(EVENT)).thenReturn(event);
@@ -419,10 +411,13 @@ class ScheduledEventServiceTest {
     }
 
     @Test
-    void aBadEventIdCostsNoTransfer(@TempDir Path dir) throws IOException {
-        // The event is read before the source is fetched, so a wrong id fails without spending
-        // the upload. The mocked JDA cannot serve that read, which is what this reaches — the
-        // property being that it happens first, not that it succeeds.
+    void aValidLocalCoverIsReadBeforeTheEventAndChangesNothingWhenThatReadFails(@TempDir Path dir)
+            throws IOException {
+        // The source is read first — deliberately, so a path out of the root or a URL aimed at a
+        // link-local address is refused before any Discord request is formed. A file inside the
+        // root therefore passes the guard and is read, and the call then stops at the event read,
+        // which the mocked JDA cannot serve. The claim worth pinning is the last one: nothing was
+        // written.
         Path root = Files.createDirectory(dir.resolve("uploads"));
         Files.write(root.resolve("poster.png"), png());
         service.coverFileRoot = root.toString();
@@ -587,32 +582,29 @@ class ScheduledEventServiceTest {
         String now = "https://cdn.discordapp.com/guild-events/1/bbb.png";
 
         // A known removal is a bigger change than a swap and must not read as "never had one".
-        assertThat(ScheduledEventService.describeOutcome(null, was, true))
+        assertThat(ScheduledEventService.describeOutcome(null, was))
                 .contains("was REMOVED during this call")
                 .contains(was);
         // Nothing to compare against: no removal can be claimed.
-        assertThat(ScheduledEventService.describeOutcome(null, null, true))
+        assertThat(ScheduledEventService.describeOutcome(null, null))
                 .contains("currently has no cover image");
-        assertThat(ScheduledEventService.describeOutcome(was, was, true))
+        assertThat(ScheduledEventService.describeOutcome(was, was))
                 .contains("still has the cover it had before");
-        assertThat(ScheduledEventService.describeOutcome(now, was, true))
+        assertThat(ScheduledEventService.describeOutcome(now, was))
                 .contains("CHANGED during this call")
                 .contains(now)
                 // Must NOT claim this request made the change: a genuine rejection followed by a
                 // concurrent edit reaches the same branch, and nothing here can tell them apart.
                 .contains("something else changed it in the meantime");
-        // The previous cover was unreadable, so no comparison is possible and none is implied.
-        assertThat(ScheduledEventService.describeOutcome(now, null, false))
-                .contains("whether this call changed it is unknown");
         // Added, not merely "changed": it had none and now has one. Knowable, and asymmetric the
         // other way from a removal — the branch the outcome block had no case for.
-        assertThat(ScheduledEventService.describeOutcome(now, null, true))
+        assertThat(ScheduledEventService.describeOutcome(now, null))
                 .contains("was ADDED during this call")
                 .contains(now)
                 .contains("something else set it in the meantime");
         // An event that had no cover and still has none: "not changed" is safe to say here only
         // because the read-back established it, not because the write threw.
-        assertThat(ScheduledEventService.describeOutcome(null, null, false))
+        assertThat(ScheduledEventService.describeOutcome(null, null))
                 .contains("currently has no cover image");
     }
 
