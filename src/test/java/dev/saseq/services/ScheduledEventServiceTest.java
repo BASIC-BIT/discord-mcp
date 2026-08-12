@@ -254,8 +254,8 @@ class ScheduledEventServiceTest {
         // "unreadable" (which names an event) nor folded into "not in the live read" (which would
         // blame the cache for a malformed response).
         assertThat(ScheduledEventService.coverCaveat(new CoverCounts(2, 0, 0, 0, 0, 0, 1, 0), true))
-                .isEqualTo("\n(1 entry could not be read at all, so it is not counted above"
-                        + " either way.)");
+                .isEqualTo("\n(1 entry could not be read at all, so it is not counted as"
+                        + " either of those.)");
     }
 
     @Test
@@ -277,6 +277,19 @@ class ScheduledEventServiceTest {
         assertThat(ScheduledEventService.coverCaveat(new CoverCounts(2, 0, 1, 0, 0, 0, 0, 0), true))
                 .isEqualTo("\n(1 event was returned but could not be read, so its cover is unknown.)")
                 .doesNotContain("recurrence");
+    }
+
+    @Test
+    void theTwoUnidentifiableClausesDoNotContradictEachOther() {
+        // Together the pair has to read as one account: the absent clause says an id-less entry
+        // may be among those events, and the unidentifiable clause says which tallies exclude it.
+        // "Not counted either way" read as denying the first; "not counted as either of those"
+        // says the same thing without the contradiction. Only asserted separately before.
+        assertThat(ScheduledEventService.coverCaveat(
+                new CoverCounts(1, 0, 0, 1, 0, 0, 1, 0), true))
+                .contains("may be among them")
+                .contains("not counted as either of those")
+                .doesNotContain("either way");
     }
 
     @Test
@@ -467,15 +480,29 @@ class ScheduledEventServiceTest {
     }
 
     @Test
+    void anEmptyCacheDoesNotAnswerNoEventsWhenTheLiveReadFailed() {
+        // "No scheduled events found" is a claim, and an empty cache alone does not support it —
+        // an event created out of band exists at Discord before the gateway delivers it here.
+        // The mocked JDA cannot complete the live list, so this reaches the unconfirmed arm; the
+        // property is that a failed confirmation is never reported as an answer.
+        when(guild.getScheduledEvents()).thenReturn(java.util.List.of());
+
+        String result = service.listScheduledEvents(GUILD, "false");
+
+        assertThat(result)
+                .contains("whether there are none is unconfirmed")
+                .doesNotContain("No scheduled events found");
+    }
+
+    @Test
     void anEventNotYetInTheCacheIsNotReportedAsNonexistent() {
         // The flow the tool description steers callers toward — create an event, then cover it
         // from the poster's CDN link — is exactly this case: JDA's cache is filled from the
         // gateway, so the event exists at Discord before it exists here. "Not found by eventId"
         // sends the caller to check an id that is correct.
         //
-        // Nothing covered the miss branch before, which is how this helper spent a round wired
-        // into edit_guild_scheduled_event instead of this tool, answering edit requests with a
-        // sentence about covers. A test on the branch is what keeps that caught.
+        // The miss branch needs its own test: without one, this helper can be wired into the
+        // wrong tool and every existing assertion still passes, because they all hit the cache.
         when(guild.getScheduledEventById(EVENT)).thenReturn(null);
         service.coverFileRoot = "";
 
@@ -524,11 +551,11 @@ class ScheduledEventServiceTest {
         // it the parameter an injected prompt would reach for. It must not become a second,
         // unguarded fetch path; that is the exact regression RemoteFetchGuard exists to prevent.
         //
-        // Each assertion pins the GUARD's own wording rather than just the exception type. An
-        // earlier version asserted only `isInstanceOf` and passed a null guildId, so it would
-        // have been satisfied by "guildId cannot be null" even against a bare openStream() — a
-        // test that cannot fail for the reason it names is worse than no test. The guild and
-        // event resolve here, so the fetch is genuinely reached.
+        // Each assertion pins the GUARD's own wording rather than just the exception type.
+        // `isInstanceOf` alone would be satisfied by any early throw — with a null guildId, by
+        // "guildId cannot be null", even against a bare openStream(). A test that cannot fail for
+        // the reason it names is worse than no test, so the guild and event resolve here and the
+        // fetch is genuinely reached.
         service.coverFileRoot = "";
 
         assertThatThrownBy(() -> service.setScheduledEventImage(

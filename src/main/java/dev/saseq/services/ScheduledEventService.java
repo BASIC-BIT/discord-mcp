@@ -136,6 +136,14 @@ public class ScheduledEventService {
                 (response, request) -> response.getObject()).complete();
     }
 
+    /** The guild's scheduled events as raw JSON, for the fields JDA's entities do not carry. */
+    private net.dv8tion.jda.api.utils.data.DataArray fetchRawList(String guildId) {
+        Route.CompiledRoute route = Route.custom(Method.GET, "guilds/{guild_id}/scheduled-events")
+                .compile(guildId);
+        return new RestActionImpl<net.dv8tion.jda.api.utils.data.DataArray>(jda, route,
+                (response, request) -> response.getArray()).complete();
+    }
+
     private DataObject patchRaw(String guildId, String eventId, DataObject body) {
         Route.CompiledRoute route = Route.custom(Method.PATCH, "guilds/{guild_id}/scheduled-events/{event_id}")
                 .compile(guildId, eventId);
@@ -672,6 +680,12 @@ public class ScheduledEventService {
         // Then the event, still before the source is fetched: a mistyped eventId should not cost
         // a 5 MB transfer. Neither weakens the guards below — those are what confine the source,
         // and nothing here can route around them.
+        //
+        // Deliberately NOT checked here: whether the event is over. isTerminal is free on the
+        // cached entity and Discord refuses edits to a COMPLETED or CANCELED event, so this could
+        // fail sooner — but the status comes from the same gateway cache that lags, and refusing
+        // on a stale COMPLETED would block a call that would have worked. Failing slower on a
+        // genuinely finished event is the better trade than failing wrongly on a live one.
         Guild guild = getGuild(guildId);
         ScheduledEvent event = getEventForCover(guild, eventId);
 
@@ -857,18 +871,7 @@ public class ScheduledEventService {
      * claim about what the reader is looking at, and testing it in place would mean mocking JDA's
      * request construction.
      *
-     * @param described  listed events the live response described in full
-     * @param coverless  how many of those have no cover
-     * @param unreadable listed events Discord returned but whose details would not parse
-     * @param absent     listed events Discord did not return at all
-     * @param terminal   listed events Discord did not return because they are over — a different
-     *                   fact from `absent`, and one that explains a missing cover line rather
-     *                   than reporting a gap
-     * @param unlisted   events Discord returned that are not in the listing
-     * @param unidentifiable entries Discord returned with no usable id, which cannot be matched
-     *                       to any listed event in either direction
-     * @param recurrenceUnreadable events whose recurrence would not parse, so a missing
-     *                             "Recurs:" line below means unknown rather than absent
+     * @param c          the tally, whose record documents what each count means
      * @param rawKnown   whether the live read succeeded at all
      */
     static String coverCaveat(CoverCounts c, boolean rawKnown) {
@@ -932,7 +935,10 @@ public class ScheduledEventService {
                     .append(c.unidentifiable() == 1 ? " entry" : " entries")
                     .append(" could not be read at all, so ")
                     .append(c.unidentifiable() == 1 ? "it is" : "they are")
-                    .append(" not counted above either way");
+                    // "as either of those", not "either way": the absent clause above says these
+                    // may be among the unmatched events, and "not counted either way" reads as
+                    // contradicting it rather than as saying which tallies exclude them.
+                    .append(" not counted as either of those");
         }
         if (c.recurrenceUnreadable() > 0) {
             join(sb).append(c.recurrenceUnreadable())
@@ -1102,10 +1108,7 @@ public class ScheduledEventService {
             // then is the same mistake as calling an uncached event missing — just total.
             int live;
             try {
-                Route.CompiledRoute route = Route.custom(Method.GET, "guilds/{guild_id}/scheduled-events")
-                        .compile(guild.getId());
-                live = new RestActionImpl<net.dv8tion.jda.api.utils.data.DataArray>(jda, route,
-                        (response, request) -> response.getArray()).complete().length();
+                live = fetchRawList(guild.getId()).length();
             } catch (RuntimeException e) {
                 return "This server's cache holds no scheduled events, and the live list could not"
                         + " be read" + reason(e) + ", so whether there are none is unconfirmed.";
@@ -1145,10 +1148,7 @@ public class ScheduledEventService {
         java.util.Set<String> recurrenceFailed = new java.util.HashSet<>();
         boolean rawKnown = false;
         try {
-            Route.CompiledRoute route = Route.custom(Method.GET, "guilds/{guild_id}/scheduled-events")
-                    .compile(guild.getId());
-            var raw = new RestActionImpl<net.dv8tion.jda.api.utils.data.DataArray>(jda, route,
-                    (response, request) -> response.getArray()).complete();
+            var raw = fetchRawList(guild.getId());
             for (int i = 0; i < raw.length(); i++) {
                 // The element AND its id are read inside the guard. getString("id", null)
                 // defaults an absent key, not a non-string one, so an id of the wrong type throws

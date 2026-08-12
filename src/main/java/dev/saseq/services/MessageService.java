@@ -155,9 +155,9 @@ public class MessageService {
     private static final int MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 
     private ResolvedFile resolveFile(String filePath, String fileUrl, String fileData, String fileName) {
-        boolean hasPath = filePath != null && !filePath.isEmpty();
-        boolean hasUrl = fileUrl != null && !fileUrl.isEmpty();
-        boolean hasData = fileData != null && !fileData.isEmpty();
+        boolean hasPath = filePath != null && !filePath.isBlank();
+        boolean hasUrl = fileUrl != null && !fileUrl.isBlank();
+        boolean hasData = fileData != null && !fileData.isBlank();
 
         int provided = (hasPath ? 1 : 0) + (hasUrl ? 1 : 0) + (hasData ? 1 : 0);
         if (provided == 0) {

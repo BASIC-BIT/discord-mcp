@@ -124,12 +124,11 @@ public final class LocalFileGuard {
     /**
      * A path that has been through {@link #resolveWithinRoot}.
      *
-     * <p>Exists so the confinement is in the type rather than in a javadoc line. {@code readBounded}
-     * used to take a bare {@code Path} with "@param real a path already resolved by
-     * resolveWithinRoot" as the only thing stopping the next tool from handing it
-     * {@code Paths.get(filePath)} — an unconfined read with this class's name on the call site.
-     * That is the same shape of mistake this class was extracted to prevent: the convention did
-     * not hold last time either.
+     * <p>Exists so the confinement is in the type rather than in a javadoc line. A bare
+     * {@code Path} parameter with "already resolved by resolveWithinRoot" in its docs would be
+     * the only thing stopping the next tool from passing {@code Paths.get(filePath)} — an
+     * unconfined read with this class's name on the call site, and the same shape of mistake this
+     * class exists to prevent. The convention did not hold the last time it was relied on.
      */
     public static final class ConfinedPath {
         private final Path path;
