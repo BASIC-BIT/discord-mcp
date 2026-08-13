@@ -194,6 +194,15 @@ public final class LocalFileGuard {
      * <p>The returned path is the one the caller must open. Opening the requested path instead
      * would defeat the check entirely: the whole point is that the two can differ.
      *
+     * <p>One refusal covers missing, unparseable, null and outside-the-root, so the pair cannot
+     * be used to ask whether a path exists on the host. That is the property, and it has one
+     * documented exception: a path that resolves <em>inside</em> the root and is not a regular
+     * file is refused by a different message that echoes what was asked for. It says only that
+     * a name inside the operator's own upload directory is a directory or a device rather than
+     * a file, which is not an oracle over anything the caller could not already probe by asking
+     * for a file there — but "one answer" is not absolute, and a reader should not take it as
+     * covering this branch too.
+     *
      * @param filePath  the caller-supplied path
      * @param allowed   the root, which only {@link #resolveRoot} can produce
      * @param paramName the tool parameter the path came from, for error messages
@@ -207,8 +216,8 @@ public final class LocalFileGuard {
     public static ConfinedPath resolveWithinRoot(String filePath, Root allowed, String paramName,
                                                  String rootName) {
         if (filePath == null) {
-            // Paths.get(null) raises NullPointerException, which the catch below does not cover —
-            // the same hole InvalidPathException was, one step earlier. Both callers gate on
+            // Paths.get(null) raises NullPointerException, which the catch below does not cover,
+            // so it would escape as an unchecked throw rather than a refusal. Both callers gate on
             // isBlank() so it is unreachable today, but this class's stated property is one
             // answer, and shared code cannot rely on every future caller gating first.
             throw new IllegalArgumentException(refusal(paramName, rootName));
