@@ -1527,6 +1527,9 @@ public class ScheduledEventService {
         // puts the marker on every row of an uncapped listing — directly under a caveat that has
         // just said no cover could be read at all. The marker is worth its line because it is
         // rare; on that branch it is not rare, and it is not news either.
+        // A Set over the same ids, because the filter below asks per listed event and `returned`
+        // is a List — its order is what the caveat names, not what a membership test wants.
+        Set<String> returnedIds = Set.copyOf(returned);
         Set<String> undescribed = !rawKnown ? Set.of() : events.stream()
                 .filter(e -> !described.contains(e.getId()))
                 // Terminal AND missing from the live read, which is the case the terminal clause
@@ -1534,7 +1537,7 @@ public class ScheduledEventService {
                 // that Discord did return but could not parse as `unreadable`, so the caveat says
                 // its cover is unknown while its row said nothing — the mismatch this marker
                 // exists to remove, reappearing on the one status that skipped the check.
-                .filter(e -> !(isTerminal(e) && !returned.contains(e.getId())))
+                .filter(e -> !(isTerminal(e) && !returnedIds.contains(e.getId())))
                 .map(ScheduledEvent::getId)
                 .collect(Collectors.toSet());
         String rows = events.stream()

@@ -148,6 +148,20 @@ class CoverCountsTest {
     }
 
     @Test
+    void oneEventWhoseFieldsBothFailedIsCountedOnce() {
+        // A malformed response can lose both fields of the same entry — a scalar recurrence_rule
+        // and a non-string image. Counting it as unreadable and again as a recurrence failure
+        // renders "1 event was returned but could not be read; 1 event's recurrence could not be
+        // read", which a reader counts as two events. Its row says both facts; the header says
+        // it once.
+        CoverCounts c = CoverCounts.tally(List.of("a"), NONE, List.of("a"), NONE, NONE,
+                Set.of("a"), 0);
+
+        assertThat(c.unreadable()).isEqualTo(1);
+        assertThat(c.recurrenceUnreadable()).isZero();
+    }
+
+    @Test
     void unidentifiableEntriesPassThroughUncounted() {
         // They belong to no event in either direction, so they cannot be folded into any of the
         // per-event tallies — the caveat states them on their own.

@@ -32,7 +32,7 @@ import java.util.Set;
  *                   below it, and this one had nothing to point at.
  * @param unidentifiable entries Discord returned with no usable id, which cannot be matched to a
  *                       listed event in either direction
- * @param recurrenceUnreadable listed events Discord returned whose recurrence would not parse,
+ * @param recurrenceUnreadable listed events whose cover was read and whose recurrence would not,
  *                             so a missing "Recurs:" line means unknown rather than absent. An
  *                             event Discord did not return at all has an unknown schedule too,
  *                             but its own clause — absent or terminal — names both missing lines
@@ -98,14 +98,17 @@ record CoverCounts(int described, int coverless, int unreadable, int absent, int
             } else {
                 absent++;
             }
-            // Only the parse failures. An event Discord did not return had no recurrence read
-            // either — and its row renders exactly like a one-off, which is the confusion this
-            // recurrence read exists to remove — but its own clause is where that is said. Both
-            // the absent and the terminal clause name the cover and the schedule together, so
-            // counting those events here as well would give one event two accounts, the second
-            // saying its recurrence "could not be read": a parse failure, about an event the
-            // line before had just explained never arrived.
-            if (recurrenceFailed.contains(id)) {
+            // One event, one clause. Every branch above has already accounted for this id, and a
+            // second count here makes the caveat read as two events — the reader has no way to
+            // tell "1 returned but unreadable; 1 recurrence unreadable" describes one entry whose
+            // image and recurrence both failed, which a malformed response produces in a single
+            // event. The absent and terminal clauses were written to avoid exactly that.
+            //
+            // So this counts only the described: events whose cover was read, where nothing else
+            // mentions them and the missing "Recurs:" line would otherwise be unexplained. What
+            // the header gives up for an undescribed event — that its schedule is unknown too —
+            // its row says directly, which is what the per-row markers are for.
+            if (described.contains(id) && recurrenceFailed.contains(id)) {
                 recurrenceUnreadable++;
             }
         }
