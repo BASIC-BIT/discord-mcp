@@ -764,64 +764,18 @@ public class ScheduledEventService {
         // now is refused before MAX_COVER_BYTES is fetched or read from disk, rather than after.
         requireSnowflake(eventId, "eventId");
 
-        // The source is read before anything establishes the event exists, and what that buys is
-        // narrow: one saved Discord request when the source is wrong — outside the root, aimed at
-        // a link-local address, 12 MB, a WebP. It is not what makes those refusals safe.
-        // RemoteFetchGuard rejects an internal address wherever it runs and LocalFileGuard
-        // confines wherever it runs; neither depends on this ordering.
+        // The event is established before the source is touched, matching send_file and
+        // create_emoji, which resolve their channel first. The source read is the part that
+        // reaches out, and RemoteFetchGuard's refusals name the host it could not resolve and the
+        // status it got back — so reading the source first let a caller holding this tool probe
+        // any public host for reachability and a status code with no real event: a guild the bot
+        // is in and any 17-to-19-digit number was enough. The guard bounds the request to public
+        // hosts either way, so this ordering is not what makes the fetch safe. It is the
+        // difference between a primitive that needs a real target and one that does not.
         //
-        // What it costs is that a syntactically valid eventId naming no event still spends the
-        // fetch, so a caller holding this tool can make the server issue one bounded outbound GET
-        // to a host of its choosing without naming a real event. send_file resolves its channel
-        // first and does not offer that.
+        // It costs one Discord GET on the ordinary mistake, the wrong file — and that read is the
+        // one being made here anyway, moved rather than added.
         //
-        // And it is not only bandwidth. RemoteFetchGuard's refusal names the upstream status
-        // ("server returned HTTP 404"), so what the caller gets back is reachability and a status
-        // code for a host of its choosing — an answer, not just a request. send_file offers the
-        // same primitive but needs a channel that resolves; this needs a guild the bot is in and
-        // any 17-to-19-digit number.
-        //
-        // Kept, and the reason is not that reordering is inconvenient. It is that reordering
-        // removes a precondition rather than the primitive: the same caller can list events and
-        // use a real id, or simply set a cover on a real event, and RemoteFetchGuard already
-        // refuses internal addresses, so what remains is a probe of the public internet from this
-        // host. Against that, reordering costs a Discord request on the ordinary mistake — the
-        // wrong file, not the wrong event. A maintainer who weighs those differently should move
-        // the event read above this block; the note is here so that is a decision and not a
-        // discovery.
-        String source;
-        byte[] bytes;
-        try {
-            if (hasUrl) {
-                // The shared SSRF guard, same as send_file and create_emoji: https only, public
-                // host, no redirect following, bounded read. This is the path that needs no
-                // filesystem grant, which is why it is offered first — a cover almost always
-                // starts as an image already posted to Discord, and requiring it to be staged on
-                // disk first is what pushes operators into pointing FILE_ROOT at their download
-                // directory.
-                bytes = RemoteFetchGuard.fetch(imageUrl, MAX_COVER_BYTES, "cover image");
-                source = imageUrl;
-            } else {
-                LocalFileGuard.ConfinedPath path =
-                        LocalFileGuard.resolveWithinRoot(filePath, root, "filePath", "upload");
-                bytes = LocalFileGuard.readBounded(path, MAX_COVER_BYTES, "cover image");
-                source = path.path().getFileName().toString();
-            }
-        } catch (LocalFileGuard.TooLargeException | RemoteFetchGuard.TooLargeException e) {
-            // The limit alone leaves the caller stuck: an oversized master is the ordinary input
-            // here, and the fix is the same crop the display shape needs anyway.
-            //
-            // Both branches are made to read the same way. RemoteFetchGuard's message is generic
-            // ("cover image exceeds the maximum allowed size" — lowercase, no period, no number)
-            // while LocalFileGuard's names the limit, so a URL and a path failing for identical
-            // reasons produced visibly different errors. The size is stated here either way.
-            throw new IllegalArgumentException("Cover image exceeds the "
-                    + FileSizes.format(MAX_COVER_BYTES) + " limit."
-                    + " Crop it to 5:2 and scale it down first — a cover is displayed at 800x320,"
-                    + " so a full-resolution master is both too large and the wrong shape.", e);
-        }
-        Icon.IconType type = coverType(bytes, hasUrl ? "imageUrl" : "filePath");
-
         // One read, doing two jobs: it establishes the event exists — authoritatively, from
         // Discord rather than from a cache that lags — and it captures the cover being replaced,
         // which is what lets a failed write separate "still the old cover" from "something moved"
@@ -861,6 +815,15 @@ public class ScheduledEventService {
             throw new IllegalArgumentException("Could not reach Discord to read that event before"
                     + " setting its cover" + reason(unreachable) + ". Nothing was changed.");
         }
+
+        // Now the source. Its guards do not depend on running here rather than earlier — the
+        // refusals are identical — but the outbound request they make now needs an event that
+        // exists. Extracted so those refusals stay testable: reaching them through the tool means
+        // getting past the event read, and a mocked JDA cannot serve one.
+        CoverSource read = readCoverSource(hasUrl, imageUrl, filePath, root);
+        byte[] bytes = read.bytes();
+        String source = read.name();
+        Icon.IconType type = read.type();
 
         // Outside the try below, whose catch reports "Sent 1.2 MB of PNG from …". Icon.from only
         // fails on null arguments, unreachable here — but inside the try it would produce a
@@ -1311,6 +1274,58 @@ public class ScheduledEventService {
         // Discord-side change, would otherwise produce a URL that 404s everywhere it is printed.
         return String.format(ScheduledEvent.IMAGE_URL, eventId, hash,
                 hash.startsWith("a_") ? "gif" : "png");
+    }
+
+    /** Bytes to send, the name to report them by, and the format they turned out to be. */
+    record CoverSource(byte[] bytes, String name, Icon.IconType type) {
+    }
+
+    /**
+     * Read the cover from whichever source the caller supplied.
+     *
+     * <p>Package-private, and the reason is the same one that keeps {@code coverUrlOf} and
+     * {@code coverType} package-private: through the tool these refusals sit behind an event read
+     * that a mocked JDA cannot serve, so the only way to assert that {@code imageUrl} really goes
+     * through {@link RemoteFetchGuard} — rather than a second {@code openStream} — is to call this
+     * directly. That regression is the one REVIEW.md records as already having shipped once.
+     */
+    static CoverSource readCoverSource(boolean hasUrl, String imageUrl, String filePath,
+                                       LocalFileGuard.Root root) {
+        String source;
+        byte[] bytes;
+        try {
+            if (hasUrl) {
+                // The shared SSRF guard, same as send_file and create_emoji: https only, public
+                // host, no redirect following, bounded read. This is the path that needs no
+                // filesystem grant, which is why it is offered first — a cover almost always
+                // starts as an image already posted to Discord, and requiring it to be staged on
+                // disk first is what pushes operators into pointing FILE_ROOT at their download
+                // directory.
+                bytes = RemoteFetchGuard.fetch(imageUrl, MAX_COVER_BYTES, "cover image");
+                source = imageUrl;
+            } else {
+                LocalFileGuard.ConfinedPath path =
+                        LocalFileGuard.resolveWithinRoot(filePath, root, "filePath", "upload");
+                bytes = LocalFileGuard.readBounded(path, MAX_COVER_BYTES, "cover image");
+                source = path.path().getFileName().toString();
+            }
+        } catch (LocalFileGuard.TooLargeException | RemoteFetchGuard.TooLargeException e) {
+            // The limit alone leaves the caller stuck: an oversized master is the ordinary input
+            // here, and the fix is the same crop the display shape needs anyway.
+            //
+            // Both branches are made to read the same way. RemoteFetchGuard's message is generic
+            // ("cover image exceeds the maximum allowed size" — lowercase, no period, no number)
+            // while LocalFileGuard's names the limit, so a URL and a path failing for identical
+            // reasons produced visibly different errors. The size is stated here either way.
+            throw new IllegalArgumentException("Cover image exceeds the "
+                    + FileSizes.format(MAX_COVER_BYTES) + " limit."
+                    + " Crop it to 5:2 and scale it down first — a cover is displayed at 800x320,"
+                    + " so a full-resolution master is both too large and the wrong shape.", e);
+        }
+        // The format check belongs to reading the source, not to the write: it names the
+        // parameter the bytes came from, and that is knowable only here. Refusing a WebP from a
+        // CDN link with "filePath is not a PNG" names a parameter the caller did not use.
+        return new CoverSource(bytes, source, coverType(bytes, hasUrl ? "imageUrl" : "filePath"));
     }
 
     /**

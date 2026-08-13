@@ -118,7 +118,7 @@ record CoverCounts(int described, int coverless, int unreadable, int absent, int
                 unidentifiable, recurrenceUnreadable);
     }
 
-    /** Nothing to say: the live read accounted for every listed event, and all of them have covers. */
+    /** Nothing was read, so nothing may be counted from it. Mirrors LiveEventDetails.unread(). */
     static CoverCounts none() {
         return new CoverCounts(0, 0, 0, 0, 0, List.of(), 0, 0);
     }

@@ -141,7 +141,9 @@ class FileRootStartupCheckTest {
         check.run(null);
 
         assertThat(warnings())
-                .contains("DISCORD_MCP_FILE_ROOT is set but unusable")
+                .contains("DISCORD_MCP_FILE_ROOT is set to")
+                .contains("which is unusable")
+                .contains(dir.resolve("never-created").toString())
                 .doesNotContain("overlap");
     }
 
@@ -156,7 +158,10 @@ class FileRootStartupCheckTest {
         check.run(null);
 
         assertThat(warnings())
-                .contains("DISCORD_MCP_DOWNLOAD_ROOT is set but unusable")
+                .contains("DISCORD_MCP_DOWNLOAD_ROOT is set to")
+                .contains("which is unusable")
+                // The value, which nothing else prints: the refusal names only the variable.
+                .contains(dir.resolve("nope").toString())
                 // Half a comparison establishes nothing about overlap, so nothing is claimed.
                 .doesNotContain("overlap");
     }

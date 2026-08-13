@@ -686,15 +686,15 @@ class ScheduledEventServiceTest {
     void aWebpFromACdnLinkIsRefusedByTheParameterItCameFrom() {
         // Discord's own media proxy serves WebP, so this is an ordinary mistake rather than an
         // exotic one — and the refusal has to name imageUrl, not the filePath the caller left
-        // empty. Only reachable through the tool, since coverType alone cannot pick the name.
-        service.coverFileRoot = "";
+        // empty. coverType alone cannot pick the name, which is why the format check lives
+        // inside the source read: only there is it known which parameter the bytes came from.
         byte[] webp = {'R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'E', 'B', 'P'};
 
         try (MockedStatic<RemoteFetchGuard> guard = mockStatic(RemoteFetchGuard.class)) {
             guard.when(() -> RemoteFetchGuard.fetch(any(), anyInt(), any())).thenReturn(webp);
 
-            assertThatThrownBy(() -> service.setScheduledEventImage(
-                    GUILD, EVENT, "https://media.discordapp.net/x.webp", null))
+            assertThatThrownBy(() -> ScheduledEventService.readCoverSource(
+                    true, "https://media.discordapp.net/x.webp", null, null))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("imageUrl is not a PNG or JPEG");
         }
@@ -713,8 +713,8 @@ class ScheduledEventServiceTest {
             guard.when(() -> RemoteFetchGuard.fetch(any(), anyInt(), any())).thenThrow(
                     new RemoteFetchGuard.TooLargeException("cover image exceeds the maximum allowed size"));
 
-            assertThatThrownBy(() -> service.setScheduledEventImage(
-                    GUILD, EVENT, "https://cdn.discordapp.com/big.png", null))
+            assertThatThrownBy(() -> ScheduledEventService.readCoverSource(
+                    true, "https://cdn.discordapp.com/big.png", null, null))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("Cover image exceeds the 5 MB limit.")
                     .hasMessageContaining("Crop it to 5:2");
@@ -770,13 +770,15 @@ class ScheduledEventServiceTest {
                 .hasMessageContaining("overlap");
 
         // And imageUrl is untouched by any of it — it reads no files, so the collision cannot
-        // apply to it. This must not become a refusal that disables the whole tool.
+        // apply to it. This must not become a refusal that disables the whole tool. It gets past
+        // the roots entirely and stops at the event read, which the mocked JDA cannot serve.
         service.coverFileRoot = shared.toString();
         service.downloadRoot = shared.toString();
         assertThatThrownBy(() -> service.setScheduledEventImage(
-                GUILD, EVENT, "https://169.254.169.254/x.png", null))
+                GUILD, EVENT, "https://cdn.discordapp.com/x.png", null))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("disallowed (internal) address");
+                .hasMessageNotContaining("overlap")
+                .hasMessageContaining("Could not reach Discord");
     }
 
     @Test
@@ -991,19 +993,17 @@ class ScheduledEventServiceTest {
         // "guildId cannot be null", even against a bare openStream(). A test that cannot fail for
         // the reason it names is worse than no test, so the guild and event resolve here and the
         // fetch is genuinely reached.
-        service.coverFileRoot = "";
-
-        assertThatThrownBy(() -> service.setScheduledEventImage(
-                GUILD, EVENT, "http://169.254.169.254/latest/meta-data/", null))
+        assertThatThrownBy(() -> ScheduledEventService.readCoverSource(
+                true, "http://169.254.169.254/latest/meta-data/", null, null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("must use the https scheme");
-        assertThatThrownBy(() -> service.setScheduledEventImage(
-                GUILD, EVENT, "file:///etc/passwd", null))
+        assertThatThrownBy(() -> ScheduledEventService.readCoverSource(
+                true, "file:///etc/passwd", null, null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("must use the https scheme");
         // https, so the scheme check passes and the address check is what has to stop it.
-        assertThatThrownBy(() -> service.setScheduledEventImage(
-                GUILD, EVENT, "https://169.254.169.254/latest/meta-data/", null))
+        assertThatThrownBy(() -> ScheduledEventService.readCoverSource(
+                true, "https://169.254.169.254/latest/meta-data/", null, null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("disallowed (internal) address");
     }
@@ -1099,9 +1099,9 @@ class ScheduledEventServiceTest {
         // read of any file the process can open, on a service that holds a bot token.
         Path root = Files.createDirectory(dir.resolve("uploads"));
         Path outside = Files.write(dir.resolve("secret.png"), png());
-        service.coverFileRoot = root.toString();
 
-        assertThatThrownBy(() -> service.setScheduledEventImage(GUILD, EVENT, null, outside.toString()))
+        assertThatThrownBy(() -> ScheduledEventService.readCoverSource(false, null,
+                outside.toString(), LocalFileGuard.resolveRoot(root.toString(), "VAR")))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("not a readable file inside the allowed upload directory");
     }
@@ -1114,9 +1114,9 @@ class ScheduledEventServiceTest {
         byte[] big = new byte[5 * 1024 * 1024 + 1];
         System.arraycopy(png(), 0, big, 0, png().length);
         Path file = Files.write(root.resolve("master.png"), big);
-        service.coverFileRoot = root.toString();
 
-        assertThatThrownBy(() -> service.setScheduledEventImage(GUILD, EVENT, null, file.toString()))
+        assertThatThrownBy(() -> ScheduledEventService.readCoverSource(false, null,
+                file.toString(), LocalFileGuard.resolveRoot(root.toString(), "VAR")))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Cover image exceeds the 5 MB limit.")
                 .hasMessageContaining("Crop it to 5:2");

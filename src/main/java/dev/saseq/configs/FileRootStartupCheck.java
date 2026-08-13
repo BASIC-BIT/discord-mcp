@@ -105,8 +105,13 @@ public class FileRootStartupCheck implements ApplicationRunner {
         try {
             return LocalFileGuard.resolveRoot(configured, variableName);
         } catch (RuntimeException unresolvable) {
-            log.warn("{} is set but unusable, so the tools that need it will refuse: {}",
-                    variableName, unresolvable.getMessage());
+            // The configured value, not just the exception's text. LocalFileGuard stopped putting
+            // it in the refusal — those reach the model — so getMessage() names the variable and
+            // nothing else, and this line was rendering the variable twice and the bad value
+            // never. The typo case is the one this whole log exists for.
+            log.warn("{} is set to \"{}\", which is unusable, so the tools that need it will"
+                            + " refuse: {}",
+                    variableName, configured, unresolvable.getMessage());
             return null;
         }
     }
