@@ -40,6 +40,14 @@ import java.util.Set;
 record CoverCounts(int described, int coverless, int unreadable, int absent, int terminal,
                    List<String> unlistedIds, int unidentifiable, int recurrenceUnreadable) {
 
+    CoverCounts {
+        // Copied for the reason LiveEventDetails copies its own: the order of these ids is
+        // load-bearing — the caveat prints the first ten — and a record that hands out a list it
+        // does not own cannot promise anything about it. Both callers pass an immutable list
+        // today; that is a fact about the callers, not about this type.
+        unlistedIds = List.copyOf(unlistedIds);
+    }
+
     /** How many events Discord returned that the listing does not contain. */
     int unlisted() {
         return unlistedIds.size();
