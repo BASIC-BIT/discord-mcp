@@ -229,12 +229,16 @@ substitute for one.
 **On upgrading:** a deployment that already set this for `send_file` gains
 `set_guild_scheduled_event_image` when the jar is updated, with no config change. That is a
 narrower case than the fallback `DISCORD_MCP_DOWNLOAD_ROOT` refuses below, for two reasons.
-The filesystem grant is identical — same root, same read, no new directory. And what can
-leave through it is bounded by format: the cover is rejected unless its bytes begin with a
-PNG or JPEG signature, which no `.env` or `/proc/self/environ` will satisfy. To be precise
-about what that buys you: it is a check on the first 3–8 bytes, not image validation. A file
-that does not *start* like an image cannot leave; a real image with data appended to it
-still can. That check, not the destination, is what makes this acceptable.
+The filesystem grant is identical — same root, same read, no new directory.
+
+**What makes it acceptable is the root holding only what you put there**, which is the rule
+at the top of this section and the one the rest of it defends. The format check is a second
+bound and a much weaker one: a cover is rejected unless its bytes begin with a PNG or JPEG
+signature, so no `.env` or `/proc/self/environ` leaves this way — but it is a check on the
+first 3–8 bytes, not image validation. A file that does not *start* like an image cannot
+leave; a real image with data appended to it still can, and three bytes are trivial to
+prepend to anything you control. Treat it as what stops an accident, not as what would stop
+someone who can write into the root.
 
 The destination is *wider* rather than narrower, which is worth knowing: an event
 cover is served from `guild-events/{event_id}/{hash}.png`, an unsigned, non-expiring,
