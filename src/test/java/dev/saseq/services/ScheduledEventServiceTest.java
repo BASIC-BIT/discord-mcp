@@ -36,11 +36,16 @@ class ScheduledEventServiceTest {
     /**
      * A guild that resolves, so the guildId check is not what a test trips over.
      *
-     * <p>setScheduledEventImage validates the ids, then reads the source, then reads the event
-     * from Discord. A test passing a null guildId stops at "guildId cannot be null" and never
-     * exercises what it claims to — which is how an assertion ends up passing for a reason it did
-     * not name. The source guards are reachable because the event read comes after them; nothing
-     * here can reach the write, which needs a real REST call.
+     * <p>setScheduledEventImage resolves the upload root, validates the ids, reads the event
+     * from Discord, and only then reads the source. A test passing a null guildId stops at
+     * "guildId cannot be null" and never exercises what it claims to — which is how an assertion
+     * ends up passing for a reason it did not name.
+     *
+     * <p>Because the event read comes first and a mocked JDA cannot serve it, the source guards
+     * are <em>not</em> reachable through the tool: they are asserted against
+     * {@code readCoverSource} directly, which is why that method is package-private. What is
+     * reachable here is everything before the event read — the root resolution, the id checks,
+     * the overlap refusal — and the fact that the call stops there.
      *
      * <p>Which is why several tests here pin "Could not reach Discord to read that event": that
      * message is an artifact of {@code RestActionImpl} casting its {@code JDA} argument to
@@ -659,27 +664,26 @@ class ScheduledEventServiceTest {
     }
 
     @Test
-    void aValidLocalCoverIsReadBeforeTheEventAndChangesNothingWhenThatReadFails(@TempDir Path dir)
-            throws IOException {
-        // The source is read first — deliberately, so a wrong one is refused without spending a
-        // Discord request. An economy, not a defence: both guards refuse wherever they run. A
-        // file inside the
-        // root therefore passes the guard and is read, and the call then stops at the event read,
-        // which the mocked JDA cannot serve — RestActionImpl casts its JDA argument to JDAImpl and
-        // a Mockito proxy is not one. So the exact string pinned below is an artifact of the mock,
-        // not something production produces; what the test establishes is the ordering in its
-        // name. If a JDA upgrade validates earlier, this fails loudly rather than passing
-        // wrongly. What is asserted is the message, not the absence of a write — nothing here
-        // could observe a PATCH, since the same mock that fails the read would fail it too.
+    void theEventIsReadBeforeTheSourceIsTouched(@TempDir Path dir) throws IOException {
+        // The path given here is outside the upload root, so readCoverSource would refuse it —
+        // and that refusal is not what comes back. The call stops at the event read first, which
+        // is the ordering: the source, and the outbound request reading it can make, are not
+        // reached until Discord has confirmed the event exists.
+        //
+        // The pinned string is an artifact of the mock (RestActionImpl casts its JDA to JDAImpl,
+        // and a Mockito proxy is not one), not something production emits. What the test
+        // establishes is which of the two reads happened, and the confinement refusal being
+        // absent is what shows it.
         Path root = Files.createDirectory(dir.resolve("uploads"));
-        Files.write(root.resolve("poster.png"), png());
+        Path outside = Files.write(dir.resolve("secret.png"), png());
         service.coverFileRoot = root.toString();
 
         assertThatThrownBy(() -> service.setScheduledEventImage(
-                GUILD, EVENT, null, root.resolve("poster.png").toString()))
+                GUILD, EVENT, null, outside.toString()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Could not reach Discord to read that event")
-                .hasMessageContaining("Nothing was changed");
+                .hasMessageContaining("Nothing was changed")
+                .hasMessageNotContaining("upload directory");
     }
 
     @Test
@@ -836,18 +840,22 @@ class ScheduledEventServiceTest {
 
     @Test
     void separateRootsAreNotRefused(@TempDir Path dir) throws IOException {
-        // The other half of the check: an ordinary two-directory deployment must reach the file.
-        // Without this, a comparison that refused everything would pass the test above.
+        // The other half of the overlap check: an ordinary two-directory deployment gets past
+        // coverRoot() rather than being refused. Without this, a comparison that refused
+        // everything would pass the test above.
+        //
+        // No file is staged, deliberately: the event read now comes first, so nothing here
+        // reaches the source. Staging one would suggest this proves the file is readable, and it
+        // does not — readCoverSource's own tests do that.
         Path uploads = Files.createDirectory(dir.resolve("uploads"));
-        Files.write(uploads.resolve("poster.png"), png());
         service.coverFileRoot = uploads.toString();
         service.downloadRoot = Files.createDirectory(dir.resolve("downloads")).toString();
 
         assertThatThrownBy(() -> service.setScheduledEventImage(
                 GUILD, EVENT, null, uploads.resolve("poster.png").toString()))
                 .isInstanceOf(IllegalArgumentException.class)
-                // Past the roots, past the read, stopped at the event — which the mocked JDA
-                // cannot serve. Not "overlap", and not a refusal about the file.
+                // Past the roots, stopped at the event read, which the mocked JDA cannot serve.
+                // Not "overlap", which is the claim this test exists to deny.
                 .hasMessageContaining("Could not reach Discord")
                 .hasMessageNotContaining("overlap");
     }
@@ -894,20 +902,18 @@ class ScheduledEventServiceTest {
         // event, then cover it from the poster's CDN link. Stubbing the cache to miss changes
         // nothing, because nothing reads it.
         when(guild.getScheduledEventById(EVENT)).thenReturn(null);
-        service.coverFileRoot = "";
-
-        try (MockedStatic<RemoteFetchGuard> guard = mockStatic(RemoteFetchGuard.class)) {
-            guard.when(() -> RemoteFetchGuard.fetch(any(), anyInt(), any())).thenReturn(png());
-
-            assertThatThrownBy(() -> service.setScheduledEventImage(
-                    GUILD, EVENT, "https://cdn.discordapp.com/x.png", null))
-                    .isInstanceOf(IllegalArgumentException.class)
-                    // Past the source, into the live read — which the mocked JDA cannot serve.
-                    // The point is that an empty cache did not stop it before that.
-                    .hasMessageContaining("Could not reach Discord to read that event")
-                    .hasMessageContaining("Nothing was changed")
-                    .hasMessageNotContaining("not found by eventId");
-        }
+        assertThatThrownBy(() -> service.setScheduledEventImage(
+                GUILD, EVENT, "https://cdn.discordapp.com/x.png", null))
+                .isInstanceOf(IllegalArgumentException.class)
+                // Into the live read, which the mocked JDA cannot serve. The point is that a
+                // cache miss did not stop it before that: the message is the read failing, not
+                // "not found by eventId", which is what a cache lookup would have produced.
+                //
+                // No RemoteFetchGuard stub any more. The event read comes first, so the fetch is
+                // never reached and stubbing it asserted nothing.
+                .hasMessageContaining("Could not reach Discord to read that event")
+                .hasMessageContaining("Nothing was changed")
+                .hasMessageNotContaining("not found by eventId");
     }
 
     @Test

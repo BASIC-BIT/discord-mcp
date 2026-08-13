@@ -722,7 +722,7 @@ public class ScheduledEventService {
      * README argues against. A tool whose safe configuration is the inconvenient one gets
      * configured unsafely.
      */
-    @Tool(name = "set_guild_scheduled_event_image", description = "Replace a scheduled event's cover image with a PNG or JPEG, from a direct imageUrl OR a local filePath under DISCORD_MCP_FILE_ROOT. Prefer imageUrl: a poster already posted to Discord has a CDN URL, and using it needs no local file at all. Discord displays covers at 5:2 (800x320 recommended) and crops anything else, so crop to 5:2 yourself to control what is kept. Max " + MAX_COVER_MB + "MB — this server's limit, not a documented Discord one. Animation is never shown, so an animated GIF is refused and an animated PNG plays as a still. On a recurring event the effect is unverified: editing one is known to change a single occurrence, so check the series after setting a cover on it.")
+    @Tool(name = "set_guild_scheduled_event_image", description = "Replace a scheduled event's cover image with a PNG or JPEG, from a direct imageUrl OR a local filePath under DISCORD_MCP_FILE_ROOT. Prefer imageUrl: a poster already posted to Discord has a CDN URL, and using it needs no local file at all. Discord displays covers at 5:2 (800x320 recommended) and crops anything else, so crop to 5:2 yourself to control what is kept. Max " + MAX_COVER_MB + " MB — this server's limit, not a documented Discord one. Animation is never shown, so an animated GIF is refused and an animated PNG plays as a still. On a recurring event the effect is unverified: editing one is known to change a single occurrence, so check the series after setting a cover on it.")
     public String setScheduledEventImage(
             @ToolParam(description = "Discord server ID", required = false) String guildId,
             @ToolParam(description = "ID of the scheduled event") String eventId,
@@ -746,8 +746,8 @@ public class ScheduledEventService {
         // all: a filePath call on a deployment with no upload root should refuse with "Local
         // paths are disabled" without spending a request to get there.
         LocalFileGuard.Root root = hasPath ? coverRoot() : null;
-        // Then the ids. The event itself is read further down, after the source; the trade that
-        // ordering makes is set out where the source is read.
+        // Then the ids, which cost nothing. The event is read next and the source after it;
+        // what that ordering buys is set out where the event is read.
         //
         // No cached entity is needed: the write below goes through patchRaw, the same raw route
         // this file already uses for every other scheduled-event field. Using JDA's manager here
