@@ -63,6 +63,16 @@ public class FileRootStartupCheck implements ApplicationRunner {
                             + " if that is not wanted.",
                     uploads.path());
         }
+        if (downloads != null) {
+            // The resolved path, because nothing else prints it any more. LocalFileGuard stopped
+            // echoing a configured value into its refusals — those reach the model and often a
+            // channel — which leaves an operator who typo'd this variable with a message naming
+            // only the variable. This log is not caller-reachable, so it is the right place for
+            // the value: it says what the server actually resolved, which is the thing a typo
+            // makes surprising.
+            log.info("DISCORD_MCP_DOWNLOAD_ROOT resolved to {}, where download_attachment writes.",
+                    downloads.path());
+        }
         if (uploads == null || downloads == null) {
             // Unset, or unusable and already reported. Either way there is nothing to compare
             // against, and half a comparison establishes nothing about overlap.

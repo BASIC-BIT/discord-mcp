@@ -93,6 +93,7 @@ class FileRootStartupCheckTest {
 
         assertThat(logged())
                 .contains("readable by send_file and by set_guild_scheduled_event_image")
+                .doesNotContain("DISCORD_MCP_DOWNLOAD_ROOT resolved to")
                 .contains("permanent unauthenticated CDN URL")
                 .contains("Refuse the tool by name");
         assertThat(appender.list).allSatisfy(e ->
@@ -102,11 +103,18 @@ class FileRootStartupCheckTest {
     @Test
     void separateRootsAreSilent(@TempDir Path dir) throws IOException {
         check.fileRoot = Files.createDirectory(dir.resolve("uploads")).toString();
-        check.downloadRoot = Files.createDirectory(dir.resolve("downloads")).toString();
+        Path downloads = Files.createDirectory(dir.resolve("downloads"));
+        check.downloadRoot = downloads.toString();
 
         check.run(null);
 
         assertThat(warnings()).isEmpty();
+        // The resolved download path, which nothing else prints any more: LocalFileGuard stopped
+        // echoing a configured value into refusals that reach a channel, so a typo would
+        // otherwise name only the variable. This log is not caller-reachable.
+        assertThat(logged())
+                .contains("DISCORD_MCP_DOWNLOAD_ROOT resolved to")
+                .contains(downloads.toRealPath().toString());
     }
 
     @Test

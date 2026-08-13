@@ -771,9 +771,16 @@ public class ScheduledEventService {
         // confines wherever it runs; neither depends on this ordering.
         //
         // What it costs is that a syntactically valid eventId naming no event still spends the
-        // fetch. Kept anyway: a caller can name a real event as cheaply as a fake one, so the
-        // ordering bounds bandwidth rather than exposure, and the common mistake here is the
-        // wrong file — which this refuses without asking Discord anything.
+        // fetch, so a caller holding this tool can make the server issue one bounded outbound GET
+        // to a host of its choosing without naming a real event. send_file resolves its channel
+        // first and does not offer that.
+        //
+        // Kept, but the reason is narrower than "a caller can name a real event as cheaply as a
+        // fake one" — that holds only where list_guild_scheduled_events is granted alongside this
+        // tool, which is a deployment's choice and not this file's to assume. What holds without
+        // it: RemoteFetchGuard bounds the request to a public host with no redirects and 5 MB, so
+        // what is bought by reordering is bandwidth on an error path, against one extra Discord
+        // request on the common mistake, which is the wrong file rather than the wrong event.
         String source;
         byte[] bytes;
         try {
@@ -899,6 +906,14 @@ public class ScheduledEventService {
         // This came from the PATCH response itself, so it is what Discord stored rather than what
         // was sent — no separate read-back, and no window in which someone else's change could be
         // reported as this call's result.
+        //
+        // It rests on the PATCH returning the modified event, which Discord documents for this
+        // endpoint and nothing here has observed: no test can reach a real write, since the
+        // mocked JDA fails RestActionImpl's cast first. If that assumption is wrong the failure
+        // is loud and immediate rather than subtle — every successful call reports "Now: no cover
+        // image", because an absent `image` field is exactly what Cover.of reads as ABSENT. Seeing
+        // that on a write that plainly worked means this paragraph is what broke, and the fix is a
+        // read-back here rather than anything about the write.
         return describeCoverWrite(eventName, eventId, source, type, bytes.length, before,
                 Cover.of(applied, eventId));
     }
