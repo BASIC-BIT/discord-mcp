@@ -293,6 +293,11 @@ The server also warns once at startup when the two roots overlap, or when either
 directory that does not resolve. The per-call refusal above is a tool result: it reaches the
 model that made the call, not the person who set the variables.
 
+Where that warning lands depends on the profile. Under `http` — what Compose runs — it goes
+to the console, so `docker logs` has it. Under the stdio profile it goes to the log file only,
+because stdout belongs to the MCP protocol there; check `./target/logs/discord-mcp-server.log`
+(or wherever `logging.file.name` points) rather than expecting it on screen.
+
 **That refusal raises the cost of the direct path; it does not close it.** With the roots
 chained, the same end state is two calls away: `download_attachment` writes the chosen file,
 `send_file` posts it to a channel — no format check there, and it reads the same root — and
