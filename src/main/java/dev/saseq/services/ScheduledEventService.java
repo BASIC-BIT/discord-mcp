@@ -1481,7 +1481,12 @@ public class ScheduledEventService {
         // cannot say which, and a row that silently omits its cover line is indistinguishable
         // from one known to have none — which is the question a caller answers when it picks an
         // event to upload to. Rare by construction either way.
-        Set<String> undescribed = events.stream()
+        // Empty when the read failed, like the counts three statements up. Without that gate,
+        // `described` is empty and every non-terminal event is "undescribed", so a failed read
+        // puts the marker on every row of an uncapped listing — directly under a caveat that has
+        // just said no cover could be read at all. The marker is worth its line because it is
+        // rare; on that branch it is not rare, and it is not news either.
+        Set<String> undescribed = !rawKnown ? Set.of() : events.stream()
                 .filter(e -> !described.contains(e.getId()))
                 .filter(e -> !isTerminal(e))
                 .map(ScheduledEvent::getId)

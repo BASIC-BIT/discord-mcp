@@ -849,6 +849,27 @@ class ScheduledEventServiceTest {
     }
 
     @Test
+    void aFailedLiveReadDoesNotMarkEveryRowUnknown() {
+        // The per-row marker earns its line by being rare. When the live read fails nothing is
+        // described, so every non-terminal event qualifies and an uncapped listing gets the
+        // marker on every row — under a caveat that has just said no cover could be read at all.
+        // The counts already go to none() on this branch; the marker set has to as well.
+        // Built before the stubbing, not inside it: liveEvent stubs its own mock, and Mockito
+        // reads a stubbing opened inside another stubbing's arguments as unfinished.
+        ScheduledEvent night = liveEvent("11", "Community Night");
+        ScheduledEvent chess = liveEvent("22", "Chess Club");
+        when(guild.getScheduledEvents()).thenReturn(java.util.List.of(night, chess));
+
+        String result = service.listScheduledEvents(GUILD, "false");
+
+        assertThat(result)
+                .contains("Community Night")
+                .contains("Chess Club")
+                .contains("could not be read")
+                .doesNotContain("Cover image");
+    }
+
+    @Test
     void theCoverWriteDoesNotConsultTheCacheAtAll() {
         // The write goes through patchRaw, so an event Discord has but the gateway has not
         // delivered is coverable — which is the flow the tool description recommends: create an
