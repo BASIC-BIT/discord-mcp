@@ -592,12 +592,15 @@ class ScheduledEventServiceTest {
         assertThat(ScheduledEventService.renderEvent(
                 coverless, Map.of(), Map.of(), Set.of("11"), Set.of(), false))
                 .doesNotContain("Cover image");
-        // A readable cover wins: the marker is for rows that would otherwise say nothing.
+        // A readable cover wins: the marker is for rows that would otherwise say nothing. Scoped
+        // to the cover line, because the same id being in `undescribed` also marks its schedule —
+        // a combination the listing cannot produce, since a cover URL only exists for an event
+        // the read described.
         assertThat(ScheduledEventService.renderEvent(unreadable, Map.of(),
                 Map.of("11", "https://cdn.discordapp.com/guild-events/11/aaa.png"),
                 Set.of("11"), Set.of(), false))
                 .contains("• Cover image: https://cdn.discordapp.com/guild-events/11/aaa.png")
-                .doesNotContain("unknown");
+                .doesNotContain("Cover image: unknown");
     }
 
     @Test
@@ -858,6 +861,30 @@ class ScheduledEventServiceTest {
                 // Not "overlap", which is the claim this test exists to deny.
                 .hasMessageContaining("Could not reach Discord")
                 .hasMessageNotContaining("overlap");
+    }
+
+    @Test
+    void anEventTheReadMissedIsNotShownAsAOneOff() {
+        // The cover half of this was fixed first and the schedule left behind, which is the
+        // worse half: an event Discord did not return had no recurrence read either, so its row
+        // was identical to a genuine one-off, and editing a weekly series as a single event is
+        // what this listing reads recurrence to prevent.
+        ScheduledEvent missed = liveEvent("11", "Community Night");
+        ScheduledEvent oneOff = liveEvent("22", "Chess Club");
+
+        assertThat(ScheduledEventService.renderEvent(
+                missed, Map.of(), Map.of(), Set.of("11"), Set.of(), false))
+                .contains("• Recurs: unknown — the live read did not describe this event")
+                .contains("• Cover image: unknown");
+        // An event the read did describe, with no rule, is a one-off and says nothing.
+        assertThat(ScheduledEventService.renderEvent(
+                oneOff, Map.of(), Map.of(), Set.of("11"), Set.of(), false))
+                .doesNotContain("Recurs:");
+        // A rule that was read still wins over the marker.
+        assertThat(ScheduledEventService.renderEvent(
+                missed, Map.of("11", "Weekly on Monday"), Map.of(), Set.of("11"), Set.of(), false))
+                .contains("• Recurs: Weekly on Monday")
+                .doesNotContain("Recurs: unknown");
     }
 
     @Test

@@ -1572,6 +1572,14 @@ public class ScheduledEventService {
             sb.append("\n  • Recurs: ").append(rule);
         } else if (recurrenceUnreadable.contains(e.getId())) {
             sb.append("\n  • Recurs: could not be read — unknown, so this may be a series");
+        } else if (undescribed.contains(e.getId())) {
+            // The same fall-through the cover line has, for the same reason and with more at
+            // stake. An event Discord did not return had no recurrence read either, and without
+            // this its row is indistinguishable from a genuine one-off — editing a weekly series
+            // as though it were a single event is the mistake this recurrence read exists to
+            // prevent. The header counts these, but a count cannot say which row, which is the
+            // whole argument the cover marker was added on.
+            sb.append("\n  • Recurs: unknown — the live read did not describe this event");
         }
         // Only the URL, and only when there is one. A per-event "none" would be a line of nothing
         // per coverless event on a listing with no result cap; the header count carries that once
