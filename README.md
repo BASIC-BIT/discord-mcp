@@ -318,6 +318,12 @@ export DISCORD_MCP_ALLOW_SHARED_ROOT=true
 **Only the string `true` enables it**, case-insensitively and trimmed. `1`, `yes` and `on` do
 not. A variable whose only job is to drop a check should not be satisfiable by accident.
 
+**On Docker, it has to reach the container.** `docker-compose.yml` declares it under
+`environment:`, so a value in `.env` is enough there — unlike `DISCORD_MCP_FILE_ROOT`, which
+also needs its line uncommented. With plain `docker run`, add `-e DISCORD_MCP_ALLOW_SHARED_ROOT`
+alongside the `-e DISCORD_MCP_FILE_ROOT` from the uploads tip above. Miss it and the refusal
+below tells you to set a variable you already set.
+
 This is for the deployment that keeps **one media directory on purpose** — an agent host where
 what it downloads, what people send it, and what it generates all land in one place, and covers
 get set from there. On that layout the refusal above costs the `filePath` branch and buys

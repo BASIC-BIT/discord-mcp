@@ -23,6 +23,13 @@ services:
       # "Security notes" in the README before uncommenting; do not point it at the downloads
       # directory.
       #DISCORD_MCP_FILE_ROOT: ${DISCORD_MCP_FILE_ROOT:-}
+      # Only does anything when the two roots above are one directory: it drops the refusal
+      # set_guild_scheduled_event_image makes on that layout. Declared rather than commented,
+      # unlike the line above, because that argument does not apply here — this variable has
+      # never existed, so nobody has a value for it sitting in .env from back when it did
+      # nothing. Empty by default, and empty leaves the refusal in place. Read
+      # DISCORD_MCP_ALLOW_SHARED_ROOT under "Security notes" in the README first.
+      DISCORD_MCP_ALLOW_SHARED_ROOT: ${DISCORD_MCP_ALLOW_SHARED_ROOT:-}
     volumes:
       # A named volume, because the app writes downloads and they should survive `docker rm`.
       - discord-mcp-downloads:/var/lib/discord-mcp/downloads

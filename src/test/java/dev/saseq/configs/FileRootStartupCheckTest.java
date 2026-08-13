@@ -98,7 +98,10 @@ class FileRootStartupCheckTest {
                 .contains("overlap")
                 .contains("DISCORD_MCP_ALLOW_SHARED_ROOT=true allows it")
                 .doesNotContain("send_file does not")
-                .doesNotContain("Point them at separate");
+                .doesNotContain("Point them at separate")
+                // The advice changes; the broader grant still gets named. send_file read this
+                // directory before the opt-in and still does, and it is the larger of the two.
+                .contains("send_file reads the same directory");
     }
 
     @Test

@@ -101,11 +101,16 @@ public class FileRootStartupCheck implements ApplicationRunner {
             // layout, not that the consequence stopped applying — and this is the only line that
             // will say so on the day somebody inherits the deployment. Softer than the refusal it
             // replaced because there is nothing left to fix by hand.
+            // send_file stays named. The opt-in changes nothing for it — it read the shared root
+            // before and still does — and it is the broader grant of the two, so a warning that
+            // mentioned only covers would leave the inheriting operator with the smaller half of
+            // what this layout means.
             log.warn("DISCORD_MCP_FILE_ROOT ({}) and DISCORD_MCP_DOWNLOAD_ROOT ({}) overlap, and"
                             + " DISCORD_MCP_ALLOW_SHARED_ROOT=true allows it. Covers can be set"
                             + " from files download_attachment wrote, so a caller that can reach"
                             + " that tool chooses what gets pinned to a permanent unauthenticated"
-                            + " CDN URL. Unset the opt-in to go back to refusing local cover paths"
+                            + " CDN URL; send_file reads the same directory, as it did before the"
+                            + " opt-in. Unset the opt-in to go back to refusing local cover paths"
                             + " in this configuration.",
                     uploads.path(), downloads.path());
             return;
