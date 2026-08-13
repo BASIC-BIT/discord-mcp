@@ -866,9 +866,16 @@ public class ScheduledEventService {
             // is what the paragraph above declines to do for the causes it cannot see.
             String state = terminalState == null ? ""
                     : " The event was already " + terminalState + " when this call read it.";
-            throw new IllegalArgumentException("Setting the cover image failed" + reason(e)
-                    + ". Sent " + FileSizes.format(bytes.length) + " of " + type.name() + " from "
-                    + source + "." + state + outcome, e);
+            // "Did not return successfully", not "failed". The request threw; that is all this
+            // knows. Discord may have applied the image and lost the response, which is why the
+            // read-back above exists — and describeOutcome can come back saying the cover was
+            // ADDED or CHANGED during this call. "Setting the cover image failed" above that
+            // sentence is the same contradiction the success path had when an unconditional
+            // headline sat over "Now: no cover image", and it points the caller at a retry that
+            // may overwrite what did land.
+            throw new IllegalArgumentException("The cover write did not return successfully"
+                    + reason(e) + ". Sent " + FileSizes.format(bytes.length) + " of " + type.name()
+                    + " from " + source + "." + state + outcome, e);
         }
 
         // Read outside the try above, for the same reason Icon.from sits outside it: the write
@@ -1495,6 +1502,24 @@ public class ScheduledEventService {
             // information.
             details = LiveEventDetails.unread();
         }
+        return renderListing(events, details, rawKnown, includeUserCount);
+    }
+
+    /**
+     * Compose the header, the caveat and the rows from one live read.
+     *
+     * <p>Package-private because nothing else could reach it. {@code RestActionImpl} casts its
+     * {@code JDA} to {@code JDAImpl}, so a mocked one cannot serve {@code fetchRawList} and every
+     * test that drives the tool goes down the failed-read branch — leaving the join between the
+     * four pieces, each of which is pinned on its own, run by nothing.
+     *
+     * <p>That join is where the mistakes would be. {@code CoverCounts.tally} takes three
+     * interchangeable {@code Set<String>} arguments in a row: swapping {@code described} with the
+     * cover ids compiles, inverts the coverless count, and leaves every other test green. The
+     * record fixed the shape of the result; the transposition risk moved to the input.
+     */
+    static String renderListing(List<ScheduledEvent> events, LiveEventDetails details,
+                                boolean rawKnown, boolean includeUserCount) {
         Map<String, String> rules = details.rules();
         Map<String, String> covers = details.covers();
         Set<String> described = details.described();

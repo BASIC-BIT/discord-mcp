@@ -911,6 +911,83 @@ class ScheduledEventServiceTest {
                 .hasMessageContaining("imageUrl was not supplied");
     }
 
+    /** A live read that described one event with a cover and one recurring event. */
+    private static LiveEventDetails read(java.util.Map<String, String> rules,
+                                         java.util.Map<String, String> covers,
+                                         Set<String> described, java.util.List<String> returned,
+                                         Set<String> recurrenceFailed) {
+        return new LiveEventDetails(rules, covers, described, returned, recurrenceFailed, 0);
+    }
+
+    @Test
+    void theListingJoinsTheReadToTheRowsItRenders() {
+        // The composition itself, which no test could reach through the tool: RestActionImpl
+        // casts its JDA to JDAImpl, so a mocked one never gets past the live read and every
+        // tool-level test goes down the failed-read branch. The four pieces are each pinned; this
+        // is the wiring between them, where a swapped argument compiles and stays green.
+        ScheduledEvent covered = liveEvent("11", "Community Night");
+        ScheduledEvent weekly = liveEvent("22", "Chess Club");
+
+        String out = ScheduledEventService.renderListing(
+                java.util.List.of(covered, weekly),
+                read(java.util.Map.of("22", "Weekly on Monday"),
+                        java.util.Map.of("11", "https://cdn.discordapp.com/guild-events/11/a.png"),
+                        Set.of("11", "22"), java.util.List.of("11", "22"), Set.of()),
+                true, false);
+
+        assertThat(out)
+                .startsWith("Retrieved 2 scheduled events:")
+                // One of the two has a cover, so the caveat says so rather than staying silent.
+                .contains("1 of 2 events has no cover image")
+                .contains("• Cover image: https://cdn.discordapp.com/guild-events/11/a.png")
+                .contains("• Recurs: Weekly on Monday")
+                // And the cover belongs to the event that has it: a swapped map puts this line
+                // under Chess Club, which is the join this test exists for.
+                .containsSubsequence("Community Night", "Cover image", "Chess Club");
+    }
+
+    @Test
+    void theListingCountsCoverlessEventsFromTheReadNotFromTheCache() {
+        // tally takes described, withCovers and recurrenceFailed as three interchangeable
+        // Set<String> in a row. Swapping the first two inverts this count and compiles.
+        String out = ScheduledEventService.renderListing(
+                java.util.List.of(liveEvent("11", "A"), liveEvent("22", "B")),
+                read(java.util.Map.of(), java.util.Map.of(), Set.of("11", "22"),
+                        java.util.List.of("11", "22"), Set.of()),
+                true, false);
+
+        assertThat(out).contains("no event here has a cover image");
+    }
+
+    @Test
+    void theListingReportsAnEventTheCacheHasAndTheReadDoesNot() {
+        // The absent case end to end: the header explains it, and the row says which one, which
+        // is the pairing the last several rounds of per-row markers were about.
+        String out = ScheduledEventService.renderListing(
+                java.util.List.of(liveEvent("11", "A"), liveEvent("22", "Gone Missing")),
+                read(java.util.Map.of(), java.util.Map.of("11", "https://cdn/x.png"),
+                        Set.of("11"), java.util.List.of("11"), Set.of()),
+                true, false);
+
+        assertThat(out)
+                .contains("1 event was not in the live read")
+                .containsSubsequence("Gone Missing", "Cover image: unknown")
+                .containsSubsequence("Gone Missing", "Recurs: unknown");
+    }
+
+    @Test
+    void theListingSaysNoneOnlyWhenTheReadAgreed() {
+        assertThat(ScheduledEventService.renderListing(java.util.List.of(),
+                read(java.util.Map.of(), java.util.Map.of(), Set.of(), java.util.List.of(), Set.of()),
+                true, false))
+                .isEqualTo("No scheduled events found on this server.");
+        // The same empty cache with a read that failed cannot support the claim.
+        assertThat(ScheduledEventService.renderListing(java.util.List.of(),
+                LiveEventDetails.unread(), false, false))
+                .doesNotContain("No scheduled events found")
+                .contains("could not be read");
+    }
+
     @Test
     void aFinishedEventDiscordStillReturnedIsMarkedLikeAnyOther() {
         // The marker skips terminal events because the live read stops carrying them, not because
