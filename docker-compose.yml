@@ -15,8 +15,29 @@ services:
       # container path below to enable downloads; the named volume is what keeps them
       # when the container is recreated.
       DISCORD_MCP_DOWNLOAD_ROOT: ${DISCORD_MCP_DOWNLOAD_ROOT:-}
+      # Uncomment together with the uploads volume below to enable local-path uploads. Until
+      # then send_file and set_guild_scheduled_event_image both refuse local paths — the latter
+      # still works via its imageUrl. Commented rather than propagated-but-empty on purpose:
+      # this variable was not declared here before, so an upgrade must not begin delivering a
+      # value someone left in .env back when it did nothing. Read DISCORD_MCP_FILE_ROOT under
+      # "Security notes" in the README before uncommenting; do not point it at the downloads
+      # directory.
+      #DISCORD_MCP_FILE_ROOT: ${DISCORD_MCP_FILE_ROOT:-}
     volumes:
+      # A named volume, because the app writes downloads and they should survive `docker rm`.
       - discord-mcp-downloads:/var/lib/discord-mcp/downloads
+      # Uncomment together with DISCORD_MCP_FILE_ROOT above to enable local-path uploads.
+      # Shipped commented rather than left inert: an unconditional bind mount would have Docker
+      # create ./uploads as root:root in the deployment directory of every existing operator on
+      # their next `up`, needing sudo to remove, for a feature they did not turn on. Run
+      # `mkdir -p uploads` before uncommenting, for the same reason.
+      #
+      # A read-only bind mount, because the operator puts files here and the app only ever reads
+      # them. A named volume would be the wrong shape — nothing on the host can write into one
+      # without `docker cp` or a helper container, which makes "put the file there" advice
+      # impossible to follow. `:ro` also enforces at the mount what the docs describe, so this
+      # path cannot become a second place the app writes.
+      #- ./uploads:/var/lib/discord-mcp/uploads:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8085/actuator/health | grep -q '\"status\":\"UP\"'"]
       interval: 30s

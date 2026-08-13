@@ -39,6 +39,14 @@ export SPRING_PROFILES_ACTIVE=http
 export DISCORD_MCP_DOWNLOAD_ROOT=/var/lib/discord-mcp/downloads
 ```
 
+> [!TIP]
+> There is deliberately no `DISCORD_MCP_FILE_ROOT` here. It is needed only for local-path
+> uploads — `send_file`'s `filePath`, and `set_guild_scheduled_event_image` when you are not
+> using its `imageUrl` — and a deployment that only ever covers events from a CDN link needs
+> no filesystem grant at all. To enable it, add
+> `export DISCORD_MCP_FILE_ROOT=/var/lib/discord-mcp/uploads` and the uploads mount below,
+> pointing it at a directory that holds nothing but uploads. See Security notes first.
+
 > [!IMPORTANT]
 > Instructions for creating a Discord bot and retrieving its token can be found [here](https://discordjs.guide/legacy/preparations/app-setup).
 
@@ -62,9 +70,28 @@ docker run -d -i \
 ```
 
 > [!TIP]
-> The `-e DISCORD_MCP_DOWNLOAD_ROOT` and `-v` lines are only needed for `download_attachment`.
-> Leave them off and that tool refuses; nothing else changes. The named volume is what keeps
-> saved attachments across `docker rm` — a container-local path loses them on recreate.
+> `-e DISCORD_MCP_DOWNLOAD_ROOT` and the downloads `-v` are only needed for
+> `download_attachment`; leave them off and that tool refuses, and nothing else changes.
+>
+> **For local-path uploads** — `send_file`'s `filePath`, and `set_guild_scheduled_event_image`
+> when you are not using its `imageUrl` — run `mkdir -p uploads` first, then add these two
+> lines to the command above:
+>
+> ```
+>   -e DISCORD_MCP_FILE_ROOT \
+>   -v "$PWD/uploads":/var/lib/discord-mcp/uploads:ro \
+> ```
+>
+> Kept out of the block rather than shipped inert, so pasting it does not leave a root-owned
+> `./uploads` behind for a feature you did not enable — Docker creates a missing bind-mount
+> source as `root:root`. `docker-compose.yml` ships the same pair commented, for the same
+> reason.
+>
+> The two mounts are different shapes on purpose. Downloads are a **named volume**, because
+> the app writes them and they should survive `docker rm`. Uploads are a **read-only bind
+> mount**, because the operator puts files there and the app only reads them — a named volume
+> cannot be written from the host without `docker cp`, which makes "put the file there"
+> impossible to act on, and `:ro` enforces at the mount what the docs describe.
 
 Default MCP endpoint URL (HTTP profile): `http://localhost:8085/mcp`
 
@@ -91,6 +118,11 @@ DISCORD_TOKEN=<YOUR_DISCORD_BOT_TOKEN>
 DISCORD_GUILD_ID=<OPTIONAL_DEFAULT_SERVER_ID>
 # Optional, enables download_attachment. Container path, matching the named volume.
 DISCORD_MCP_DOWNLOAD_ROOT=/var/lib/discord-mcp/downloads
+# Optional, enables local-path uploads. Uncomment to grant it — send_file's filePath and
+# set_guild_scheduled_event_image's filePath. The latter works via imageUrl without this, so
+# a deployment covering events from CDN links should leave it off. Container path, matching
+# the ./uploads bind mount. See Security notes before pointing it at the download path.
+#DISCORD_MCP_FILE_ROOT=/var/lib/discord-mcp/uploads
 EOF
 ```
 
@@ -98,6 +130,18 @@ EOF
 ```bash
 docker compose up -d --build
 ```
+
+> [!TIP]
+> For local-path uploads there are **three** commented lines, not two: `DISCORD_MCP_FILE_ROOT`
+> in `.env`, the matching `DISCORD_MCP_FILE_ROOT:` line under `environment:` in
+> `docker-compose.yml`, and the `./uploads` volume line below it. Miss the middle one and the
+> variable never reaches the container, so the tool refuses with "Set DISCORD_MCP_FILE_ROOT"
+> pointing at a variable you did set.
+>
+> Run `mkdir -p uploads` first: Docker creates a missing bind-mount source as `root:root`,
+> which would leave you a directory needing `sudo` to put posters into — the opposite of the
+> point. All three stay commented by default so a deployment that covers events from CDN links
+> gets neither the filesystem grant nor a stray root-owned directory.
 
 #### 5) Verify
 ```bash
@@ -154,11 +198,16 @@ Default MCP endpoint URL (HTTP profile): `http://localhost:8085/mcp`
 
 ### `DISCORD_MCP_FILE_ROOT`
 
-Optional. The single directory that `send_file` may read local `filePath` uploads from.
+Optional. The single directory that `send_file` and `set_guild_scheduled_event_image` may
+read local `filePath` uploads from.
+
+> **Two rules, and the rest of this section is why.** Point it at a directory only you write
+> to. Never point it at `DISCORD_MCP_DOWNLOAD_ROOT`, or at a directory containing it.
 
 **Unset (default), local paths are refused.** `send_file` still works via `fileUrl` or
-base64 `fileData`. Set this only if you need local-path uploads, and point it at a
-directory that holds nothing but uploads:
+base64 `fileData`, and `set_guild_scheduled_event_image` still works via `imageUrl` —
+unset refuses only local `filePath`. Set this only if you need local-path uploads, and
+point it at a directory that holds nothing but uploads:
 
 ```bash
 export DISCORD_MCP_FILE_ROOT=/var/lib/discord-mcp/uploads
@@ -177,6 +226,86 @@ filesystem root (`/`) is rejected, since it would confine nothing.
 Run the server as a dedicated unprivileged user regardless. The env var is a guard, not a
 substitute for one.
 
+**On upgrading:** a deployment that already set this for `send_file` gains
+`set_guild_scheduled_event_image` when the jar is updated, with no config change. That is a
+narrower case than the fallback `DISCORD_MCP_DOWNLOAD_ROOT` refuses below: the filesystem
+grant is identical — same root, same read, no new directory.
+
+**What makes it acceptable is the root holding only what you put there**, which is the rule
+at the top of this section and the one the rest of it defends. The format check is a second
+bound and a much weaker one: a cover is rejected unless its bytes begin with a PNG or JPEG
+signature, so no `.env` or `/proc/self/environ` leaves this way — but it is a check on the
+first 3–8 bytes, not image validation. A file that does not *start* like an image cannot
+leave; a real image with data appended to it still can, and three bytes are trivial to
+prepend to anything you control. Treat it as what stops an accident, not as what would stop
+someone who can write into the root.
+
+The destination is *wider* rather than narrower, which is worth knowing: an event
+cover is served from `guild-events/{event_id}/{hash}.png`, an unsigned, non-expiring,
+unauthenticated URL, where a message attachment sits behind a signed expiring link inside a
+permission-gated channel. Anything that does reach a cover is more durable and more public
+than the same bytes posted to a channel. Deployments that filter tools by name do not
+acquire this one at all until they list it.
+
+If you want the upgrade to be inert on your deployment, refuse the tool by name until you
+have decided — that control already exists and needs no new variable. A separate
+`DISCORD_MCP_COVER_ROOT` was considered and not added, because the grant a second name would
+describe is the same grant.
+
+**Compose deployments, specifically:** `docker-compose.yml` did not declare
+`DISCORD_MCP_FILE_ROOT` before, so a value in `.env` never reached the container and local
+paths stayed refused whatever it said. It is declared now, but commented out, so that an
+upgrade cannot activate a setting an operator left behind after it appeared to do nothing.
+Uncomment it and the uploads volume together.
+
+**The `imageUrl` path needs no configuration**, so it is worth naming what it permits by
+default: a model that has been talked into it can fetch any public HTTPS image under 5 MB and
+pin it to a permanent, unauthenticated `discordapp.com` URL. That is bounded — two formats,
+one cover per event, `MANAGE_EVENTS` required, and the tool is name-filterable — and it is
+the same shape as what `send_file`'s `fileUrl` already allows. Worth knowing rather than
+worth blocking, but the section above reasons about local files leaving, and this is the path
+that is on out of the box.
+
+**You probably do not need this for `set_guild_scheduled_event_image`.** That tool takes an
+`imageUrl` as well as a `filePath`, and a poster already posted to Discord has a CDN URL, so
+the common case — put an image that is already in Discord onto an event — needs no
+filesystem grant at all. The URL goes through the same `RemoteFetchGuard` as `send_file`'s
+`fileUrl`.
+
+**Pointing this at `DISCORD_MCP_DOWNLOAD_ROOT`** chains `download_attachment` into the tools
+that read local paths. It is a real widening: `send_file` can then read anything
+`download_attachment` saved, and what it saved was chosen by whoever got the agent to call
+it. Since `imageUrl` covers the case that used to motivate it, treat this as something to do
+only when you have a reason beyond convenience.
+
+It also cancels the format argument made above. That reasoning holds only because an upload
+root contains what the operator put there; once the two roots are one directory, the bytes
+were chosen by whoever caused the download, and making them begin with a PNG signature is
+free.
+
+So `set_guild_scheduled_event_image` refuses a local `filePath` when the two roots overlap —
+equal, or either nested inside the other — and says which two variables collide. `send_file`
+and `download_attachment` are unchanged: the chained root was always a widening for them, it
+is documented above, and turning it into a startup failure would break deployments that chose
+it deliberately. `imageUrl` is unaffected — it reads no files.
+
+The server also warns once at startup when the two roots overlap, or when either is set to a
+directory that does not resolve. The per-call refusal above is a tool result: it reaches the
+model that made the call, not the person who set the variables.
+
+Where that warning lands depends on the profile. Under `http` — what Compose runs — it goes
+to the console, so `docker logs` has it. Under the stdio profile it goes to the log file only,
+because stdout belongs to the MCP protocol there; check `./target/logs/discord-mcp-server.log`
+(or wherever `logging.file.name` points) rather than expecting it on screen.
+
+**That refusal raises the cost of the direct path; it does not close it.** With the roots
+chained, the same end state is two calls away: `download_attachment` writes the chosen file,
+`send_file` posts it to a channel — no format check there, and it reads the same root — and
+`imageUrl` pins the resulting CDN link as a permanent cover. Nothing short of separating the
+two directories removes that, so read the refusal as a guard against reaching the state by
+accident, not as the reason the shared variable is acceptable. That reason is the upload root
+containing only what you put in it.
+
 ### `DISCORD_MCP_DOWNLOAD_ROOT`
 
 Optional. The single directory that `download_attachment` may write saved attachments into.
@@ -194,7 +323,9 @@ and writing to it are different grants. An existing deployment set `DISCORD_MCP_
 to allow local-path *uploads*; if downloads inherited it, upgrading the jar would hand an
 LLM-driven tool write access to that directory with no configuration change and nothing to
 notice. Point both at the same directory if you want that — but as a decision, not a
-default.
+default, and note that `set_guild_scheduled_event_image` refuses a local `filePath` when the
+two overlap, for the reason given under `DISCORD_MCP_FILE_ROOT` above. `send_file` and
+`download_attachment` still work on a shared root; covers must come from `imageUrl` there.
 
 Files are named `<attachmentId>-<sanitized original name>`. The attachment ID makes names
 unique across attachments; re-downloading the same one replaces its own file. Uploader
@@ -510,8 +641,9 @@ mvn -Dtest=DiscordLiveIntegrationTest test
 #### Scheduled Events Management
 - [`create_guild_scheduled_event`](): Schedule a new event on the server (voice, stage, or external), optionally recurring
 - [`edit_guild_scheduled_event`](): Modify event details or change its status (start, complete, cancel), including the recurrence rule
+- [`set_guild_scheduled_event_image`](): Replace an event's cover image from a direct `imageUrl` or a local `filePath` (max 5MB, no animation; covers display at 5:2, so crop first). `imageUrl` needs no filesystem access; `filePath` requires [`DISCORD_MCP_FILE_ROOT`](#-security-notes). Separate from `edit_guild_scheduled_event` so a deployment can allow event edits without granting a local-file read
 - [`delete_guild_scheduled_event`](): Permanently delete a scheduled event
-- [`list_guild_scheduled_events`](): List all active and scheduled events on the server, showing which ones recur
+- [`list_guild_scheduled_events`](): List all active and scheduled events on the server, showing which ones recur and their cover image URL. Spends one API call per invocation, including on a server with no events — an empty cache is not evidence there are none
 
 > **Recurring events.** JDA has no representation for Discord's `recurrence_rule`, so these tools
 > send that one field through a custom JDA route — same bot token, same rate limiter. Pass

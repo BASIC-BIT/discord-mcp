@@ -48,3 +48,7 @@ AGENTS.md
 ai-docs/
 issues/
 wiki/
+
+# Created by docker-compose's read-only uploads bind mount. Operator-supplied images
+# for send_file and set_guild_scheduled_event_image; never repository content.
+/uploads/

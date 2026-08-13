@@ -411,6 +411,25 @@ public final class RecurrenceRule {
     }
 
     /**
+     * A scheduled event's recurrence rule, or null if it is not a recurring event.
+     *
+     * <p>Tolerates an absent key as well as an explicit null, so it is safe to call with the empty
+     * object used when a best-effort read failed. Only the top-level shape is checked: a rule that
+     * passes here can still be malformed inside, which is {@link #describe}'s problem and throws
+     * there.
+     *
+     * <p>Lives here rather than beside each caller because a private copy protects the file it is
+     * in and nothing else — the shape of this one field is now stated once.
+     *
+     * @param event a scheduled event as returned by Discord
+     */
+    public static DataObject of(DataObject event) {
+        return !event.hasKey("recurrence_rule") || event.isNull("recurrence_rule")
+                ? null
+                : event.getObject("recurrence_rule");
+    }
+
+    /**
      * Rebuild a rule Discord sent us into one we are allowed to send back.
      *
      * <p>A GET returns the server-owned fields too — {@code count}, {@code end},

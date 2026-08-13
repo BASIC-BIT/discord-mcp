@@ -48,6 +48,25 @@ class MessageServiceTest {
     }
 
     @Test
+    void onlyADirectoryMeantToBeReadFromBecomesARoot() throws NoSuchMethodException {
+        // LocalFileGuard.resolveWithinRoot confines against a Root, so a directory this service
+        // writes to must not be one — otherwise passing the download root there compiles, which is
+        // the chained read-and-write configuration the README's security notes argue against,
+        // reached by accident.
+        //
+        // A runtime check inside the caller could not carry this: it compared the root's own name
+        // against the literal it had just been built from, three statements above, in the same
+        // method. Tautologies read like guards. The compiler does not. Living beside the methods
+        // it names, so renaming one fails a test in the file being renamed.
+        assertThat(MessageService.class.getDeclaredMethod("allowedDownloadRoot").getReturnType())
+                .as("the download root is written to, so it must not be usable as a read root")
+                .isEqualTo(Path.class);
+        assertThat(MessageService.class.getDeclaredMethod("allowedRoot").getReturnType())
+                .as("the upload root is read from by caller-supplied path, so it is a Root")
+                .isEqualTo(LocalFileGuard.Root.class);
+    }
+
+    @Test
     void readMessagesIncludesStableAuthorIdentityFields() {
         TextChannel channel = mock(TextChannel.class);
         MessageHistory history = mock(MessageHistory.class);
@@ -87,6 +106,30 @@ class MessageServiceTest {
     }
 
     @Test
+    void sendFileStillReadsARootThatOverlapsTheDownloadRoot(@TempDir Path dir) throws IOException {
+        // The deliberate asymmetry, otherwise protected only by prose:
+        // set_guild_scheduled_event_image refuses local paths when the upload and download roots
+        // overlap, and this tool does not. The chained root was always a widening here, it is
+        // documented as one, and taking it away would break deployments that chose it — so the
+        // new tool closes the new capability, not the existing one.
+        Path shared = Files.createDirectory(dir.resolve("shared"));
+        Path file = Files.writeString(shared.resolve("poster.png"), "not really a png");
+        messageService.fileRoot = shared.toString();
+        messageService.downloadRoot = shared.toString();
+
+        TextChannel channel = stubChannel();
+        MessageCreateAction action = mock(MessageCreateAction.class);
+        Message sent = mock(Message.class);
+        when(channel.sendFiles(any(FileUpload.class))).thenReturn(action);
+        when(action.complete()).thenReturn(sent);
+        when(sent.getJumpUrl()).thenReturn("https://discord.com/channels/1/2/3");
+
+        assertThat(messageService.sendFile(CHANNEL_ID, file.toString(), null, null, null, null))
+                .contains("File sent successfully")
+                .doesNotContain("overlap");
+    }
+
+    @Test
     void sendFileRefusesAFilesystemRootAsTheAllowedRoot(@TempDir Path dir) throws IOException {
         Path file = Files.writeString(dir.resolve("ok.txt"), "hello");
         messageService.fileRoot = dir.getRoot().toString();
@@ -107,7 +150,7 @@ class MessageServiceTest {
         String traversal = root.resolve("..").resolve(secret.getFileName()).toString();
         assertThatThrownBy(() -> messageService.sendFile(CHANNEL_ID, traversal, null, null, null, null))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("outside the allowed upload directory");
+                .hasMessageContaining("not a readable file inside the allowed upload directory");
     }
 
     @Test
@@ -126,7 +169,7 @@ class MessageServiceTest {
         // A lexical normalize() would see uploads/innocent.txt and allow this.
         assertThatThrownBy(() -> messageService.sendFile(CHANNEL_ID, link.toString(), null, null, null, null))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("outside the allowed upload directory");
+                .hasMessageContaining("not a readable file inside the allowed upload directory");
     }
 
     @Test
@@ -321,8 +364,8 @@ class MessageServiceTest {
 
         try (MockedStatic<RemoteFetchGuard> guard = mockStatic(RemoteFetchGuard.class)) {
             // Honour the guard's real contract: it never returns more than maxBytes, it throws.
-            // The previous version of this test returned 60 MB for a 40 MB allowance, which the
-            // real guard cannot do — so it was asserting behaviour production could not reach.
+            // A stub that hands back 60 MB for a 40 MB allowance asserts behaviour production
+            // cannot reach.
             guard.when(() -> RemoteFetchGuard.fetch(any(), anyInt(), any()))
                     .thenThrow(new RemoteFetchGuard.TooLargeException("attachment exceeds the maximum allowed size"));
 
@@ -379,7 +422,7 @@ class MessageServiceTest {
 
             assertThatThrownBy(() -> messageService.downloadAttachment(CHANNEL_ID, MESSAGE_ID, null))
                     .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("transfer failed after 40.0 MB");
+                    .hasMessageContaining("transfer failed after 40 MB");
 
             // 40 + 40 = 80 leaves 20 MB, so a third is still attempted; 120 would exceed the
             // budget, so there is no fourth. Three attachments, three attempts, budget spent.

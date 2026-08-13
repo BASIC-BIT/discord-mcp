@@ -1,0 +1,128 @@
+package dev.saseq.services;
+
+import java.util.Collection;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+
+/**
+ * How a listing's events divide up, from the point of view of what the live read could say.
+ *
+ * <p>A record rather than eight positional {@code int}s at the call site. The formatter that
+ * consumes these was extracted and tested clause by clause because every clause is a claim about
+ * what the reader is looking at — but the arithmetic producing them was not, and that is where the
+ * subtle mistakes live. Transposing two arguments in an eight-{@code int} call would have produced
+ * confidently wrong text with nothing failing, since the formatter's tests call it directly.
+ *
+ * <p>Every field answers a different question, and merging any two makes the caveat assert
+ * something it does not know. Events come from JDA's gateway-filled cache and covers from a live
+ * REST read, so the two can disagree in both directions, an entry can be returned without being
+ * parseable, and an event can be legitimately missing because it is over.
+ *
+ * @param described  listed events the live response described in full
+ * @param coverless  how many of those have no cover image
+ * @param unreadable listed events Discord returned but whose details would not parse
+ * @param absent     listed events Discord did not return, and which it should have
+ * @param terminal   listed events Discord did not return because they have ended or been
+ *                   cancelled — a different fact from {@code absent}, and one that explains a
+ *                   missing cover rather than reporting a gap
+ * @param unlistedIds ids Discord returned that the listing does not contain, in the order it
+ *                   returned them. Ids rather than a count because this is the one bucket with
+ *                   no row of its own: every other clause points the reader at something printed
+ *                   below it, and this one had nothing to point at.
+ * @param unidentifiable entries Discord returned with no usable id, which cannot be matched to a
+ *                       listed event in either direction
+ * @param recurrenceUnreadable listed events whose cover was read and whose recurrence would not,
+ *                             so a missing "Recurs:" line means unknown rather than absent. An
+ *                             event Discord did not return at all has an unknown schedule too,
+ *                             but its own clause — absent or terminal — names both missing lines
+ */
+record CoverCounts(int described, int coverless, int unreadable, int absent, int terminal,
+                   List<String> unlistedIds, int unidentifiable, int recurrenceUnreadable) {
+
+    CoverCounts {
+        // Copied for the reason LiveEventDetails copies its own: the order of these ids is
+        // load-bearing — the caveat prints the first ten — and a record that hands out a list it
+        // does not own cannot promise anything about it. Both callers pass an immutable list
+        // today; that is a fact about the callers, not about this type.
+        unlistedIds = List.copyOf(unlistedIds);
+    }
+
+    /** How many events Discord returned that the listing does not contain. */
+    int unlisted() {
+        return unlistedIds.size();
+    }
+
+    /**
+     * @param listed         every listed event's id, in listing order
+     * @param terminalIds    those of them that have ended or been cancelled
+     * @param returned       ids the live response carried, parseable or not, in the order it sent
+     *                       them: unlistedIds is derived from this and the caveat prints the
+     *                       first ten of those
+     * @param described      ids whose cover was read, whether or not there was one
+     * @param withCovers     ids that have a cover
+     * @param recurrenceFailed ids whose recurrence would not parse
+     * @param unidentifiable entries with no usable id, which belong to no event
+     */
+    static CoverCounts tally(Collection<String> listed, Set<String> terminalIds,
+                             List<String> returned, Set<String> described, Set<String> withCovers,
+                             Set<String> recurrenceFailed, int unidentifiable) {
+        // Distinct, so a duplicate id in the listing cannot be counted into two buckets at once.
+        // Nothing in Collection<String> stops a caller passing one.
+        Set<String> unique = new LinkedHashSet<>(listed);
+        // Both shapes of the same ids: the List for the order unlistedIds is promised in, a Set
+        // for the membership tests below, which would otherwise scan it once per listed event.
+        Set<String> returnedIds = new LinkedHashSet<>(returned);
+        int describedCount = 0;
+        int coverless = 0;
+        int unreadable = 0;
+        int absent = 0;
+        int terminal = 0;
+        int recurrenceUnreadable = 0;
+        for (String id : unique) {
+            if (described.contains(id)) {
+                describedCount++;
+                if (!withCovers.contains(id)) {
+                    coverless++;
+                }
+            } else if (returnedIds.contains(id)) {
+                // Returned, but its details would not parse. Distinct from absent: Discord did
+                // send this event, so blaming a read gap would send the reader to look in the
+                // wrong place.
+                unreadable++;
+            } else if (terminalIds.contains(id)) {
+                // Not returned because it is over. GET /guilds/{id}/scheduled-events carries
+                // scheduled and active events only, so this is expected rather than a gap — but
+                // the row still renders with no cover, and that needs saying.
+                terminal++;
+            } else {
+                absent++;
+            }
+            // One event, one clause. Every branch above has already accounted for this id, and a
+            // second count here makes the caveat read as two events — the reader has no way to
+            // tell "1 returned but unreadable; 1 recurrence unreadable" describes one entry whose
+            // image and recurrence both failed, which a malformed response produces in a single
+            // event. The absent and terminal clauses were written to avoid exactly that.
+            //
+            // So this counts only the described: events whose cover was read, where nothing else
+            // mentions them and the missing "Recurs:" line would otherwise be unexplained. What
+            // the header gives up for an undescribed event — that its schedule is unknown too —
+            // its row says directly, which is what the per-row markers are for.
+            if (described.contains(id) && recurrenceFailed.contains(id)) {
+                recurrenceUnreadable++;
+            }
+        }
+        // Returned minus those actually in the listing: events Discord has and the cache does
+        // not. A set difference rather than a subtraction of two counts, which is both the ids the
+        // caveat needs and a shape that cannot render "Discord returned -1 events" however the
+        // caller's collections overlap.
+        List<String> unlistedIds = returnedIds.stream().filter(id -> !unique.contains(id)).toList();
+        return new CoverCounts(describedCount, coverless, unreadable, absent, terminal, unlistedIds,
+                unidentifiable, recurrenceUnreadable);
+    }
+
+    /** Nothing was read, so nothing may be counted from it. Mirrors LiveEventDetails.unread(). */
+    static CoverCounts none() {
+        return new CoverCounts(0, 0, 0, 0, 0, List.of(), 0, 0);
+    }
+}

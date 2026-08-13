@@ -14,12 +14,10 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermissions;
@@ -34,6 +32,11 @@ public class MessageService {
     /**
      * The only directory {@code send_file} may read local paths from. Unset disables local
      * paths entirely. Package-private so tests can set it without Spring.
+     *
+     * <p>Not the only tool that reads it: {@code set_guild_scheduled_event_image} binds the same
+     * {@code DISCORD_MCP_FILE_ROOT}. Said here because this is the field a maintainer reaches
+     * first when they follow the variable in from {@code send_file}, and the sole-reader claim
+     * this doc used to make is exactly the one that stopped being true.
      */
     @Value("${DISCORD_MCP_FILE_ROOT:}")
     String fileRoot;
@@ -131,8 +134,8 @@ public class MessageService {
 
         ResolvedFile resolvedFile = resolveFile(filePath, fileUrl, fileData, fileName);
         if (resolvedFile.bytes().length > MAX_UPLOAD_BYTES) {
-            throw new IllegalArgumentException("File exceeds the " + (MAX_UPLOAD_BYTES / (1024 * 1024))
-                    + " MB limit (" + (resolvedFile.bytes().length / (1024 * 1024)) + " MB). Discord's own"
+            throw new IllegalArgumentException("File exceeds the " + FileSizes.format(MAX_UPLOAD_BYTES)
+                    + " limit (" + FileSizes.format(resolvedFile.bytes().length) + "). Discord's own"
                     + " ceiling is lower below boost tier 2, so a smaller file may still be rejected there.");
         }
 
@@ -157,9 +160,9 @@ public class MessageService {
     private static final int MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 
     private ResolvedFile resolveFile(String filePath, String fileUrl, String fileData, String fileName) {
-        boolean hasPath = filePath != null && !filePath.isEmpty();
-        boolean hasUrl = fileUrl != null && !fileUrl.isEmpty();
-        boolean hasData = fileData != null && !fileData.isEmpty();
+        boolean hasPath = filePath != null && !filePath.isBlank();
+        boolean hasUrl = fileUrl != null && !fileUrl.isBlank();
+        boolean hasData = fileData != null && !fileData.isBlank();
 
         int provided = (hasPath ? 1 : 0) + (hasUrl ? 1 : 0) + (hasData ? 1 : 0);
         if (provided == 0) {
@@ -183,26 +186,18 @@ public class MessageService {
     }
 
     private ResolvedFile readLocalFile(String filePath, String overrideName) {
-        Path path = resolveWithinAllowedRoot(filePath);
-        try {
-            // Bounded read: readAllBytes on an attacker-chosen path would OOM the
-            // JVM long before the size check below could reject it.
-            byte[] bytes;
-            try (InputStream in = Files.newInputStream(path, LinkOption.NOFOLLOW_LINKS)) {
-                bytes = in.readNBytes(MAX_UPLOAD_BYTES + 1);
-            }
-            if (bytes.length > MAX_UPLOAD_BYTES) {
-                throw new IllegalArgumentException("File exceeds the " + (MAX_UPLOAD_BYTES / (1024 * 1024)) + " MB limit.");
-            }
-            String name = overrideName != null ? overrideName : path.getFileName().toString();
-            return new ResolvedFile(bytes, name);
-        } catch (IOException e) {
-            throw new IllegalArgumentException("Failed to read file at filePath: " + e.getMessage());
-        }
+        // Confinement and the bounded read both live in LocalFileGuard so that the next tool to
+        // accept a local path cannot reintroduce either gap by writing its own version. See the
+        // class doc there for why that is not hypothetical.
+        LocalFileGuard.ConfinedPath path =
+                LocalFileGuard.resolveWithinRoot(filePath, allowedRoot(), "filePath", "upload");
+        byte[] bytes = LocalFileGuard.readBounded(path, MAX_UPLOAD_BYTES, "file");
+        String name = overrideName != null ? overrideName : path.path().getFileName().toString();
+        return new ResolvedFile(bytes, name);
     }
 
     /**
-     * Confine local file reads to an allowlisted root.
+     * The resolved root local uploads may come from.
      *
      * <p>Without this, send_file with an absolute filePath will read anything the process can
      * read and post it to Discord. On a host where the service loads secrets from the
@@ -211,40 +206,24 @@ public class MessageService {
      *
      * <p>Unset means local filePath uploads are refused entirely. That is the safe default:
      * callers can still use fileUrl or base64 fileData.
-     *
-     * @return the fully resolved real path, which the caller must read instead of the
-     * caller-supplied one
      */
-    private Path resolveWithinAllowedRoot(String filePath) {
-        Path allowed = allowedRoot();
-        Path real;
-        try {
-            // toRealPath, not normalize: normalize is purely lexical, so a symlink
-            // inside the root pointing at /etc/shadow passes a prefix check on the
-            // normalized path. Both sides must be resolved for the comparison to mean
-            // anything, and the resolved path is what gets opened.
-            real = Paths.get(filePath).toRealPath();
-        } catch (IOException e) {
-            throw new IllegalArgumentException("File not found at filePath: " + filePath);
-        }
-        if (!real.startsWith(allowed) || real.equals(allowed)) {
-            throw new IllegalArgumentException("filePath is outside the allowed upload directory");
-        }
-        if (!Files.isRegularFile(real, LinkOption.NOFOLLOW_LINKS)) {
-            throw new IllegalArgumentException("filePath is not a regular file: " + filePath);
-        }
-        return real;
-    }
-
-    private Path allowedRoot() {
+    private LocalFileGuard.Root allowedRoot() {
         if (fileRoot == null || fileRoot.isBlank()) {
             throw new IllegalArgumentException(
                     "Local filePath uploads are disabled. Set DISCORD_MCP_FILE_ROOT to an "
                             + "allowed directory, or supply fileUrl or base64 fileData instead.");
         }
-        return resolveRoot(fileRoot, "DISCORD_MCP_FILE_ROOT");
+        return LocalFileGuard.resolveRoot(fileRoot, "DISCORD_MCP_FILE_ROOT");
     }
 
+    /**
+     * Deliberately a {@link Path}, not a {@link LocalFileGuard.Root}.
+     *
+     * <p>{@code Root} is what {@code resolveWithinRoot} confines a caller-supplied path against.
+     * This directory is written to, never read from by path, so it has no business being one —
+     * and if it were, {@code resolveWithinRoot(filePath, allowedDownloadRoot(), ...)} would
+     * type-check. See {@link LocalFileGuard.Root} for how far that goes and what it does not do.
+     */
     private Path allowedDownloadRoot() {
         if (downloadRoot == null || downloadRoot.isBlank()) {
             throw new IllegalArgumentException(
@@ -253,7 +232,7 @@ public class MessageService {
                             + "from DISCORD_MCP_FILE_ROOT on purpose: read and write are "
                             + "different grants.");
         }
-        Path root = resolveRoot(downloadRoot, "DISCORD_MCP_DOWNLOAD_ROOT");
+        Path root = LocalFileGuard.resolveRoot(downloadRoot, "DISCORD_MCP_DOWNLOAD_ROOT").path();
         // Existing and writable are different things, and a read-only bind mount is a common
         // way to get the first without the second. Without this probe the failure surfaces only
         // at createTempFile, by which point the whole 100 MB budget may already have been pulled
@@ -302,25 +281,6 @@ public class MessageService {
         } catch (IOException ignored) {
             // Nothing to do, and nothing worth failing the call over.
         }
-    }
-
-    private Path resolveRoot(String configured, String variableName) {
-        Path root;
-        try {
-            root = Paths.get(configured).toRealPath();
-        } catch (IOException e) {
-            throw new IllegalArgumentException(
-                    variableName + " does not exist or cannot be resolved: " + configured);
-        }
-        if (!Files.isDirectory(root)) {
-            throw new IllegalArgumentException(variableName + " is not a directory: " + configured);
-        }
-        // A filesystem root has no name components. Accepting "/" would confine
-        // nothing at all and silently re-open the whole vulnerability.
-        if (root.getNameCount() == 0) {
-            throw new IllegalArgumentException(variableName + " must not be a filesystem root");
-        }
-        return root;
     }
 
     private byte[] downloadFile(String url) {
@@ -700,9 +660,12 @@ public class MessageService {
                 // — that would fail with its generic "exceeds the maximum allowed size", which
                 // blames the file when the call budget is what ran out.
                 failed.append("- ").append(attachments.size() - index + 1)
+                        // FileSizes here too. This was the one size left in the method spelled by
+                        // integer division, and it re-arms "0 MB" the moment the constant stops
+                        // being a whole number of megabytes.
                         .append(" further attachment(s): not attempted, the call's ")
-                        .append(MAX_DOWNLOAD_BUDGET_BYTES / (1024 * 1024))
-                        .append(" MB total was already spent.\n");
+                        .append(FileSizes.format(MAX_DOWNLOAD_BUDGET_BYTES))
+                        .append(" total was already spent.\n");
                 break;
             }
             int allowance = (int) Math.min(MAX_DOWNLOAD_FILE_BYTES, remainingBudget);
@@ -710,7 +673,7 @@ public class MessageService {
                 byte[] bytes = RemoteFetchGuard.fetch(attachment.getUrl(), allowance, "attachment");
                 attempted += bytes.length;
                 Path path = writeIntoAllowedRoot(root, attachment.getId(), attachment.getFileName(), bytes);
-                saved.append("- `").append(path).append("` (").append(formatFileSize(bytes.length)).append(")\n");
+                saved.append("- `").append(path).append("` (").append(FileSizes.format(bytes.length)).append(")\n");
                 savedCount++;
             } catch (RemoteFetchGuard.TooLargeException e) {
                 // The body was read up to the allowance before being rejected, so that bandwidth
@@ -720,9 +683,9 @@ public class MessageService {
                 attempted += allowance;
                 failed.append("- `").append(attachment.getFileName()).append("` (ID ")
                         .append(attachment.getId()).append("): body exceeded the ")
-                        // formatFileSize, not integer MB: the remainder of a budget is routinely
-                        // under a megabyte, and "exceeded the 0 MB allowed for it" reads as a bug.
-                        .append(formatFileSize(allowance)).append(" allowed for it")
+                        // FileSizes, not integer MB: the remainder of a budget is routinely under
+                        // a megabyte, and "exceeded the 0 MB allowed for it" reads as a bug.
+                        .append(FileSizes.format(allowance)).append(" allowed for it")
                         .append(allowance < MAX_DOWNLOAD_FILE_BYTES
                                 ? " — all that was left of this call's budget. Fetch it on its own."
                                 : ", the per-file limit. Its reported size understated the body.")
@@ -734,7 +697,7 @@ public class MessageService {
                 attempted += e.bytesConsumed();
                 failed.append("- `").append(attachment.getFileName()).append("` (ID ")
                         .append(attachment.getId()).append("): transfer failed after ")
-                        .append(formatFileSize(e.bytesConsumed())).append(".\n");
+                        .append(FileSizes.format(e.bytesConsumed())).append(".\n");
             } catch (RuntimeException e) {
                 // Everything else — unreachable host, 404, refused scheme — failed before any
                 // body arrived, so it does not charge the budget. Charging these would let a
@@ -772,18 +735,22 @@ public class MessageService {
         for (Message.Attachment attachment : attachments) {
             long size = attachment.getSize();
             if (size > MAX_DOWNLOAD_FILE_BYTES) {
+                // The limit through FileSizes too, not integer division: one sentence quoting a
+                // size and a limit should not spell them two different ways, and the division
+                // that produced "0 MB" for a sub-megabyte ceiling is the bug FileSizes exists for.
                 throw new IllegalArgumentException(String.format(
-                        "Attachment `%s` (ID %s) is %s, over the %d MB per-file download limit.",
-                        attachment.getFileName(), attachment.getId(), formatFileSize(size),
-                        MAX_DOWNLOAD_FILE_BYTES / (1024 * 1024)));
+                        "Attachment `%s` (ID %s) is %s, over the %s per-file download limit.",
+                        attachment.getFileName(), attachment.getId(), FileSizes.format(size),
+                        FileSizes.format(MAX_DOWNLOAD_FILE_BYTES)));
             }
             total += size;
         }
         if (total > MAX_DOWNLOAD_BUDGET_BYTES) {
             throw new IllegalArgumentException(String.format(
-                    "The %d attachments total %s, over the %d MB per-call download limit. "
+                    "The %d attachments total %s, over the %s per-call download limit. "
                             + "Pass attachmentId to fetch them one at a time.",
-                    attachments.size(), formatFileSize(total), MAX_DOWNLOAD_BUDGET_BYTES / (1024 * 1024)));
+                    attachments.size(), FileSizes.format(total),
+                    FileSizes.format(MAX_DOWNLOAD_BUDGET_BYTES)));
         }
     }
 
@@ -1034,7 +1001,7 @@ public class MessageService {
                 "(Attachment ID: %s) `%s` (%s, %s) URL: %s",
                 attachment.getId(),
                 attachment.getFileName(),
-                formatFileSize(attachment.getSize()),
+                FileSizes.format(attachment.getSize()),
                 attachment.getContentType() != null ? attachment.getContentType() : "unknown",
                 attachment.getUrl()
         );
@@ -1071,12 +1038,4 @@ public class MessageService {
                 }).toList();
     }
 
-    // long rather than int: a per-call total can exceed Integer.MAX_VALUE even though
-    // any single attachment cannot. Widening is source-compatible with the int callers.
-    private String formatFileSize(long bytes) {
-        if (bytes < 1024) return bytes + " B";
-        if (bytes < 1024 * 1024) return String.format("%.1f KB", bytes / 1024.0);
-        if (bytes < 1024 * 1024 * 1024) return String.format("%.1f MB", bytes / (1024.0 * 1024));
-        return String.format("%.1f GB", bytes / (1024.0 * 1024 * 1024));
-    }
 }

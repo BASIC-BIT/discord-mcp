@@ -2,12 +2,18 @@ package dev.saseq.services;
 
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Guild;
+import net.dv8tion.jda.api.entities.Icon;
 import net.dv8tion.jda.api.entities.Member;
 import net.dv8tion.jda.api.entities.ScheduledEvent;
 import net.dv8tion.jda.api.entities.channel.middleman.GuildChannel;
+import net.dv8tion.jda.api.exceptions.ErrorResponseException;
+import net.dv8tion.jda.api.exceptions.ParsingException;
+import net.dv8tion.jda.api.requests.ErrorResponse;
 import net.dv8tion.jda.api.requests.Method;
 import net.dv8tion.jda.api.requests.Route;
+import net.dv8tion.jda.api.utils.data.DataArray;
 import net.dv8tion.jda.api.utils.data.DataObject;
+import net.dv8tion.jda.api.utils.data.DataType;
 import net.dv8tion.jda.internal.requests.RestActionImpl;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
@@ -17,7 +23,11 @@ import org.springframework.stereotype.Service;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 @Service
@@ -42,6 +52,53 @@ public class ScheduledEventService {
 
     @Value("${DISCORD_GUILD_ID:}")
     private String defaultGuildId;
+
+    /**
+     * The only directory {@code set_guild_scheduled_event_image} may read a cover from.
+     *
+     * <p>The same variable {@code send_file} uses, and a separate field rather than a shared bean
+     * because Spring injects per-bean. Unset disables only the {@code filePath} half of that
+     * tool; {@code imageUrl} needs no filesystem access and keeps working. Package-private so
+     * tests can set it without Spring.
+     */
+    @Value("${DISCORD_MCP_FILE_ROOT:}")
+    String coverFileRoot;
+
+    /**
+     * Where {@code download_attachment} writes, read here only to refuse reading covers out of it.
+     * See {@link #coverRoot()}. Package-private for the same reason as {@link #coverFileRoot}.
+     */
+    @Value("${DISCORD_MCP_DOWNLOAD_ROOT:}")
+    String downloadRoot;
+
+    /**
+     * A local pre-check on cover size, set deliberately low.
+     *
+     * <p>What is known: Discord does not document a ceiling for this endpoint; {@link Icon}
+     * base64-encodes the body into a JSON PATCH, so the request is about a third larger than the
+     * file; and oversized JSON bodies are refused with error 40005 at a threshold that is also
+     * undocumented. What that adds up to is a band of files that pass a generous local check and
+     * are then rejected remotely, after the upload has been spent.
+     *
+     * <p>So this is not an attempt to mirror Discord's limit. It is sized against what a cover
+     * actually is: an image displayed at 800x320, which is around a megabyte as a 2048-wide PNG.
+     * Several times that is already far past anything that has been cropped and scaled for the
+     * slot, so rejecting it locally — with advice, before spending the upload — is more useful
+     * than forwarding it. Raise it if a real ceiling is ever established; the failure it trades
+     * away is the expensive one.
+     *
+     * <p>Tripping it is an ordinary outcome rather than an unusual one: a source poster is
+     * commonly a full-resolution square or portrait master that has to be cropped to the display
+     * shape anyway, and those routinely exceed it.
+     *
+     * <p>The {@code @Tool} description states it too, where it reads as a fact about Discord
+     * rather than about this server. It is concatenated from {@link #MAX_COVER_MB} rather than
+     * written out, so the two cannot disagree: an annotation value takes a constant expression,
+     * and the alternative was a note asking whoever raises this to remember a string.
+     */
+    private static final int MAX_COVER_MB = 5;
+
+    private static final int MAX_COVER_BYTES = MAX_COVER_MB * 1024 * 1024;
 
     public ScheduledEventService(JDA jda) {
         this.jda = jda;
@@ -95,25 +152,77 @@ public class ScheduledEventService {
      */
     private DataObject fetchRaw(String guildId, String eventId) {
         Route.CompiledRoute route = Route.custom(Method.GET, "guilds/{guild_id}/scheduled-events/{event_id}")
-                .compile(guildId, eventId);
+                .compile(requireSnowflake(guildId, "guildId"), requireSnowflake(eventId, "eventId"));
         return new RestActionImpl<DataObject>(jda, route,
                 (response, request) -> response.getObject()).complete();
     }
 
+    /** The guild's scheduled events as raw JSON, for the fields JDA's entities do not carry. */
+    private DataArray fetchRawList(String guildId) {
+        Route.CompiledRoute route = Route.custom(Method.GET, "guilds/{guild_id}/scheduled-events")
+                .compile(requireSnowflake(guildId, "guildId"));
+        return new RestActionImpl<DataArray>(jda, route,
+                (response, request) -> response.getArray()).complete();
+    }
+
     private DataObject patchRaw(String guildId, String eventId, DataObject body) {
         Route.CompiledRoute route = Route.custom(Method.PATCH, "guilds/{guild_id}/scheduled-events/{event_id}")
-                .compile(guildId, eventId);
+                .compile(requireSnowflake(guildId, "guildId"), requireSnowflake(eventId, "eventId"));
         return new RestActionImpl<DataObject>(jda, route, body,
                 (response, request) -> response.getObject()).complete();
     }
 
-    /** The event's recurrence rule, or null if it is not a recurring event. */
-    private DataObject recurrenceOf(DataObject raw) {
-        // Tolerates an absent key as well as an explicit null, so it is safe to call with the empty
-        // object used when a best-effort read failed.
-        return !raw.hasKey("recurrence_rule") || raw.isNull("recurrence_rule")
-                ? null
-                : raw.getObject("recurrence_rule");
+    /**
+     * Refuse anything that is not a snowflake before it becomes part of a route.
+     *
+     * <p>{@code Route#compile} substitutes placeholders textually, with no percent-encoding, and
+     * the result is concatenated onto the API prefix and handed to OkHttp, which canonicalises dot
+     * segments. A value containing {@code /}, {@code ..}, {@code ?} or {@code #} therefore chooses
+     * which endpoint the bot token is spent on rather than which event is addressed.
+     *
+     * <p>Every tool that goes through the cache gets this for free from
+     * {@code MiscUtil.parseSnowflake} inside {@code getScheduledEventById}. These routes bypass the
+     * cache deliberately — an event created seconds ago is not in it — so the check has to be here
+     * rather than inherited. Applied at the route rather than at each tool so a future caller
+     * cannot reintroduce the gap by forgetting it.
+     */
+    private static String requireSnowflake(String id, String paramName) {
+        if (!isSnowflake(id)) {
+            // Both halves named: "digits only" alone tells the caller of a 20-digit id that its
+            // digits are the problem, and the obvious next move is to send it again.
+            throw new IllegalArgumentException(paramName
+                    + " must be a Discord snowflake: ASCII digits, within 64-bit range");
+        }
+        return id;
+    }
+
+    /**
+     * Whether a string is a Discord id: ASCII digits, and a value a snowflake can hold.
+     *
+     * <p>{@code Character.isDigit} is not this check — it is true for every Unicode decimal digit,
+     * so Arabic-Indic numerals would pass a test whose message says digits. Neither is
+     * {@code MiscUtil.parseSnowflake} on its own, which accepts a leading sign. Nothing here is a
+     * traversal defence, {@code /} and {@code .} are excluded either way; it is about the promise
+     * the name makes being the promise the code keeps.
+     *
+     * <p>The range matters for the same reason: 20 digits is a legal length and still overflows,
+     * and JDA's own parse of such a value throws rather than addressing the event the caller meant.
+     *
+     * <p>Package-private because {@link LiveEventDetails} needs the predicate rather than the
+     * refusal — an id that is not a snowflake cannot match a listed event, whose ids come from JDA
+     * entities, so recording one would manufacture a "Discord has an event this list does not"
+     * claim out of a malformed field.
+     */
+    static boolean isSnowflake(String id) {
+        if (id == null || id.isEmpty() || !id.chars().allMatch(c -> c >= '0' && c <= '9')) {
+            return false;
+        }
+        try {
+            Long.parseUnsignedLong(id);
+            return true;
+        } catch (NumberFormatException tooLargeForASnowflake) {
+            return false;
+        }
     }
 
     /**
@@ -135,7 +244,7 @@ public class ScheduledEventService {
             String outcome;
             try {
                 DataObject after = fetchRaw(guild.getId(), event.getId());
-                DataObject rule = recurrenceOf(after);
+                DataObject rule = RecurrenceRule.of(after);
                 outcome = rule == null
                         ? " The event is currently not recurring."
                         : " The event currently recurs: " + RecurrenceRule.describe(rule) + ".";
@@ -155,7 +264,7 @@ public class ScheduledEventService {
     /** Human list of the fields JDA's manager has already written. */
     private String describeApplied(String name, String description, String scheduledStartTime,
                                    OffsetDateTime endTime, String location, Integer statusCode) {
-        List<String> parts = new java.util.ArrayList<>();
+        List<String> parts = new ArrayList<>();
         if (name != null && !name.isEmpty()) parts.add("name");
         if (description != null && !description.isEmpty()) parts.add("description");
         if (scheduledStartTime != null && !scheduledStartTime.isEmpty()) parts.add("start time");
@@ -330,6 +439,9 @@ public class ScheduledEventService {
         if (event.getDescription() != null && !event.getDescription().isEmpty()) {
             sb.append("\n  • Description: ").append(event.getDescription());
         }
+        // No cover line here on purpose. formatEvent's only caller is createScheduledEvent, on an
+        // event made moments earlier by a call that cannot set an image, so it could only ever
+        // print "none". listScheduledEvents reports the cover, from a live read.
         sb.append("\n  • Interested: ").append(event.getInterestedUserCount()).append(" users");
         return sb.toString();
     }
@@ -417,7 +529,11 @@ public class ScheduledEventService {
         return "Created scheduled event:\n" + formatted;
     }
 
-    @Tool(name = "edit_guild_scheduled_event", description = "Modify details of an existing event or change its status (start, complete, cancel)")
+    // The pointer exists because the split is not obvious from here: a caller asked to change an
+    // event's picture looks for it on the tool that edits events, and finding nothing concludes
+    // the server cannot do it. Naming the other tool is cheaper than the alternative, which is
+    // either a wrong answer or the two tools merged.
+    @Tool(name = "edit_guild_scheduled_event", description = "Modify details of an existing event or change its status (start, complete, cancel). The cover image is not one of these fields: use set_guild_scheduled_event_image for that.")
     public String editScheduledEvent(
             @ToolParam(description = "Discord server ID", required = false) String guildId,
             @ToolParam(description = "ID of the scheduled event") String eventId,
@@ -457,7 +573,7 @@ public class ScheduledEventService {
             recurrenceReadFailed = true;
             recurrenceReadError = e.getMessage();
         }
-        DataObject existingRecurrence = recurrenceOf(raw);
+        DataObject existingRecurrence = RecurrenceRule.of(raw);
 
         // Validate the recurrence BEFORE anything is persisted. manager.complete() below is not
         // undoable, so parsing afterwards would report failure on a request that had already
@@ -544,7 +660,7 @@ public class ScheduledEventService {
             patchRecurrence(guild, event, DataObject.empty().put("recurrence_rule", newRule), applied);
             result.append("\n  • Recurrence set: ").append(RecurrenceRule.describe(newRule));
         } else if (existingRecurrence != null && movingStart) {
-            // The bug this tool used to have. A recurring event's series is anchored by
+            // A recurring event's series is anchored by
             // recurrence_rule.start, not by scheduled_start_time. Moving only the latter shifts the
             // next occurrence and then the series snaps back to its old time, while the tool
             // reported plain success. Move the anchor with it and say so.
@@ -586,6 +702,779 @@ public class ScheduledEventService {
         return result.toString();
     }
 
+    /**
+     * Deliberately its own tool rather than an {@code image} parameter on
+     * {@code edit_guild_scheduled_event}.
+     *
+     * <p>That tool is already granted wherever events are managed at all, and it reaches nothing
+     * but the Discord API. Adding an image parameter would extend it to the local filesystem
+     * without the grant changing, so every deployment that allowed event editing would silently
+     * acquire a local-file read. Splitting it keeps the two decisions separate: a deployment can
+     * allow event edits and refuse cover uploads.
+     *
+     * <p>Unverified for recurring events. REVIEW.md records that editing one changes a single
+     * occurrence while the series re-anchors, and this PATCHes the same endpoint — so if that
+     * applies to {@code image} too, the read-back would show a hash that looks right for a cover
+     * that landed somewhere the caller did not mean. Nobody has checked; saying so is cheaper
+     * than the reader assuming it was. Said in the {@code @Tool} description as well as here,
+     * because a caveat only a maintainer reads cannot act on anything: the description is the
+     * only text the model sees, and the success message otherwise reads as confirmation.
+     *
+     * <p>Takes {@code imageUrl} as well as {@code filePath} for a related reason. With only a
+     * local path, the ordinary job — put a poster that is already in Discord onto an event —
+     * requires a filesystem grant, and the shortest route to one is pointing
+     * {@code DISCORD_MCP_FILE_ROOT} at the download directory, which is exactly the widening the
+     * README argues against. A tool whose safe configuration is the inconvenient one gets
+     * configured unsafely.
+     */
+    @Tool(name = "set_guild_scheduled_event_image", description = "Replace a scheduled event's cover image with a PNG or JPEG, from a direct imageUrl OR a local filePath under DISCORD_MCP_FILE_ROOT. Prefer imageUrl: a poster already posted to Discord has a CDN URL, and using it needs no local file at all. Discord displays covers at 5:2 (800x320 recommended) and crops anything else, so crop to 5:2 yourself to control what is kept. Max " + MAX_COVER_MB + " MB — this server's limit, not a documented Discord one. Animation is never shown, so an animated GIF is refused and an animated PNG plays as a still. On a recurring event the effect is unverified: editing one is known to change a single occurrence, so check the series after setting a cover on it.")
+    public String setScheduledEventImage(
+            @ToolParam(description = "Discord server ID", required = false) String guildId,
+            @ToolParam(description = "ID of the scheduled event") String eventId,
+            @ToolParam(description = "Direct URL to a PNG or JPEG, e.g. an attachment's CDN link. Needs no filesystem access.", required = false) String imageUrl,
+            @ToolParam(description = "Path to a local PNG or JPEG, which must resolve to a file under DISCORD_MCP_FILE_ROOT", required = false) String filePath) {
+        // isBlank, not isEmpty: "   " is not a supplied argument, and treating it as one
+        // fails later with "File not found at filePath:    ". Matches coverRoot() below.
+        boolean hasUrl = imageUrl != null && !imageUrl.isBlank();
+        boolean hasPath = filePath != null && !filePath.isBlank();
+        if (hasUrl == hasPath) {
+            throw new IllegalArgumentException(hasUrl
+                    ? "Supply imageUrl or filePath, not both."
+                    : "Supply either imageUrl (a direct link, no filesystem access needed) or "
+                    + "filePath (a local file under DISCORD_MCP_FILE_ROOT).");
+        }
+
+        // Cheap checks first, matching download_attachment: it resolves its root before spending
+        // any network call so a misconfigured root fails immediately rather than after 50 MB.
+        //
+        // The root goes first of all, because it is the only check here that costs nothing at
+        // all: a filePath call on a deployment with no upload root should refuse with "Local
+        // paths are disabled" without spending a request to get there.
+        LocalFileGuard.Root root = hasPath ? coverRoot() : null;
+        // Then the ids, which cost nothing. The event is read next and the source after it;
+        // what that ordering buys is set out where the event is read.
+        //
+        // No cached entity is needed: the write below goes through patchRaw, the same raw route
+        // this file already uses for every other scheduled-event field. Using JDA's manager here
+        // was the deviation, and it dragged in a cache dependency that made the flow the tool
+        // description recommends — create an event, then cover it — fail on first try whenever the
+        // gateway had not caught up.
+        // getGuild, not just a blank check: the gateway-lag argument for bypassing the cache is
+        // about which events exist, not about which guilds the bot is in, and the cache is
+        // authoritative for the latter. A mistyped guildId is refused here for free rather than
+        // after a fetch and a round trip.
+        Guild guild = getGuild(guildId);
+        String resolvedGuild = guild.getId();
+        // The same check the raw routes below make, run here so it costs nothing: a bad id refused
+        // now is refused before MAX_COVER_BYTES is fetched or read from disk, rather than after.
+        requireSnowflake(eventId, "eventId");
+
+        // The event is established before the source is touched, matching send_file and
+        // create_emoji, which resolve their channel first. The source read is the part that
+        // reaches out, and RemoteFetchGuard's refusals name the host it could not resolve and the
+        // status it got back — so reading the source first let a caller holding this tool probe
+        // any public host for reachability and a status code with no real event: a guild the bot
+        // is in and any 17-to-19-digit number was enough. The guard bounds the request to public
+        // hosts either way, so this ordering is not what makes the fetch safe. It is the
+        // difference between a primitive that needs a real target and one that does not.
+        //
+        // It costs one Discord GET on the ordinary mistake, the wrong file — and that read is the
+        // one being made here anyway, moved rather than added.
+        //
+        // One read, doing two jobs: it establishes the event exists — authoritatively, from
+        // Discord rather than from a cache that lags — and it captures the cover being replaced,
+        // which is what lets a failed write separate "still the old cover" from "something moved"
+        // from "the cover was removed".
+        //
+        // Fail-closed, not best-effort: it is the existence check, so proceeding without it would
+        // mean PATCHing an event that may not be there and losing the one answer that says so.
+        String eventName;
+        Cover before;
+        String terminalState;
+        try {
+            DataObject current = fetchRaw(resolvedGuild, eventId);
+            eventName = current.getString("name", eventId);
+            // Read here because it is free here: this response already carries the status, and a
+            // cover write on an event that is over is a plausible mistake rather than an exotic
+            // one. Used only if the write fails, where it is the one candidate cause this call
+            // can actually observe.
+            terminalState = terminalStateOf(current);
+            // Cover.of, which absorbs an unreadable image field rather than throwing out of this
+            // try. The event was read — that is what this call is for — and a cosmetic field that
+            // will not parse must not refuse a write the caller is entitled to make. It costs the
+            // "Was:" line, which then says so.
+            before = Cover.of(current, eventId);
+        } catch (ErrorResponseException discordSaidNo) {
+            if (discordSaidNo.getErrorResponse() == ErrorResponse.UNKNOWN_SCHEDULED_EVENT) {
+                throw new IllegalArgumentException("Scheduled event not found by eventId");
+            }
+            throw new IllegalArgumentException("Could not read that event before setting its cover"
+                    + reason(discordSaidNo) + ". Nothing was changed.");
+        } catch (ParsingException malformed) {
+            // Discord answered; the answer would not parse. The listing keeps "returned but
+            // unparseable" distinct from "not returned" at some length, and collapsing them here
+            // would send the reader to check connectivity for a response that arrived.
+            throw new IllegalArgumentException("Discord returned that event but the response could"
+                    + " not be read" + reason(malformed) + ". Nothing was changed.");
+        } catch (RuntimeException unreachable) {
+            throw new IllegalArgumentException("Could not reach Discord to read that event before"
+                    + " setting its cover" + reason(unreachable) + ". Nothing was changed.");
+        }
+
+        // Now the source. Its guards do not depend on running here rather than earlier — the
+        // refusals are identical — but the outbound request they make now needs an event that
+        // exists. Extracted so those refusals stay testable: reaching them through the tool means
+        // getting past the event read, and a mocked JDA cannot serve one.
+        // Every refusal from the event read above ends by saying nothing was changed, and these
+        // did not — leaving the one stage that now runs after a Discord request silent on the
+        // question its siblings all answer. Nothing here is downstream of the write.
+        CoverSource read;
+        try {
+            read = readCoverSource(hasUrl, imageUrl, filePath, root);
+        } catch (IllegalArgumentException refused) {
+            throw new IllegalArgumentException(andNothingChanged(refused.getMessage()), refused);
+        }
+        byte[] bytes = read.bytes();
+        String source = read.name();
+        Icon.IconType type = read.type();
+
+        // Outside the try below, whose catch reports "Sent 1.2 MB of PNG from …". Icon.from only
+        // fails on null arguments, unreachable here — but inside the try it would produce a
+        // message claiming bytes left the process that never did.
+        Icon icon = Icon.from(bytes, type);
+        DataObject applied;
+        try {
+            // patchRaw, not the manager. The PATCH response carries the updated event, so the
+            // new cover comes back with the write rather than costing a third request — and
+            // nothing here needs JDA's cache, which is what made an event created moments ago
+            // impossible to cover until the gateway caught up.
+            applied = patchRaw(resolvedGuild, eventId,
+                    DataObject.empty().put("image", icon.getEncoding()));
+        } catch (RuntimeException e) {
+            // Same rule as patchRecurrence above: a thrown request does not prove the change did
+            // not happen, since a lost response after Discord applied the image looks identical
+            // from here. Read the event back and report what is true rather than asserting an
+            // outcome this cannot know.
+            //
+            // The cause is deliberately not characterised. A size rejection, a missing
+            // MANAGE_EVENTS, and a completed or cancelled event all arrive as the same exception,
+            // and naming one of them points the caller at the wrong fix. The size and format are
+            // context, not a diagnosis.
+            //
+            // This makes the failure path cost two requests: if the PATCH failed to a rate limit,
+            // the read-back goes into the same bucket. Kept anyway — reporting what is true beats
+            // guessing, and the alternative is a message that cannot say whether the write took.
+            String outcome;
+            try {
+                outcome = describeOutcome(
+                        Cover.of(fetchRaw(resolvedGuild, eventId), eventId), before);
+            } catch (RuntimeException unverifiable) {
+                outcome = " Could not read the event back, so whether the cover was applied is"
+                        + " unknown — check the event before retrying.";
+            }
+            // Stated as what was observed, not as the diagnosis. The read a moment earlier saw
+            // this state; whether Discord refuses covers on a finished event is not something
+            // this code has established, and the exception does not say. Naming the observation
+            // is what the paragraph above declines to do for the causes it cannot see.
+            String state = terminalState == null ? ""
+                    : " The event was already " + terminalState + " when this call read it.";
+            // "Did not return successfully", not "failed". The request threw; that is all this
+            // knows. Discord may have applied the image and lost the response, which is why the
+            // read-back above exists — and describeOutcome can come back saying the cover was
+            // ADDED or CHANGED during this call. "Setting the cover image failed" above that
+            // sentence is the same contradiction the success path had when an unconditional
+            // headline sat over "Now: no cover image", and it points the caller at a retry that
+            // may overwrite what did land.
+            throw new IllegalArgumentException("The cover write did not return successfully"
+                    + reason(e) + ". Sent " + FileSizes.format(bytes.length) + " of " + type.name()
+                    + " from " + source + "." + state + outcome, e);
+        }
+
+        // Read outside the try above, for the same reason Icon.from sits outside it: the write
+        // returned, so the change landed, and a response this cannot read is not a failed write —
+        // but the catch's first sentence says one.
+        //
+        // This came from the PATCH response itself, so it is what Discord stored rather than what
+        // was sent — no separate read-back, and no window in which someone else's change could be
+        // reported as this call's result.
+        //
+        // It rests on the PATCH returning the modified event, which Discord documents for this
+        // endpoint and nothing here has observed: no test can reach a real write, since the
+        // mocked JDA fails RestActionImpl's cast first. If that assumption is wrong the failure
+        // is loud and immediate rather than subtle — every successful call reports "Now: no cover
+        // image", because an absent `image` field is exactly what Cover.of reads as ABSENT. Seeing
+        // that on a write that plainly worked means this paragraph is what broke, and the fix is a
+        // read-back here rather than anything about the write.
+        return describeCoverWrite(eventName, eventId, source, type, bytes.length, before,
+                Cover.of(applied, eventId));
+    }
+
+    /**
+     * What a response established about an event's cover.
+     *
+     * <p>One value rather than a URL and a flag beside it, so the sentence naming the state and
+     * the line printing the URL cannot disagree. Both sides of the write produce one, because both
+     * fail the same three ways: the read that captures what was there, and the response that says
+     * what is there now.
+     *
+     * @param url the cover URL, present only in state {@link State#PRESENT}
+     */
+    record Cover(String url, State state) {
+
+        enum State {
+            /** The response carried a cover URL. That is what Discord has. */
+            PRESENT,
+            /** The response parsed, and the event has no cover at all. */
+            ABSENT,
+            /** The cover field would not parse, so it establishes nothing about the event. */
+            UNKNOWN
+        }
+
+        static Cover of(DataObject raw, String eventId) {
+            try {
+                String url = coverUrlOf(raw, eventId);
+                return url == null ? new Cover(null, State.ABSENT) : new Cover(url, State.PRESENT);
+            } catch (ParsingException unreadable) {
+                // Only this field failed. Whatever else the response carried was read, so this
+                // must not stand in for a response that could not be read at all.
+                return new Cover(null, State.UNKNOWN);
+            }
+        }
+    }
+
+    /**
+     * What a cover write can be said to have achieved.
+     *
+     * <p>Separated from the call for the reason {@code describeOutcome} was: every line here is a
+     * claim, and no test can reach this through a live PATCH. An unconditional headline gives
+     * "Set the cover image on X" above "Now: no cover image" — two answers to one question.
+     */
+    static String describeCoverWrite(String eventName, String eventId, String source,
+                                     Icon.IconType type, int sentBytes, Cover before, Cover after) {
+        StringBuilder result = new StringBuilder(after.state() == Cover.State.PRESENT
+                        // "Set" only when the response showed the cover Discord stored. Accepted
+                        // and confirmed are different facts, and this sentence states the second.
+                        ? "Set the cover image on " : "Sent the cover image to ")
+                .append(eventName).append(" (ID: ").append(eventId).append(")")
+                .append("\n  • From: ").append(source)
+                .append(" (").append(type.name()).append(", ").append(FileSizes.format(sentBytes)).append(")")
+                .append("\n  • Was: ")
+                .append(switch (before.state()) {
+                    case PRESENT -> before.url();
+                    case ABSENT -> "no cover image";
+                    // The event was read; its cover field was not. Saying "no cover image" here
+                    // would invent the one fact this call failed to establish.
+                    case UNKNOWN -> "unknown — the event's previous cover could not be read";
+                })
+                .append("\n  • Now: ")
+                .append(switch (after.state()) {
+                    case PRESENT -> after.url();
+                    // Absence does not establish a cause. The write was accepted, so the upload
+                    // may well have landed and then been removed or replaced by someone else.
+                    // "Discord did not keep it" names one explanation and would prompt a retry
+                    // that could overwrite a deliberate change.
+                    case ABSENT -> "no cover image — check the event before re-uploading";
+                    // Not "no cover image": the response said something this could not read, which
+                    // establishes nothing about what the event now has.
+                    case UNKNOWN -> "unknown — Discord accepted the write, but its response did"
+                            + " not carry a readable cover";
+                });
+        if (after.state() == Cover.State.PRESENT && after.url().equals(before.url())) {
+            // An unchanged hash is worth saying out loud: the likeliest cause is uploading the
+            // file that was already there, and the call would otherwise read as a successful
+            // change. Whether Discord derives the hash from content or mints one per upload is
+            // not documented, so this may simply never fire — a branch that stays quiet, not a
+            // wrong answer, and the reported before/after URLs are correct either way.
+            result.append("\n  • Unchanged: the event's cover hash did not move, so this is"
+                    + " the image it already had.");
+        }
+        return result.toString();
+    }
+
+    /**
+     * What a failed cover write actually left behind, given the event read back afterwards.
+     *
+     * <p>Separated from the call so it can be tested: every branch here is a claim about whether a
+     * write took effect, this is the block most likely to be reworded into saying the wrong one,
+     * and exercising it in place would mean mocking JDA's request construction.
+     *
+     * @param now    what the read-back established about the cover
+     * @param before what the read before the write established about it. The event itself was
+     *               read — the call cannot get this far otherwise — but its cover field may not
+     *               have been, and then there is nothing to compare against.
+     */
+    static String describeOutcome(Cover now, Cover before) {
+        if (now.state() == Cover.State.UNKNOWN) {
+            // The event came back and its cover field did not parse. Nothing about the write
+            // follows from that — least of all that it did not take.
+            return " The event was read back, but its cover could not be, so whether this call"
+                    + " applied is unknown — check the event before retrying.";
+        }
+        String nowUrl = now.url();
+        String beforeUrl = before.url();
+        if (before.state() == Cover.State.UNKNOWN) {
+            // Every clause below compares against what was there. Without that, the only honest
+            // statement is what is there now.
+            return nowUrl == null
+                    ? " The event has no cover image now. What it had before this call could not"
+                    + " be read, so whether that is a change is unknown — check the event."
+                    : " The event's cover is now " + nowUrl + ". What it had before this call"
+                    + " could not be read, so whether this call set it is unknown — check the"
+                    + " event.";
+        }
+        if (nowUrl == null) {
+            // Losing a cover is a larger change than swapping one, so it must not share the
+            // wording used for an event that never had a cover at all.
+            return beforeUrl != null
+                    ? " The event's cover was REMOVED during this call — it had " + beforeUrl
+                    + " before and has none now. Check the event rather than re-uploading blind."
+                    : " The event currently has no cover image.";
+        }
+        if (nowUrl.equals(beforeUrl)) {
+            return " The event still has the cover it had before this call.";
+        }
+        if (beforeUrl == null) {
+            // Knowable, and asymmetric the other way from a removal: it had none and now has one.
+            // "CHANGED" is true but weaker than what the read supports. The concurrent-editor
+            // hedge still applies, so it is kept verbatim.
+            return " The event's cover was ADDED during this call and is now " + nowUrl
+                    + ". That may mean the request applied and only its response was lost, or that"
+                    + " something else set it in the meantime — this cannot tell them apart, so"
+                    + " check the event rather than re-uploading blind.";
+        }
+        // The cover moved. The tempting reading is "the write landed and its response was lost",
+        // and that is often what happened — but it is not the only thing that produces this. A
+        // genuine rejection followed by someone else editing the cover between the two reads looks
+        // identical from here, and nothing available correlates the current image with the bytes
+        // this call sent. Report the observation and let the caller look, rather than asserting
+        // authorship of a change that may not be this one's.
+        return " The event's cover CHANGED during this call and is now " + nowUrl
+                + ". That may mean the request applied and only its response was lost, or that"
+                + " something else changed it in the meantime — this cannot tell them apart, so"
+                + " check the event rather than re-uploading blind.";
+    }
+
+    /**
+     * The one-line cover summary for a listing.
+     *
+     * <p>Stated once rather than per event: a missing cover is worth surfacing, since it is
+     * otherwise invisible and a listing that only ever prints URLs cannot distinguish "has no
+     * cover" from "not reported" — but it does not need a line each on a listing with no result
+     * cap.
+     *
+     * <p>Every count is separate because each supports a different claim, and merging any two
+     * makes the line assert something it does not know. Events come from JDA's cache and covers
+     * from a live REST read, so the two can disagree in both directions and an entry can also be
+     * returned without being parseable. Saying "not in the live read" about an event Discord did
+     * return, or leaving an event Discord returned out of the incomplete-list count, are each a
+     * quiet version of the mistake this whole structure exists to prevent.
+     *
+     * <p>Extracted and tested for the same reason as {@code describeOutcome}: every clause is a
+     * claim about what the reader is looking at, and testing it in place would mean mocking JDA's
+     * request construction.
+     *
+     * @param c          the tally, whose record documents what each count means
+     * @param rawKnown   whether the live read succeeded at all
+     */
+    static String coverCaveat(CoverCounts c, boolean rawKnown) {
+        if (!rawKnown) {
+            // "In this list", not "below". An empty cache whose live read also failed reaches
+            // here, and that listing has no rows under the caveat to point at.
+            return "\n(Recurrence and cover images could not be read, so no event in this list is"
+                    + " marked as recurring or as having a cover even if it is.)";
+        }
+        StringBuilder sb = new StringBuilder();
+        if (c.coverless() > 0) {
+            // Covers are rare, so "N of N" is the ordinary case and its arithmetic says nothing.
+            // Kept rather than suppressed: this line is why a stale or absent cover stops being
+            // invisible, which is the whole reason the listing reads them. The absolute phrasing
+            // needs a read that saw every listed event, or it claims over ones it never saw.
+            // unlisted() is deliberately not in this condition, and it is the only bucket left
+            // out. "Here" is the rendered list, those events have no row in it, and the clause
+            // saying the list is incomplete follows in the same parenthetical. Adding it would
+            // suppress a true statement about what was printed.
+            if (c.coverless() == c.described() && c.unreadable() == 0 && c.absent() == 0
+                    && c.terminal() == 0 && c.unidentifiable() == 0) {
+                sb.append("no event here has a cover image");
+            } else {
+                // The noun counts described, the verb agrees with coverless: "1 of 3 events has
+                // no cover image". Taking both from one number gets one of them wrong.
+                sb.append(c.coverless()).append(" of ").append(c.described())
+                        .append(c.described() == 1 ? " event" : " events")
+                        .append(c.coverless() == 1 ? " has" : " have").append(" no cover image");
+            }
+        }
+        if (c.unreadable() > 0) {
+            join(sb).append(c.unreadable()).append(c.unreadable() == 1 ? " event was" : " events were")
+                    .append(" returned but could not be read, so ")
+                    .append(c.unreadable() == 1 ? "its cover is" : "their covers are").append(" unknown");
+        }
+        if (c.absent() > 0) {
+            join(sb).append(c.absent()).append(c.absent() == 1 ? " event was" : " events were")
+                    // Hedged when an entry came back with no usable id, because that entry could
+                    // be one of these: nothing matches it to a listed event, so "not in the live
+                    // read" stops being knowable.
+                    // Both halves of the hedge key off absent(), not one off each count. Keying
+                    // the noun off unidentifiable() and the pronoun off absent() produced "the
+                    // entries with no id may be that one" whenever there were two id-less entries
+                    // and one absent event — a sentence that does not parse, and the only
+                    // combination of the four that no test reached.
+                    .append(c.unidentifiable() > 0
+                            ? " not matched to anything in the live read, and the "
+                            + (c.unidentifiable() == 1 ? "entry" : "entries") + " with no id may "
+                            + (c.absent() == 1 ? "include it" : "be among them") + ", so "
+                            : " not in the live read, so ")
+                    // Cover and schedule, for the reason the terminal clause states: nothing was
+                    // read for these events, so a second clause saying their recurrence "could
+                    // not be read" would be two accounts of one event, and the wording reads as a
+                    // parse failure rather than as the event never arriving.
+                    .append(c.absent() == 1 ? "its cover and schedule are" : "their covers and schedules are")
+                    .append(" unknown");
+        }
+        if (c.terminal() > 0) {
+            join(sb).append(c.terminal()).append(c.terminal() == 1 ? " event has" : " events have")
+                    // "ended or been cancelled", not "finished": a cancelled event may never have
+                    // started, so the row would read Status: CANCELED beside a header calling it
+                    // finished.
+                    // Hedged for the same reason the absent clause is: an entry that came back
+                    // with no usable id might be this very event, so "no longer returns it" stops
+                    // being knowable once one exists.
+                    .append(c.unidentifiable() > 0
+                            ? " ended or been cancelled, and nothing in the live read matched "
+                            : " ended or been cancelled, so Discord no longer returns ")
+                    .append(c.terminal() == 1 ? "it" : "them")
+                    // Comma before the second clause: the hedged form already contains an "and",
+                    // and two of them unpunctuated reads as one run-on claim.
+                    //
+                    // Cover and schedule together, because neither was read and both are missing
+                    // from the row for the same reason. Counting these into recurrenceUnreadable
+                    // instead gave an ordinary guild — any guild that has run an event — two
+                    // clauses about one event, the second saying its recurrence "could not be
+                    // read" directly after the first said it was never returned.
+                    .append(", and no cover or schedule is shown below for ")
+                    .append(c.terminal() == 1 ? "it" : "them");
+        }
+        if (c.unlisted() > 0) {
+            // No cause named. A lagging cache is the likeliest one, but a missing intent, a
+            // permission-scoped view and a gateway gap look identical from here, and every other
+            // clause in this function is careful not to attribute — describeOutcome will not even
+            // claim authorship of a cover change for the same reason.
+            join(sb).append("Discord returned ").append(c.unlisted()).append(" event")
+                    .append(c.unlisted() == 1 ? "" : "s").append(" not in this list (")
+                    // Named, unlike every other clause. The others describe events that have a row
+                    // below with an id in it; these have no row at all, so a bare count leaves the
+                    // reader knowing something is missing and with no way to reach it — while this
+                    // call had the ids in hand.
+                    .append(namedIds(c.unlistedIds()))
+                    .append("), so the list is incomplete");
+        }
+        if (c.unidentifiable() > 0) {
+            // Its own clause because it belongs to no event. Folding it into unreadable would
+            // name an event that cannot be named, and letting it fall through to absent would
+            // blame the cache for a malformed response.
+            join(sb).append(c.unidentifiable())
+                    .append(c.unidentifiable() == 1 ? " entry" : " entries")
+                    .append(" could not be read at all, so ")
+                    .append(c.unidentifiable() == 1 ? "it is" : "they are")
+                    // Not "either of those": this clause emits whenever there are id-less entries,
+                    // including when neither neighbouring clause is present, and then "those" has
+                    // no antecedent. "Against any event" holds in both shapes, and still does not
+                    // contradict the absent clause's hedge that they may be among its events.
+                    .append(" not counted against any event");
+        }
+        if (c.recurrenceUnreadable() > 0) {
+            join(sb).append(c.recurrenceUnreadable())
+                    .append(c.recurrenceUnreadable() == 1 ? " event's recurrence" : " events' recurrences")
+                    .append(" could not be read, so ")
+                    .append(c.recurrenceUnreadable() == 1 ? "it shows" : "they show")
+                    .append(" no schedule below even if ")
+                    .append(c.recurrenceUnreadable() == 1 ? "it recurs" : "they recur");
+        }
+        return sb.length() == 0 ? "" : "\n(" + sb + ".)";
+    }
+
+    private static StringBuilder join(StringBuilder sb) {
+        return sb.length() == 0 ? sb : sb.append("; ");
+    }
+
+    /** How many ids a caveat will name before it starts counting instead. */
+    private static final int MAX_NAMED_IDS = 10;
+
+    /**
+     * Ids a caller can act on, bounded, and explicit about any it drops.
+     *
+     * <p>The listing itself has no result cap, so an unbounded id list is not absurd here — but a
+     * cold cache on a busy guild would put a hundred snowflakes in a header that exists to be read
+     * at a glance. Ten is enough to act on; the remainder is stated rather than silently cut,
+     * which is the difference between a bounded answer and a wrong one.
+     */
+    private static String namedIds(List<String> ids) {
+        if (ids.size() <= MAX_NAMED_IDS) {
+            return "IDs: " + String.join(", ", ids);
+        }
+        return "IDs: " + String.join(", ", ids.subList(0, MAX_NAMED_IDS))
+                + ", and " + (ids.size() - MAX_NAMED_IDS) + " more";
+    }
+
+    /**
+     * An exception's message as a trailing clause, or nothing when it has none.
+     *
+     * <p>{@code getMessage()} can be null, and concatenating it renders the word "null" into a
+     * sentence. {@code editScheduledEvent} already guards this, and a null message once made a
+     * whole note vanish elsewhere in this file.
+     */
+    private static String reason(RuntimeException e) {
+        return e.getMessage() == null ? "" : ": " + e.getMessage();
+    }
+
+    /** Over, so the live listing no longer carries it and its cover cannot be read from there. */
+    private static boolean isTerminal(ScheduledEvent event) {
+        return isTerminal(event.getStatus());
+    }
+
+    private static boolean isTerminal(ScheduledEvent.Status status) {
+        return status == ScheduledEvent.Status.COMPLETED || status == ScheduledEvent.Status.CANCELED;
+    }
+
+    /**
+     * The event's state when it was read, named only when it is one worth knowing about before
+     * blaming a failed write. Null otherwise, the unreadable case included.
+     *
+     * <p>JDA's own key mapping rather than the integers, so the two places this file decides what
+     * "over" means agree by construction.
+     */
+    static String terminalStateOf(DataObject raw) {
+        ScheduledEvent.Status status;
+        try {
+            status = ScheduledEvent.Status.fromKey(raw.getInt("status", -1));
+        } catch (RuntimeException unreadable) {
+            // A cosmetic field on the way to a write. Losing it costs a sentence of context, and
+            // refusing over it would repeat the mistake the cover field already made here.
+            return null;
+        }
+        return isTerminal(status) ? status.name() : null;
+    }
+
+    /** The cover image URL from a raw event object, or null if it has no cover. */
+    // Package-private for the same reason as resolveEndTime and coverType: testable without a
+    // live event.
+    static String coverUrlOf(DataObject raw, String eventId) {
+        // Typed check first. getString coerces via toString rather than throwing, so an object or
+        // array here would become a hash-shaped nonsense string and be reported as this event's
+        // cover — a positive claim from a field that was not readable. Callers already separate
+        // "no cover" from "could not read"; this is what puts it on the right side.
+        if (raw.hasKey("image") && !raw.isNull("image") && !raw.isType("image", DataType.STRING)) {
+            throw new ParsingException("image is not a string for event " + eventId);
+        }
+        String hash = raw.getString("image", null);
+        if (hash == null) {
+            return null;
+        }
+        // Absent means no cover; blank means neither. It is not a hash, so no URL can be built from
+        // it — .../{eventId}/.png resolves to nothing — and calling it "no cover image" would be a
+        // claim about the event drawn from a field that says nothing.
+        if (hash.isBlank()) {
+            throw new ParsingException("image is blank for event " + eventId);
+        }
+        // The same reasoning as isSnowflake on the id beside it: this value is printed into a URL
+        // that goes back to a caller, so a slash, a space or a newline in it would not be a broken
+        // hash, it would be a different URL. Deliberately looser than "32 hex characters" — the
+        // check is against a value that cannot be a hash, not a pin on Discord's current format,
+        // which an "a_" prefix already varies.
+        if (!hash.chars().allMatch(c -> c == '_' || (c >= '0' && c <= '9')
+                || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))) {
+            throw new ParsingException("image is not a hash for event " + eventId);
+        }
+        return coverUrl(eventId, hash);
+    }
+
+    private static String coverUrl(String eventId, String hash) {
+        // JDA's own template, so the CDN host and path stay in one place rather than being spelled
+        // out here — and its extension rule too, rather than borrowing the template and then
+        // diverging on the one part of it that is conditional. An "a_" hash means animated, which
+        // a cover set through this tool can never be; but a hash this did not write, or a
+        // Discord-side change, would otherwise produce a URL that 404s everywhere it is printed.
+        return String.format(ScheduledEvent.IMAGE_URL, eventId, hash,
+                hash.startsWith("a_") ? "gif" : "png");
+    }
+
+    /**
+     * A refusal with the reassurance its siblings carry, punctuated to match whatever it says.
+     *
+     * <p>These messages come from two guards with different house styles — one ends its sentences
+     * and one does not — so appending blindly produces either a run-on or a double stop.
+     *
+     * <p>Package-private because it cannot be reached through the tool: the event read runs first
+     * and a mocked JDA cannot serve it, so a test driving setScheduledEventImage stops before any
+     * source refusal exists to decorate.
+     */
+    static String andNothingChanged(String refusal) {
+        if (refusal == null || refusal.isBlank()) {
+            return "Nothing was changed.";
+        }
+        return refusal.endsWith(".") ? refusal + " Nothing was changed."
+                : refusal + ". Nothing was changed.";
+    }
+
+    /** Bytes to send, the name to report them by, and the format they turned out to be. */
+    record CoverSource(byte[] bytes, String name, Icon.IconType type) {
+    }
+
+    /**
+     * Read the cover from whichever source the caller supplied.
+     *
+     * <p>Package-private, and the reason is the same one that keeps {@code coverUrlOf} and
+     * {@code coverType} package-private: through the tool these refusals sit behind an event read
+     * that a mocked JDA cannot serve, so the only way to assert that {@code imageUrl} really goes
+     * through {@link RemoteFetchGuard} — rather than a second {@code openStream} — is to call this
+     * directly. That regression is the one REVIEW.md records as already having shipped once.
+     */
+    static CoverSource readCoverSource(boolean hasUrl, String imageUrl, String filePath,
+                                       LocalFileGuard.Root root) {
+        // The pairing its caller guarantees, checked rather than assumed. LocalFileGuard grew a
+        // null-filePath guard on the principle that shared code cannot rely on every future
+        // caller gating first; this is the same case one layer up, in a method made
+        // package-private precisely so callers other than the tool can reach it. Without it a
+        // null root reaches Path.startsWith and arrives as an NPE.
+        if (!hasUrl && root == null) {
+            throw new IllegalArgumentException(
+                    "filePath needs an upload root, and none was resolved.");
+        }
+        // Both halves, not one. A null imageUrl reaches URI.create inside the guard and comes
+        // back as an NPE, which is not the IllegalArgumentException every other refusal here
+        // promises — and the argument for checking the root applies to this exactly as well.
+        if (hasUrl && imageUrl == null) {
+            throw new IllegalArgumentException("imageUrl was not supplied.");
+        }
+        String source;
+        byte[] bytes;
+        try {
+            if (hasUrl) {
+                // The shared SSRF guard, same as send_file and create_emoji: https only, public
+                // host, no redirect following, bounded read. This is the path that needs no
+                // filesystem grant, which is why it is offered first — a cover almost always
+                // starts as an image already posted to Discord, and requiring it to be staged on
+                // disk first is what pushes operators into pointing FILE_ROOT at their download
+                // directory.
+                bytes = RemoteFetchGuard.fetch(imageUrl, MAX_COVER_BYTES, "cover image");
+                source = imageUrl;
+            } else {
+                LocalFileGuard.ConfinedPath path =
+                        LocalFileGuard.resolveWithinRoot(filePath, root, "filePath", "upload");
+                bytes = LocalFileGuard.readBounded(path, MAX_COVER_BYTES, "cover image");
+                source = path.path().getFileName().toString();
+            }
+        } catch (LocalFileGuard.TooLargeException | RemoteFetchGuard.TooLargeException e) {
+            // The limit alone leaves the caller stuck: an oversized master is the ordinary input
+            // here, and the fix is the same crop the display shape needs anyway.
+            //
+            // Both branches are made to read the same way. RemoteFetchGuard's message is generic
+            // ("cover image exceeds the maximum allowed size" — lowercase, no period, no number)
+            // while LocalFileGuard's names the limit, so a URL and a path failing for identical
+            // reasons produced visibly different errors. The size is stated here either way.
+            throw new IllegalArgumentException("Cover image exceeds the "
+                    + FileSizes.format(MAX_COVER_BYTES) + " limit."
+                    + " Crop it to 5:2 and scale it down first — a cover is displayed at 800x320,"
+                    + " so a full-resolution master is both too large and the wrong shape.", e);
+        }
+        // The format check belongs to reading the source, not to the write: it names the
+        // parameter the bytes came from, and that is knowable only here. Refusing a WebP from a
+        // CDN link with "filePath is not a PNG" names a parameter the caller did not use.
+        return new CoverSource(bytes, source, coverType(bytes, hasUrl ? "imageUrl" : "filePath"));
+    }
+
+    /**
+     * Identify the format from the bytes, not the file name.
+     *
+     * <p>An extension is caller-supplied text. Discord rejects a mislabelled body, and JDA's
+     * {@code IconType.fromExtension} would happily build a PNG icon around a JPEG, producing a
+     * Discord-side error that blames the request rather than the file.
+     */
+    // Package-private so the format cases can be tested without a live event, matching
+    // resolveEndTime above. paramName because this runs on both branches: telling a caller who
+    // passed a WebP CDN link that "filePath is not a PNG" names a parameter they did not use, and
+    // Discord's own media proxy serves WebP, so that is an ordinary mistake rather than a rare one.
+    static Icon.IconType coverType(byte[] bytes, String paramName) {
+        if (bytes.length >= 8 && (bytes[0] & 0xFF) == 0x89 && bytes[1] == 'P' && bytes[2] == 'N' && bytes[3] == 'G'
+                && (bytes[4] & 0xFF) == 0x0D && (bytes[5] & 0xFF) == 0x0A
+                && (bytes[6] & 0xFF) == 0x1A && (bytes[7] & 0xFF) == 0x0A) {
+            return Icon.IconType.PNG;
+        }
+        if (bytes.length >= 3 && (bytes[0] & 0xFF) == 0xFF && (bytes[1] & 0xFF) == 0xD8 && (bytes[2] & 0xFF) == 0xFF) {
+            return Icon.IconType.JPEG;
+        }
+        // GIF is called out by name because it is the plausible mistake: Discord accepts animated
+        // avatars and banners elsewhere, but not on scheduled event covers.
+        if (bytes.length >= 3 && bytes[0] == 'G' && bytes[1] == 'I' && bytes[2] == 'F') {
+            throw new IllegalArgumentException(
+                    "A GIF's animation is never shown on a scheduled event cover, so this refuses "
+                            + "it rather than silently publishing a still frame. Supply a PNG or "
+                            + "JPEG.");
+        }
+        throw new IllegalArgumentException(paramName
+                + " is not a PNG or JPEG. Discord accepts only those for event covers.");
+    }
+
+    /**
+     * The upload root, or a refusal that points at the parameter needing no filesystem.
+     *
+     * <p>Also where the chained configuration is refused. The README's argument for reusing
+     * {@code DISCORD_MCP_FILE_ROOT} rests on the upload root holding only what the operator put
+     * there, which stops being true when it is also the directory {@code download_attachment}
+     * writes into: a caller can then fetch a file it chose, PNG header and all, and pin it to a
+     * permanent unauthenticated URL.
+     *
+     * <p>Be exact about what this is worth. It is not a boundary: with the roots chained, the
+     * same end state is two calls away — {@code download_attachment} writes the file,
+     * {@code send_file} posts it to a channel with no format check of its own, and
+     * {@code imageUrl} pins the CDN link that comes back. Only separating the directories removes
+     * that. What this removes is reaching it by accident, on the one path where a deployment
+     * would never see it coming.
+     *
+     * <p>Refused here rather than at startup, and only on the {@code filePath} branch, so a
+     * deployment with the chained config keeps {@code send_file} and {@code imageUrl} working
+     * exactly as before.
+     */
+    private LocalFileGuard.Root coverRoot() {
+        if (coverFileRoot == null || coverFileRoot.isBlank()) {
+            throw new IllegalArgumentException(
+                    "Local paths are disabled. Set DISCORD_MCP_FILE_ROOT to the directory this "
+                            + "server may read uploads from, or supply imageUrl instead — that "
+                            + "needs no filesystem access.");
+        }
+        LocalFileGuard.Root root =
+                LocalFileGuard.resolveRoot(coverFileRoot, "DISCORD_MCP_FILE_ROOT");
+        if (downloadRoot == null || downloadRoot.isBlank()) {
+            // download_attachment writes nowhere, so there is nothing to collide with. Gated here
+            // rather than left to the catch below: an unset variable is this method's ordinary
+            // case, and the empty string resolves to the process's working directory, which would
+            // refuse every upload root beneath it — including the layout the README recommends.
+            return root;
+        }
+        LocalFileGuard.Root downloads;
+        try {
+            downloads = LocalFileGuard.resolveRoot(downloadRoot, "DISCORD_MCP_DOWNLOAD_ROOT");
+        } catch (RuntimeException downloadsUnusable) {
+            // Set to something that does not resolve: a missing directory, an unparseable path.
+            // Nothing is being written there either, so there is still nothing to collide with,
+            // and a broken download root is download_attachment's to report, not this tool's.
+            return root;
+        }
+        // The shared predicate, which the startup warning uses too. Containment either way, not
+        // equality: downloads written inside the upload root are readable from it just as surely,
+        // and an upload root inside the downloads directory is the same arrangement seen from the
+        // other end.
+        if (LocalFileGuard.overlaps(root, downloads)) {
+            throw new IllegalArgumentException(
+                    "DISCORD_MCP_FILE_ROOT and DISCORD_MCP_DOWNLOAD_ROOT overlap, so this server "
+                            + "would read covers out of a directory it also writes downloads "
+                            + "into — a file a caller chose, with a PNG header it also chose, "
+                            + "pinned to a permanent public URL. Point them at separate "
+                            + "directories, or supply imageUrl, which needs no filesystem access.");
+        }
+        return root;
+    }
+
     @Tool(name = "delete_guild_scheduled_event", description = "Permanently delete a scheduled event")
     public String deleteScheduledEvent(
             @ToolParam(description = "Discord server ID", required = false) String guildId,
@@ -598,7 +1487,7 @@ public class ScheduledEventService {
         return "Successfully deleted scheduled event: " + eventName + " (ID: " + eventId + ")";
     }
 
-    @Tool(name = "list_guild_scheduled_events", description = "List all active and scheduled events on the server")
+    @Tool(name = "list_guild_scheduled_events", description = "List all active and scheduled events on the server, with each one's recurrence and cover image URL. A header line says how many have no cover, and flags anything the live read could not account for.")
     public String listScheduledEvents(
             @ToolParam(description = "Discord server ID", required = false) String guildId,
             @ToolParam(description = "Whether to include interested user count (default true)", required = false) String withUserCount) {
@@ -606,53 +1495,199 @@ public class ScheduledEventService {
         Guild guild = getGuild(guildId);
         List<ScheduledEvent> events = guild.getScheduledEvents();
 
-        if (events.isEmpty()) {
-            return "No scheduled events found on this server.";
-        }
-
         boolean includeUserCount = withUserCount == null || withUserCount.isEmpty() || Boolean.parseBoolean(withUserCount);
 
         // One raw list call so recurrence is visible here. Without it a weekly class and a one-off
         // look identical, which is how a recurring event gets edited as though it were not one.
-        java.util.Map<String, DataObject> rules = new java.util.HashMap<>();
-        boolean recurrenceKnown = false;
+        //
+        // The same response also carries the cover image hash, which is read here rather than from
+        // ScheduledEvent.getImageUrl() for two reasons: it costs nothing extra, and it is live. A
+        // cover changed out of band is exactly the case this listing needs to be right about, and
+        // that is the case where JDA's cached entity is stale.
+        // The rendered text, not the DataObject. RecurrenceRule.of checks only the top-level
+        // shape, so a malformed by_weekday survives it and RecurrenceRule.describe throws. Rendered
+        // inside the per-entry guard, that costs one event its schedule line and reaches the
+        // recurrenceUnreadable caveat; rendered at display time it would take the listing down.
+        // One REST call per listing, including on a guild with nothing cached — where this used
+        // to return immediately. Deliberate, and worth naming against REVIEW.md's "no unmetered
+        // call patterns": it is one bounded call through JDA's limiter, and it buys the ability to
+        // say "none" only when something established it.
+        //
+        // The per-entry reading lives in LiveEventDetails so it can be tested without driving a
+        // RestActionImpl. That is the half where the mistakes were, and every test of the counts
+        // and the caveat builds its input by hand — so a wiring error here would leave them green.
+        // The whole array goes across, elements included: converting them here first put one
+        // getObject per entry outside every per-entry guard, so a single non-object element threw
+        // past them and discarded the entries that had already been read.
+        LiveEventDetails details;
+        boolean rawKnown = false;
         try {
-            Route.CompiledRoute route = Route.custom(Method.GET, "guilds/{guild_id}/scheduled-events")
-                    .compile(guild.getId());
-            var raw = new RestActionImpl<net.dv8tion.jda.api.utils.data.DataArray>(jda, route,
-                    (response, request) -> response.getArray()).complete();
-            for (int i = 0; i < raw.length(); i++) {
-                DataObject o = raw.getObject(i);
-                DataObject rule = recurrenceOf(o);
-                if (rule != null) {
-                    rules.put(o.getString("id"), rule);
-                }
-            }
-            recurrenceKnown = true;
+            details = LiveEventDetails.read(fetchRawList(guild.getId()));
+            rawKnown = true;
         } catch (RuntimeException e) {
-            // Recurrence detail is an enhancement to this listing, not its purpose, so losing it
-            // must not turn a working list call into a failure. It must not silently read as
-            // "nothing recurs" either — that is indistinguishable from the real thing.
-            rules.clear();
+            // Recurrence and cover detail are enhancements to this listing, not its purpose, so
+            // losing them must not turn a working list call into a failure. They must not silently
+            // read as "nothing recurs" and "no covers" either — that is indistinguishable from the
+            // real thing, and the whole point of reporting a missing cover is that its absence is
+            // information.
+            details = LiveEventDetails.unread();
         }
+        return renderListing(events, details, rawKnown, includeUserCount);
+    }
 
-        String caveat = recurrenceKnown ? ""
-                : "\n(Recurrence information could not be read, so no event below is marked as recurring"
-                + " even if it is.)";
-        return "Retrieved " + events.size() + " scheduled events:" + caveat + "\n" +
-                events.stream()
-                        .map(e -> {
-                            StringBuilder sb = new StringBuilder();
-                            sb.append("- **").append(e.getName()).append("** (ID: ").append(e.getId()).append(")\n");
-                            sb.append("  • Type: ").append(e.getType()).append(" | Status: ").append(e.getStatus()).append("\n");
-                            sb.append("  • Start: ").append(e.getStartTime());
-                            if (e.getEndTime() != null) sb.append(" | End: ").append(e.getEndTime());
-                            DataObject rule = rules.get(e.getId());
-                            if (rule != null) sb.append("\n  • Recurs: ").append(RecurrenceRule.describe(rule));
-                            if (includeUserCount) sb.append("\n  • Interested: ").append(e.getInterestedUserCount()).append(" users");
-                            return sb.toString();
-                        })
-                        .collect(Collectors.joining("\n"));
+    /**
+     * Compose the header, the caveat and the rows from one live read.
+     *
+     * <p>Package-private because nothing else could reach it. {@code RestActionImpl} casts its
+     * {@code JDA} to {@code JDAImpl}, so a mocked one cannot serve {@code fetchRawList} and every
+     * test that drives the tool goes down the failed-read branch — leaving the join between the
+     * four pieces, each of which is pinned on its own, run by nothing.
+     *
+     * <p>That join is where the mistakes would be. {@code CoverCounts.tally} takes three
+     * interchangeable {@code Set<String>} arguments in a row: swapping {@code described} with the
+     * cover ids compiles, inverts the coverless count, and leaves every other test green. The
+     * record fixed the shape of the result; the transposition risk moved to the input.
+     */
+    static String renderListing(List<ScheduledEvent> events, LiveEventDetails details,
+                                boolean rawKnown, boolean includeUserCount) {
+        Map<String, String> rules = details.rules();
+        Map<String, String> covers = details.covers();
+        Set<String> described = details.described();
+        List<String> returned = details.returned();
+        Set<String> recurrenceFailed = details.recurrenceFailed();
+        int unidentifiable = details.unidentifiable();
+
+        // The tally is a pure function of the id sets, extracted for the same reason coverCaveat
+        // was: it is where the subtle mistakes live — the absent/terminal split, and unlisted as
+        // "returned minus those actually listed" — and a transposition here produces confidently
+        // wrong text with nothing failing, because every caveat test calls the formatter directly.
+        // none() rather than tallying sets that were just cleared: on a failed read there is
+        // nothing to count, and coverCaveat says so from rawKnown alone.
+        CoverCounts counts = !rawKnown ? CoverCounts.none() : CoverCounts.tally(
+                events.stream().map(ScheduledEvent::getId).toList(),
+                events.stream().filter(ScheduledEventService::isTerminal)
+                        .map(ScheduledEvent::getId).collect(Collectors.toSet()),
+                returned, described, covers.keySet(), recurrenceFailed, unidentifiable);
+        String caveat = coverCaveat(counts, rawKnown);
+        // An empty cache is not an early return. The main path already reports that case: with
+        // nothing listed, every event Discord returned lands in `unlisted`, whose clause says the
+        // list is incomplete. A branch of its own would mean a second renderer with its own field
+        // set, its own failure policy and no accounting for the entries it skipped. One renderer
+        // cannot drift from itself.
+        //
+        // "None" is still a claim, so it is only made when the live read agreed there are none.
+        // unidentifiable too: entries that came back with no usable id are not in `returned`, so
+        // without this an all-unreadable response reads as "there are none" and drops the very
+        // warning that says otherwise.
+        if (events.isEmpty() && rawKnown && returned.isEmpty() && unidentifiable == 0) {
+            return "No scheduled events found on this server.";
+        }
+        // Singular when there is one. The caveat below agrees its own has/have and event/events
+        // across seven clauses; the line above it should not be the one that does not.
+        String header = "Retrieved " + events.size()
+                + (events.size() == 1 ? " scheduled event:" : " scheduled events:") + caveat;
+        // Every listed event the live read did not describe — returned but unparseable, or not
+        // returned at all — minus the terminal ones, which are a different fact: Discord stops
+        // returning a finished event on purpose, that is expected rather than a gap, and marking
+        // every past event is the line of nothing the cover line exists to avoid.
+        //
+        // Not just the unreadable ones. Their caveat clause says one event is unaccounted for; it
+        // cannot say which, and a row that silently omits its cover line is indistinguishable
+        // from one known to have none — which is the question a caller answers when it picks an
+        // event to upload to. Rare by construction either way.
+        // Empty when the read failed, like the counts three statements up. Without that gate,
+        // `described` is empty and every non-terminal event is "undescribed", so a failed read
+        // puts the marker on every row of an uncapped listing — directly under a caveat that has
+        // just said no cover could be read at all. The marker is worth its line because it is
+        // rare; on that branch it is not rare, and it is not news either.
+        // A Set over the same ids, because the filter below asks per listed event and `returned`
+        // is a List — its order is what the caveat names, not what a membership test wants.
+        Set<String> returnedIds = Set.copyOf(returned);
+        // Terminal AND missing from the live read is the case the terminal clause covers, and
+        // neither marker fires for it. Status alone is the wrong test: CoverCounts counts a
+        // finished event that Discord did return but could not parse as `unreadable`, so the
+        // caveat says its cover is unknown while its row said nothing.
+        Predicate<ScheduledEvent> explainedByTheTerminalClause =
+                e -> isTerminal(e) && !returnedIds.contains(e.getId());
+        Set<String> coverUnknown = !rawKnown ? Set.of() : events.stream()
+                .filter(e -> !described.contains(e.getId()))
+                .filter(explainedByTheTerminalClause.negate())
+                .map(ScheduledEvent::getId)
+                .collect(Collectors.toSet());
+        // A different question, and it needs its own answer: `described` is gated on the cover
+        // read alone, so an event whose recurrence parsed perfectly well — as "does not recur" —
+        // lands outside it whenever its image field did not. Marking that row's schedule unknown
+        // contradicts both the read and the header, which says only that its cover is unknown.
+        //
+        // What this asks instead is whether the recurrence was ever read: it was not if the parse
+        // failed, and it was not if Discord never returned the event at all.
+        Set<String> scheduleUnknown = !rawKnown ? Set.of() : events.stream()
+                .filter(e -> recurrenceFailed.contains(e.getId())
+                        || !returnedIds.contains(e.getId()))
+                .filter(explainedByTheTerminalClause.negate())
+                .map(ScheduledEvent::getId)
+                .collect(Collectors.toSet());
+        String rows = events.stream()
+                .map(e -> renderEvent(e, rules, covers, coverUnknown, scheduleUnknown, includeUserCount))
+                .collect(Collectors.joining("\n"));
+        // The separator only when there is something to separate. An empty cache whose live read
+        // also failed reaches here — it cannot claim "none" — and appending the newline anyway
+        // hangs the caveat above a blank line, which reads as a truncated answer.
+        return rows.isEmpty() ? header : header + "\n" + rows;
+    }
+
+    /**
+     * One event's block in the listing.
+     *
+     * <p>Package-private because this is the last hop of the live read: the counts and the caveat
+     * are pinned clause by clause and the parse has its own tests, but both sets build their input
+     * by hand, so nothing but this reaches {@code covers.get(id)}. Keying a line off the wrong id
+     * prints one event's cover under another's name with every other test still green, and a
+     * {@code ScheduledEvent} — unlike {@code RestActionImpl} — is something a test can mock.
+     */
+    static String renderEvent(ScheduledEvent e, Map<String, String> rules,
+                              Map<String, String> covers, Set<String> coverUnknown,
+                              Set<String> scheduleUnknown, boolean includeUserCount) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("- **").append(e.getName()).append("** (ID: ").append(e.getId()).append(")\n");
+        sb.append("  • Type: ").append(e.getType()).append(" | Status: ").append(e.getStatus()).append("\n");
+        sb.append("  • Start: ").append(e.getStartTime());
+        if (e.getEndTime() != null) sb.append(" | End: ").append(e.getEndTime());
+        // Same rule as the cover below: omitted when the event does not recur, said outright when
+        // nobody could tell. A malformed recurrence and a genuine one-off render identically
+        // otherwise, and reading a weekly series as a one-off is the mistake this whole recurrence
+        // read exists to prevent.
+        String rule = rules.get(e.getId());
+        if (rule != null) {
+            sb.append("\n  • Recurs: ").append(rule);
+        } else if (scheduleUnknown.contains(e.getId())) {
+            // One marker for both ways of not knowing — the rule would not parse, or Discord
+            // never returned the event at all — because what the row owes the reader is that the
+            // schedule is unknown, not which read failed. The caveat above carries the cause.
+            //
+            // Editing a weekly series as though it were a single event is the mistake this
+            // recurrence read exists to prevent, and without a marker such a row is
+            // indistinguishable from a genuine one-off.
+            sb.append("\n  • Recurs: unknown — the live read did not establish whether this"
+                    + " event recurs");
+        }
+        // Only the URL, and only when there is one. A per-event "none" would be a line of nothing
+        // per coverless event on a listing with no result cap; the header count carries that once
+        // instead. The recurrence line above omits itself for the same reason.
+        //
+        // An event the live read did not describe is the exception, and it does get a line.
+        // Without one it renders identically to an event known to have no cover, so nine coverless
+        // events beside one the read missed produce ten identical rows and the header's counts
+        // cannot say which is which — on exactly the question a caller answers when it picks an
+        // event to upload a cover to. Rare by construction, so an ordinary listing pays nothing.
+        String cover = covers.get(e.getId());
+        if (cover != null) {
+            sb.append("\n  • Cover image: ").append(cover);
+        } else if (coverUnknown.contains(e.getId())) {
+            sb.append("\n  • Cover image: unknown — the live read did not describe this event");
+        }
+        if (includeUserCount) sb.append("\n  • Interested: ").append(e.getInterestedUserCount()).append(" users");
+        return sb.toString();
     }
 
     @Tool(name = "get_guild_scheduled_event_users", description = "Get list of users interested in a scheduled event")

@@ -473,16 +473,9 @@ public class UserService {
                 "(Attachment ID: %s) `%s` (%s, %s) URL: %s",
                 attachment.getId(),
                 attachment.getFileName(),
-                formatFileSize(attachment.getSize()),
+                FileSizes.format(attachment.getSize()),
                 attachment.getContentType() != null ? attachment.getContentType() : "unknown",
                 attachment.getUrl()
         );
-    }
-
-    private String formatFileSize(int bytes) {
-        if (bytes < 1024) return bytes + " B";
-        if (bytes < 1024 * 1024) return String.format("%.1f KB", bytes / 1024.0);
-        if (bytes < 1024 * 1024 * 1024) return String.format("%.1f MB", bytes / (1024.0 * 1024));
-        return String.format("%.1f GB", bytes / (1024.0 * 1024 * 1024));
     }
 }
