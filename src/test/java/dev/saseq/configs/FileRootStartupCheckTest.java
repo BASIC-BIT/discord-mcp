@@ -82,6 +82,46 @@ class FileRootStartupCheckTest {
     }
 
     @Test
+    void theOptInChangesTheWarningRatherThanSilencingIt(@TempDir Path dir) throws IOException {
+        // Opting in says the operator meant the layout, not that the consequence went away, and
+        // this line is the only thing that will say so to whoever inherits the deployment. What
+        // must change is the advice: "point them at separate directories" is wrong once the
+        // sharing is the point, and telling a tool it refuses local paths is then false.
+        Path shared = Files.createDirectory(dir.resolve("shared"));
+        check.fileRoot = shared.toString();
+        check.downloadRoot = shared.toString();
+        check.allowSharedRoot = "true";
+
+        check.run(null);
+
+        assertThat(warnings())
+                .contains("overlap")
+                .contains("DISCORD_MCP_ALLOW_SHARED_ROOT=true allows it")
+                .doesNotContain("send_file does not")
+                .doesNotContain("Point them at separate")
+                // The advice changes; the broader grant still gets named. send_file read this
+                // directory before the opt-in and still does, and it is the larger of the two.
+                .contains("send_file reads the same directory");
+    }
+
+    @Test
+    void onlyTrueOptsIn(@TempDir Path dir) throws IOException {
+        // Read exactly as ScheduledEventService reads it. A looser reading here would print that
+        // the refusal is off while the tool still refuses — describing a server nobody is running,
+        // to the one reader who takes this line instead of the code.
+        Path shared = Files.createDirectory(dir.resolve("shared"));
+        check.fileRoot = shared.toString();
+        check.downloadRoot = shared.toString();
+        check.allowSharedRoot = "yes";
+
+        check.run(null);
+
+        assertThat(warnings())
+                .contains("send_file does not")
+                .doesNotContain("allows it");
+    }
+
+    @Test
     void anUploadRootSaysWhoReadsIt() {
         // The one thing that changes for a deployment on a jar bump: the root it set for
         // send_file gains a second reader, with no config change and nothing to notice. The

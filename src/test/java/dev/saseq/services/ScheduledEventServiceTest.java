@@ -796,6 +796,59 @@ class ScheduledEventServiceTest {
     }
 
     @Test
+    void oneSharedMediaDirectoryCanBeOptedInto(@TempDir Path dir) throws IOException {
+        // The deployment this exists for keeps a single media directory: what the agent
+        // downloads, what it is sent and what it generates all land in one place, and covers get
+        // set from there. The refusal above is worth removing there because it was never a
+        // boundary — download_attachment, send_file, imageUrl reaches the same end state with no
+        // local path at all — so on that layout it only costs the filePath branch.
+        // No file staged, for the reason separateRootsAreNotRefused gives below: the event read
+        // comes before the source, so nothing here reaches the file either way, and staging one
+        // would suggest this proves a file under the shared root is readable. It does not —
+        // readCoverSource's own tests do that, and they take the root as a parameter, which is
+        // why the confinement inside it cannot see this flag at all.
+        Path shared = Files.createDirectory(dir.resolve("shared"));
+        service.coverFileRoot = shared.toString();
+        service.downloadRoot = shared.toString();
+        service.allowSharedRoot = "true";
+
+        assertThatThrownBy(() -> service.setScheduledEventImage(
+                GUILD, EVENT, null, shared.resolve("poster.png").toString()))
+                .isInstanceOf(IllegalArgumentException.class)
+                // Past the roots, stopped at the event read the mocked JDA cannot serve.
+                .hasMessageContaining("Could not reach Discord")
+                .hasMessageNotContaining("overlap");
+
+        // The opt-in drops one comparison between two configured directories. It is not a second
+        // way to enable local paths: with no upload root there is nothing to confine against, and
+        // an escape hatch that quietly granted the filesystem would be a different feature.
+        service.coverFileRoot = "";
+        assertThatThrownBy(() -> service.setScheduledEventImage(
+                GUILD, EVENT, null, shared.resolve("poster.png").toString()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Local paths are disabled");
+        service.coverFileRoot = shared.toString();
+
+        // Trimmed and case-insensitive, because an env file written by hand carries whitespace
+        // and an operator who typed True meant it.
+        service.allowSharedRoot = " TRUE\n";
+        assertThatThrownBy(() -> service.setScheduledEventImage(
+                GUILD, EVENT, null, shared.resolve("poster.png").toString()))
+                .hasMessageNotContaining("overlap");
+
+        // And nothing else enables it. A variable whose whole job is to drop a check should not
+        // be satisfiable by the values people reach for when they mean yes — the failure mode is
+        // silent, and it is the direction that matters.
+        for (String notTrue : new String[] {"", "1", "yes", "on", "truthy", "false"}) {
+            service.allowSharedRoot = notTrue;
+            assertThatThrownBy(() -> service.setScheduledEventImage(
+                    GUILD, EVENT, null, shared.resolve("poster.png").toString()))
+                    .as("DISCORD_MCP_ALLOW_SHARED_ROOT=\"%s\"", notTrue)
+                    .hasMessageContaining("overlap");
+        }
+    }
+
+    @Test
     void anUnsetDownloadRootCollidesWithNothing() throws IOException {
         // The deployment the README recommends: no downloads configured, uploads under the
         // service's working directory. Spring hands an unset variable "" rather than null, and
