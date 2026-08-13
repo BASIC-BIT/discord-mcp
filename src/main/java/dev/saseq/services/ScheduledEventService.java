@@ -1099,10 +1099,15 @@ public class ScheduledEventService {
                     // Hedged when an entry came back with no usable id, because that entry could
                     // be one of these: nothing matches it to a listed event, so "not in the live
                     // read" stops being knowable.
+                    // Both halves of the hedge key off absent(), not one off each count. Keying
+                    // the noun off unidentifiable() and the pronoun off absent() produced "the
+                    // entries with no id may be that one" whenever there were two id-less entries
+                    // and one absent event — a sentence that does not parse, and the only
+                    // combination of the four that no test reached.
                     .append(c.unidentifiable() > 0
                             ? " not matched to anything in the live read, and the "
-                            + (c.unidentifiable() == 1 ? "entry" : "entries") + " with no id may be"
-                            + (c.absent() == 1 ? " that one" : " among them") + ", so "
+                            + (c.unidentifiable() == 1 ? "entry" : "entries") + " with no id may "
+                            + (c.absent() == 1 ? "include it" : "be among them") + ", so "
                             : " not in the live read, so ")
                     // Cover and schedule, for the reason the terminal clause states: nothing was
                     // read for these events, so a second clause saying their recurrence "could

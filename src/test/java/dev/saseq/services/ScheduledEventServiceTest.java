@@ -309,7 +309,7 @@ class ScheduledEventServiceTest {
         // its own and it is the pair that has to be read.
         assertThat(ScheduledEventService.coverCaveat(
                 new CoverCounts(1, 0, 0, 1, 0, unlistedIds(0), 1, 0), true))
-                .contains("may be that one")
+                .contains("may include it")
                 .contains("not counted against any event")
                 .doesNotContain("either of those");
     }
@@ -335,11 +335,29 @@ class ScheduledEventServiceTest {
         // the one place the wording has to.
         assertThat(ScheduledEventService.coverCaveat(new CoverCounts(1, 0, 0, 1, 0, unlistedIds(0), 1, 0), true))
                 .contains("not matched to anything in the live read")
-                .contains("the entry with no id may be that one")
+                .contains("the entry with no id may include it")
                 .doesNotContain("not in the live read, so");
         // With nothing unidentifiable, the flat claim is supported and stays.
         assertThat(ScheduledEventService.coverCaveat(new CoverCounts(1, 0, 0, 1, 0, unlistedIds(0), 0, 0), true))
                 .contains("1 event was not in the live read");
+    }
+
+    @Test
+    void theHedgeAgreesWithItselfWhateverTheTwoCountsAre() {
+        // Both counts vary independently, so all four shapes are reachable, and the noun and the
+        // pronoun used to be keyed off different ones: two id-less entries beside one absent event
+        // rendered "the entries with no id may be that one". Every other combination read fine,
+        // which is exactly why it survived — both existing hedge tests fix unidentifiable at 1.
+        assertThat(ScheduledEventService.coverCaveat(
+                new CoverCounts(1, 0, 0, 1, 0, unlistedIds(0), 2, 0), true))
+                .contains("the entries with no id may include it")
+                .doesNotContain("may be that one");
+        assertThat(ScheduledEventService.coverCaveat(
+                new CoverCounts(1, 0, 0, 2, 0, unlistedIds(0), 1, 0), true))
+                .contains("the entry with no id may be among them");
+        assertThat(ScheduledEventService.coverCaveat(
+                new CoverCounts(1, 0, 0, 2, 0, unlistedIds(0), 2, 0), true))
+                .contains("the entries with no id may be among them");
     }
 
     @Test
