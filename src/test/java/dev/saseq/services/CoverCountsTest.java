@@ -22,7 +22,7 @@ class CoverCountsTest {
 
     @Test
     void anEventWhoseCoverWasReadIsDescribed() {
-        CoverCounts c = CoverCounts.tally(List.of("a", "b"), NONE, Set.of("a", "b"),
+        CoverCounts c = CoverCounts.tally(List.of("a", "b"), NONE, List.of("a", "b"),
                 Set.of("a", "b"), Set.of("a"), NONE, 0);
 
         assertThat(c.described()).isEqualTo(2);
@@ -36,7 +36,7 @@ class CoverCountsTest {
     void returnedButUnparseableIsNotAbsent() {
         // Discord did send this event. Counting it as absent blames a cache gap that did not
         // happen and sends the reader to look in the wrong place.
-        CoverCounts c = CoverCounts.tally(List.of("a"), NONE, Set.of("a"), NONE, NONE, NONE, 0);
+        CoverCounts c = CoverCounts.tally(List.of("a"), NONE, List.of("a"), NONE, NONE, NONE, 0);
 
         assertThat(c.unreadable()).isEqualTo(1);
         assertThat(c.absent()).isZero();
@@ -48,7 +48,7 @@ class CoverCountsTest {
         // GET /guilds/{id}/scheduled-events carries scheduled and active events only, so a
         // finished one is legitimately missing. Counting it as absent would put a caveat about
         // read gaps on most listings.
-        CoverCounts c = CoverCounts.tally(List.of("over", "live"), Set.of("over"), Set.of("live"),
+        CoverCounts c = CoverCounts.tally(List.of("over", "live"), Set.of("over"), List.of("live"),
                 Set.of("live"), Set.of("live"), NONE, 0);
 
         assertThat(c.terminal()).isEqualTo(1);
@@ -61,7 +61,7 @@ class CoverCountsTest {
     void anEndedEventThatDiscordStillReturnsIsJustDescribed() {
         // Terminal only matters when the live read omitted it. If Discord still returns it, its
         // cover is readable and there is nothing to explain.
-        CoverCounts c = CoverCounts.tally(List.of("over"), Set.of("over"), Set.of("over"),
+        CoverCounts c = CoverCounts.tally(List.of("over"), Set.of("over"), List.of("over"),
                 Set.of("over"), Set.of("over"), NONE, 0);
 
         assertThat(c.terminal()).isZero();
@@ -72,7 +72,7 @@ class CoverCountsTest {
     void unlistedCountsWhatDiscordHasAndTheListingDoesNot() {
         // Returned minus those actually in the listing. These have no row at all, so there is
         // nowhere to hang a per-event note — the count is the only place it can be said.
-        CoverCounts c = CoverCounts.tally(List.of("a"), NONE, Set.of("a", "ghost1", "ghost2"),
+        CoverCounts c = CoverCounts.tally(List.of("a"), NONE, List.of("a", "ghost1", "ghost2"),
                 Set.of("a"), Set.of("a"), NONE, 0);
 
         assertThat(c.unlisted()).isEqualTo(2);
@@ -82,7 +82,7 @@ class CoverCountsTest {
 
     @Test
     void aListedEventDiscordNeverReturnedIsAbsent() {
-        CoverCounts c = CoverCounts.tally(List.of("a", "gone"), NONE, Set.of("a"), Set.of("a"),
+        CoverCounts c = CoverCounts.tally(List.of("a", "gone"), NONE, List.of("a"), Set.of("a"),
                 Set.of("a"), NONE, 0);
 
         assertThat(c.absent()).isEqualTo(1);
@@ -94,7 +94,7 @@ class CoverCountsTest {
     void recurrenceFailureIsCountedIndependentlyOfTheCover() {
         // A readable cover beside an unparseable recurrence: the event is described, and the
         // missing "Recurs:" line still needs explaining.
-        CoverCounts c = CoverCounts.tally(List.of("a"), NONE, Set.of("a"), Set.of("a"),
+        CoverCounts c = CoverCounts.tally(List.of("a"), NONE, List.of("a"), Set.of("a"),
                 Set.of("a"), Set.of("a"), 0);
 
         assertThat(c.described()).isEqualTo(1);
@@ -106,7 +106,7 @@ class CoverCountsTest {
     void recurrenceFailureForAnEventNotInTheListingIsNotCounted() {
         // The clause says the event "shows no schedule below". An event with no row below cannot
         // support that, which is why this is keyed off the listed ids rather than counted raw.
-        CoverCounts c = CoverCounts.tally(List.of("a"), NONE, Set.of("a", "ghost"), Set.of("a"),
+        CoverCounts c = CoverCounts.tally(List.of("a"), NONE, List.of("a", "ghost"), Set.of("a"),
                 Set.of("a"), Set.of("ghost"), 0);
 
         assertThat(c.recurrenceUnreadable()).isZero();
@@ -119,19 +119,19 @@ class CoverCountsTest {
         // and the clause each of them already has names both. Counting them here as well gave one
         // event two accounts, the second saying its recurrence "could not be read", which reads
         // as a parse failure about an event the line before had just explained never arrived.
-        CoverCounts absent = CoverCounts.tally(List.of("a", "gone"), NONE, Set.of("a"), Set.of("a"),
+        CoverCounts absent = CoverCounts.tally(List.of("a", "gone"), NONE, List.of("a"), Set.of("a"),
                 Set.of("a"), Set.of(), 0);
         assertThat(absent.absent()).isEqualTo(1);
         assertThat(absent.recurrenceUnreadable()).isZero();
 
-        CoverCounts over = CoverCounts.tally(List.of("a", "done"), Set.of("done"), Set.of("a"),
+        CoverCounts over = CoverCounts.tally(List.of("a", "done"), Set.of("done"), List.of("a"),
                 Set.of("a"), Set.of("a"), Set.of(), 0);
         assertThat(over.terminal()).isEqualTo(1);
         assertThat(over.recurrenceUnreadable()).isZero();
 
         // What the count is for: an event Discord did return, whose recurrence would not parse.
         // Its cover may be perfectly readable, so no other clause mentions it.
-        assertThat(CoverCounts.tally(List.of("a"), NONE, Set.of("a"), Set.of("a"), Set.of("a"),
+        assertThat(CoverCounts.tally(List.of("a"), NONE, List.of("a"), Set.of("a"), Set.of("a"),
                 Set.of("a"), 0).recurrenceUnreadable()).isEqualTo(1);
     }
 
@@ -141,7 +141,7 @@ class CoverCountsTest {
         // insertion-ordered upstream: this is a stream over it, and the caveat prints the first
         // ten. An arbitrary order makes which ten a caller acts on differ between runs.
         CoverCounts c = CoverCounts.tally(List.of("a"), NONE,
-                new java.util.LinkedHashSet<>(List.of("a", "g1", "g2", "g3", "g4", "g5")),
+                List.of("a", "g1", "g2", "g3", "g4", "g5"),
                 Set.of("a"), Set.of("a"), NONE, 0);
 
         assertThat(c.unlistedIds()).containsExactly("g1", "g2", "g3", "g4", "g5");
@@ -151,7 +151,7 @@ class CoverCountsTest {
     void unidentifiableEntriesPassThroughUncounted() {
         // They belong to no event in either direction, so they cannot be folded into any of the
         // per-event tallies — the caveat states them on their own.
-        CoverCounts c = CoverCounts.tally(List.of("a"), NONE, Set.of("a"), Set.of("a"),
+        CoverCounts c = CoverCounts.tally(List.of("a"), NONE, List.of("a"), Set.of("a"),
                 Set.of("a"), NONE, 3);
 
         assertThat(c.unidentifiable()).isEqualTo(3);
@@ -166,7 +166,7 @@ class CoverCountsTest {
         CoverCounts c = CoverCounts.tally(
                 List.of("described", "unreadable", "over", "gone"),
                 Set.of("over"),
-                Set.of("described", "unreadable"),
+                List.of("described", "unreadable"),
                 Set.of("described"),
                 Set.of("described"),
                 NONE, 0);

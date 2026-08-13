@@ -3,10 +3,10 @@ package dev.saseq.services;
 import net.dv8tion.jda.api.utils.data.DataArray;
 import net.dv8tion.jda.api.utils.data.DataObject;
 
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -31,24 +31,27 @@ import java.util.Set;
  * @param unidentifiable   entries that belong to no event: not an object, or no usable id
  */
 record LiveEventDetails(Map<String, String> rules, Map<String, String> covers,
-                        Set<String> described, Set<String> returned,
+                        Set<String> described, List<String> returned,
                         Set<String> recurrenceFailed, int unidentifiable) {
 
     LiveEventDetails {
         // Copied, so this is a value rather than five live handles into read()'s working state.
         //
-        // `returned` keeps its order the long way round, because Set.copyOf would destroy it:
-        // the set it returns iterates in an unspecified order that is randomised per JVM run
-        // from an internal salt, precisely so that nothing can depend on it. The caveat names
-        // these ids and prints the first ten of them, so an arbitrary order means the ten a
-        // caller is handed to act on differ between processes.
+        // `returned` is a List because its order is load-bearing: the caveat names these ids
+        // and prints the first ten, so an arbitrary order changes which ten a caller is handed
+        // to act on. A Set says nothing about order — Set.copyOf in particular iterates in an
+        // order randomised per JVM run from an internal salt, precisely so nothing depends on
+        // it — and this file has spent enough rounds moving guarantees out of comments and into
+        // types to leave this one in a comment.
         //
-        // The other two are membership tests only — nothing iterates them — so copyOf is right
-        // there, and cheaper.
+        // read() still collects into a LinkedHashSet, so the ids are deduplicated on the way in
+        // and the List cannot carry the same event twice.
+        //
+        // The other two are membership tests — nothing iterates them — so copyOf is right there.
         rules = Map.copyOf(rules);
         covers = Map.copyOf(covers);
         described = Set.copyOf(described);
-        returned = Collections.unmodifiableSet(new LinkedHashSet<>(returned));
+        returned = List.copyOf(returned);
         recurrenceFailed = Set.copyOf(recurrenceFailed);
     }
 
@@ -148,11 +151,12 @@ record LiveEventDetails(Map<String, String> rules, Map<String, String> covers,
                 covers.put(id, cover);
             }
         }
-        return new LiveEventDetails(rules, covers, described, returned, recurrenceFailed, unidentifiable);
+        return new LiveEventDetails(rules, covers, described, List.copyOf(returned),
+                recurrenceFailed, unidentifiable);
     }
 
     /** Nothing read, so nothing may be claimed from it. */
     static LiveEventDetails unread() {
-        return new LiveEventDetails(Map.of(), Map.of(), Set.of(), Set.of(), Set.of(), 0);
+        return new LiveEventDetails(Map.of(), Map.of(), Set.of(), List.of(), Set.of(), 0);
     }
 }

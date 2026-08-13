@@ -48,18 +48,23 @@ record CoverCounts(int described, int coverless, int unreadable, int absent, int
     /**
      * @param listed         every listed event's id, in listing order
      * @param terminalIds    those of them that have ended or been cancelled
-     * @param returned       ids the live response carried, parseable or not
+     * @param returned       ids the live response carried, parseable or not, in the order it sent
+     *                       them: unlistedIds is derived from this and the caveat prints the
+     *                       first ten of those
      * @param described      ids whose cover was read, whether or not there was one
      * @param withCovers     ids that have a cover
      * @param recurrenceFailed ids whose recurrence would not parse
      * @param unidentifiable entries with no usable id, which belong to no event
      */
     static CoverCounts tally(Collection<String> listed, Set<String> terminalIds,
-                             Set<String> returned, Set<String> described, Set<String> withCovers,
+                             List<String> returned, Set<String> described, Set<String> withCovers,
                              Set<String> recurrenceFailed, int unidentifiable) {
         // Distinct, so a duplicate id in the listing cannot be counted into two buckets at once.
         // Nothing in Collection<String> stops a caller passing one.
         Set<String> unique = new LinkedHashSet<>(listed);
+        // Both shapes of the same ids: the List for the order unlistedIds is promised in, a Set
+        // for the membership tests below, which would otherwise scan it once per listed event.
+        Set<String> returnedIds = new LinkedHashSet<>(returned);
         int describedCount = 0;
         int coverless = 0;
         int unreadable = 0;
@@ -72,7 +77,7 @@ record CoverCounts(int described, int coverless, int unreadable, int absent, int
                 if (!withCovers.contains(id)) {
                     coverless++;
                 }
-            } else if (returned.contains(id)) {
+            } else if (returnedIds.contains(id)) {
                 // Returned, but its details would not parse. Distinct from absent: Discord did
                 // send this event, so blaming a read gap would send the reader to look in the
                 // wrong place.
@@ -100,7 +105,7 @@ record CoverCounts(int described, int coverless, int unreadable, int absent, int
         // not. A set difference rather than a subtraction of two counts, which is both the ids the
         // caveat needs and a shape that cannot render "Discord returned -1 events" however the
         // caller's collections overlap.
-        List<String> unlistedIds = returned.stream().filter(id -> !unique.contains(id)).toList();
+        List<String> unlistedIds = returnedIds.stream().filter(id -> !unique.contains(id)).toList();
         return new CoverCounts(describedCount, coverless, unreadable, absent, terminal, unlistedIds,
                 unidentifiable, recurrenceUnreadable);
     }

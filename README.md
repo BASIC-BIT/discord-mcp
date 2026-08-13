@@ -243,13 +243,11 @@ permission-gated channel. Anything that does reach a cover is more durable and m
 than the same bytes posted to a channel. Deployments that filter tools by name do not
 acquire this one at all until they list it.
 
-A separate `DISCORD_MCP_COVER_ROOT` would have made the upgrade inert by default, which is
-the one thing reusing `DISCORD_MCP_FILE_ROOT` gives up. It was not added because the grant a
-second name would describe is the same grant — read files under this root, send them to
-Discord — and two names invite pointing them at two directories, which is one more readable
-root to reason about for a distinction the filesystem does not make. If you want the upgrade
-to be inert on your deployment, refuse the tool by name until you have decided: that control
-already exists and needs no new variable.
+If you want the upgrade to be inert on your deployment, refuse the tool by name until you
+have decided — that control already exists and needs no new variable. (A separate
+`DISCORD_MCP_COVER_ROOT` was considered and not added; the reasoning is in the pull request
+that introduced the tool, not here, because it is a decision record rather than something you
+have to act on.)
 
 **Compose deployments, specifically:** `docker-compose.yml` did not declare
 `DISCORD_MCP_FILE_ROOT` before, so a value in `.env` never reached the container and local

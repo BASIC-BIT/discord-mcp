@@ -89,6 +89,10 @@ public class ScheduledEventService {
      * <p>Tripping it is an ordinary outcome rather than an unusual one: a source poster is
      * commonly a full-resolution square or portrait master that has to be cropped to the display
      * shape anyway, and those routinely exceed it.
+     *
+     * <p>Also spelled out as "Max 5MB" in this tool's {@code @Tool} description, where it reads
+     * as a fact about Discord rather than about this server. Raising this constant means editing
+     * that string in the same commit, or the model is steered by a ceiling that no longer exists.
      */
     private static final int MAX_COVER_BYTES = 5 * 1024 * 1024;
 
@@ -1426,7 +1430,7 @@ public class ScheduledEventService {
         Map<String, String> rules = details.rules();
         Map<String, String> covers = details.covers();
         Set<String> described = details.described();
-        Set<String> returned = details.returned();
+        List<String> returned = details.returned();
         Set<String> recurrenceFailed = details.recurrenceFailed();
         int unidentifiable = details.unidentifiable();
 
