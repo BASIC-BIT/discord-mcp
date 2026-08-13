@@ -904,6 +904,11 @@ class ScheduledEventServiceTest {
                 false, null, "/tmp/poster.png", null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("needs an upload root");
+        // The other half of the same precondition: a null imageUrl reaches URI.create inside the
+        // guard and returns an NPE, not the IllegalArgumentException every refusal here promises.
+        assertThatThrownBy(() -> ScheduledEventService.readCoverSource(true, null, null, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("imageUrl was not supplied");
     }
 
     @Test

@@ -1059,8 +1059,10 @@ public class ScheduledEventService {
      */
     static String coverCaveat(CoverCounts c, boolean rawKnown) {
         if (!rawKnown) {
-            return "\n(Recurrence and cover images could not be read, so no event below is marked as"
-                    + " recurring or as having a cover even if it is.)";
+            // "In this list", not "below". An empty cache whose live read also failed reaches
+            // here, and that listing has no rows under the caveat to point at.
+            return "\n(Recurrence and cover images could not be read, so no event in this list is"
+                    + " marked as recurring or as having a cover even if it is.)";
         }
         StringBuilder sb = new StringBuilder();
         if (c.coverless() > 0) {
@@ -1300,6 +1302,12 @@ public class ScheduledEventService {
         if (!hasUrl && root == null) {
             throw new IllegalArgumentException(
                     "filePath needs an upload root, and none was resolved.");
+        }
+        // Both halves, not one. A null imageUrl reaches URI.create inside the guard and comes
+        // back as an NPE, which is not the IllegalArgumentException every other refusal here
+        // promises — and the argument for checking the root applies to this exactly as well.
+        if (hasUrl && imageUrl == null) {
+            throw new IllegalArgumentException("imageUrl was not supplied.");
         }
         String source;
         byte[] bytes;

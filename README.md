@@ -228,8 +228,8 @@ substitute for one.
 
 **On upgrading:** a deployment that already set this for `send_file` gains
 `set_guild_scheduled_event_image` when the jar is updated, with no config change. That is a
-narrower case than the fallback `DISCORD_MCP_DOWNLOAD_ROOT` refuses below, for two reasons.
-The filesystem grant is identical — same root, same read, no new directory.
+narrower case than the fallback `DISCORD_MCP_DOWNLOAD_ROOT` refuses below: the filesystem
+grant is identical — same root, same read, no new directory.
 
 **What makes it acceptable is the root holding only what you put there**, which is the rule
 at the top of this section and the one the rest of it defends. The format check is a second
