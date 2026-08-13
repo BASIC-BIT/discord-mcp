@@ -775,12 +775,20 @@ public class ScheduledEventService {
         // to a host of its choosing without naming a real event. send_file resolves its channel
         // first and does not offer that.
         //
-        // Kept, but the reason is narrower than "a caller can name a real event as cheaply as a
-        // fake one" — that holds only where list_guild_scheduled_events is granted alongside this
-        // tool, which is a deployment's choice and not this file's to assume. What holds without
-        // it: RemoteFetchGuard bounds the request to a public host with no redirects and 5 MB, so
-        // what is bought by reordering is bandwidth on an error path, against one extra Discord
-        // request on the common mistake, which is the wrong file rather than the wrong event.
+        // And it is not only bandwidth. RemoteFetchGuard's refusal names the upstream status
+        // ("server returned HTTP 404"), so what the caller gets back is reachability and a status
+        // code for a host of its choosing — an answer, not just a request. send_file offers the
+        // same primitive but needs a channel that resolves; this needs a guild the bot is in and
+        // any 17-to-19-digit number.
+        //
+        // Kept, and the reason is not that reordering is inconvenient. It is that reordering
+        // removes a precondition rather than the primitive: the same caller can list events and
+        // use a real id, or simply set a cover on a real event, and RemoteFetchGuard already
+        // refuses internal addresses, so what remains is a probe of the public internet from this
+        // host. Against that, reordering costs a Discord request on the ordinary mistake — the
+        // wrong file, not the wrong event. A maintainer who weighs those differently should move
+        // the event read above this block; the note is here so that is a decision and not a
+        // discovery.
         String source;
         byte[] bytes;
         try {
@@ -1506,7 +1514,12 @@ public class ScheduledEventService {
         // rare; on that branch it is not rare, and it is not news either.
         Set<String> undescribed = !rawKnown ? Set.of() : events.stream()
                 .filter(e -> !described.contains(e.getId()))
-                .filter(e -> !isTerminal(e))
+                // Terminal AND missing from the live read, which is the case the terminal clause
+                // covers. Status alone is the wrong test: CoverCounts counts a finished event
+                // that Discord did return but could not parse as `unreadable`, so the caveat says
+                // its cover is unknown while its row said nothing — the mismatch this marker
+                // exists to remove, reappearing on the one status that skipped the check.
+                .filter(e -> !(isTerminal(e) && !returned.contains(e.getId())))
                 .map(ScheduledEvent::getId)
                 .collect(Collectors.toSet());
         String rows = events.stream()

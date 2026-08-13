@@ -851,6 +851,20 @@ class ScheduledEventServiceTest {
     }
 
     @Test
+    void aFinishedEventDiscordStillReturnedIsMarkedLikeAnyOther() {
+        // The marker skips terminal events because the live read stops carrying them, not because
+        // their status makes their cover knowable. A finished event Discord did return, whose
+        // details would not parse, is counted as unreadable by the caveat — so keying the skip off
+        // status alone put the mismatch back on the one bucket that slipped through.
+        ScheduledEvent over = liveEvent("11", "Community Night");
+        when(over.getStatus()).thenReturn(ScheduledEvent.Status.COMPLETED);
+
+        assertThat(ScheduledEventService.renderEvent(
+                over, Map.of(), Map.of(), Set.of("11"), Set.of(), false))
+                .contains("• Cover image: unknown");
+    }
+
+    @Test
     void aFailedLiveReadDoesNotMarkEveryRowUnknown() {
         // The per-row marker earns its line by being rare. When the live read fails nothing is
         // described, so every non-terminal event qualifies and an uncapped listing gets the
