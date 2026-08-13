@@ -39,8 +39,20 @@ class FileRootStartupCheckTest {
         logger.detachAppender(appender);
     }
 
-    private String warnings() {
+    /** Everything logged, at any level. */
+    private String logged() {
         return appender.list.stream().map(ILoggingEvent::getFormattedMessage)
+                .reduce("", (a, b) -> a + b);
+    }
+
+    /**
+     * Only the warnings. A correctly configured upload root logs an INFO line saying which tools
+     * read it, so "this deployment is fine" now means no warning rather than no output at all.
+     */
+    private String warnings() {
+        return appender.list.stream()
+                .filter(e -> e.getLevel() == ch.qos.logback.classic.Level.WARN)
+                .map(ILoggingEvent::getFormattedMessage)
                 .reduce("", (a, b) -> a + b);
     }
 
@@ -70,13 +82,31 @@ class FileRootStartupCheckTest {
     }
 
     @Test
+    void anUploadRootSaysWhoReadsIt() {
+        // The one thing that changes for a deployment on a jar bump: the root it set for
+        // send_file gains a second reader, with no config change and nothing to notice. The
+        // README argues that case and is the document nobody opens on a version bump.
+        check.fileRoot = System.getProperty("user.dir");
+        check.downloadRoot = "";
+
+        check.run(null);
+
+        assertThat(logged())
+                .contains("readable by send_file and by set_guild_scheduled_event_image")
+                .contains("permanent unauthenticated CDN URL")
+                .contains("Refuse the tool by name");
+        assertThat(appender.list).allSatisfy(e ->
+                assertThat(e.getLevel().toString()).isEqualTo("INFO"));
+    }
+
+    @Test
     void separateRootsAreSilent(@TempDir Path dir) throws IOException {
         check.fileRoot = Files.createDirectory(dir.resolve("uploads")).toString();
         check.downloadRoot = Files.createDirectory(dir.resolve("downloads")).toString();
 
         check.run(null);
 
-        assertThat(appender.list).isEmpty();
+        assertThat(warnings()).isEmpty();
     }
 
     @Test
@@ -88,7 +118,7 @@ class FileRootStartupCheckTest {
 
         check.run(null);
 
-        assertThat(appender.list).isEmpty();
+        assertThat(warnings()).isEmpty();
     }
 
     @Test

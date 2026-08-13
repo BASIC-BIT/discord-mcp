@@ -90,11 +90,14 @@ public class ScheduledEventService {
      * commonly a full-resolution square or portrait master that has to be cropped to the display
      * shape anyway, and those routinely exceed it.
      *
-     * <p>Also spelled out as "Max 5MB" in this tool's {@code @Tool} description, where it reads
-     * as a fact about Discord rather than about this server. Raising this constant means editing
-     * that string in the same commit, or the model is steered by a ceiling that no longer exists.
+     * <p>The {@code @Tool} description states it too, where it reads as a fact about Discord
+     * rather than about this server. It is concatenated from {@link #MAX_COVER_MB} rather than
+     * written out, so the two cannot disagree: an annotation value takes a constant expression,
+     * and the alternative was a note asking whoever raises this to remember a string.
      */
-    private static final int MAX_COVER_BYTES = 5 * 1024 * 1024;
+    private static final int MAX_COVER_MB = 5;
+
+    private static final int MAX_COVER_BYTES = MAX_COVER_MB * 1024 * 1024;
 
     public ScheduledEventService(JDA jda) {
         this.jda = jda;
@@ -719,7 +722,7 @@ public class ScheduledEventService {
      * README argues against. A tool whose safe configuration is the inconvenient one gets
      * configured unsafely.
      */
-    @Tool(name = "set_guild_scheduled_event_image", description = "Replace a scheduled event's cover image with a PNG or JPEG, from a direct imageUrl OR a local filePath under DISCORD_MCP_FILE_ROOT. Prefer imageUrl: a poster already posted to Discord has a CDN URL, and using it needs no local file at all. Discord displays covers at 5:2 (800x320 recommended) and crops anything else, so crop to 5:2 yourself to control what is kept. Max 5MB. Animation is never shown, so an animated GIF is refused and an animated PNG plays as a still. On a recurring event the effect is unverified: editing one is known to change a single occurrence, so check the series after setting a cover on it.")
+    @Tool(name = "set_guild_scheduled_event_image", description = "Replace a scheduled event's cover image with a PNG or JPEG, from a direct imageUrl OR a local filePath under DISCORD_MCP_FILE_ROOT. Prefer imageUrl: a poster already posted to Discord has a CDN URL, and using it needs no local file at all. Discord displays covers at 5:2 (800x320 recommended) and crops anything else, so crop to 5:2 yourself to control what is kept. Max " + MAX_COVER_MB + "MB. Animation is never shown, so an animated GIF is refused and an animated PNG plays as a still. On a recurring event the effect is unverified: editing one is known to change a single occurrence, so check the series after setting a cover on it.")
     public String setScheduledEventImage(
             @ToolParam(description = "Discord server ID", required = false) String guildId,
             @ToolParam(description = "ID of the scheduled event") String eventId,

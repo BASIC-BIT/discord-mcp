@@ -47,6 +47,22 @@ public class FileRootStartupCheck implements ApplicationRunner {
                 ? resolved(fileRoot, "DISCORD_MCP_FILE_ROOT") : null;
         LocalFileGuard.Root downloads = isSet(downloadRoot)
                 ? resolved(downloadRoot, "DISCORD_MCP_DOWNLOAD_ROOT") : null;
+        if (uploads != null) {
+            // Who reads this root, said on every boot. A deployment that set the variable for
+            // send_file acquires a second reader of it the moment the jar is updated, with no
+            // config change and nothing to notice — and the README, which argues that case at
+            // length, is the document nobody opens on a version bump. Phrased as what is true
+            // now rather than as what changed, since a fresh install did not change anything.
+            //
+            // info, not warn: this is the configuration working as documented. The warnings
+            // below are for configurations that are not.
+            log.info("DISCORD_MCP_FILE_ROOT ({}) is readable by send_file and by"
+                            + " set_guild_scheduled_event_image. A cover is gated to PNG/JPEG"
+                            + " signatures, and it lands on a permanent unauthenticated CDN URL"
+                            + " rather than in a permission-gated channel. Refuse the tool by name"
+                            + " if that is not wanted.",
+                    uploads.path());
+        }
         if (uploads == null || downloads == null) {
             // Unset, or unusable and already reported. Either way there is nothing to compare
             // against, and half a comparison establishes nothing about overlap.

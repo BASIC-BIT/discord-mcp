@@ -46,8 +46,10 @@ class ScheduledEventServiceTest {
      * message is an artifact of {@code RestActionImpl} casting its {@code JDA} argument to
      * {@code JDAImpl}, which a Mockito proxy is not. What those tests establish is the ordering
      * in their names — everything before the event read ran, and the call stopped there. If a JDA
-     * upgrade ever accepts the interface, they stop testing ordering and start attempting real
-     * requests, and the failure is a hang rather than a clean red.
+     * upgrade ever accepts the interface, they stop asserting that and start asserting whatever
+     * the next failure is: {@code getRequester()} on a Mockito proxy returns null, so it would be
+     * an NPE caught by the same handler, not a hang and not a request that leaves the machine.
+     * Either way the message is not what the test name claims to be about.
      */
     private static final String GUILD = "480695542155051010";
     private static final String EVENT = "1385996249957662770";

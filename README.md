@@ -634,7 +634,7 @@ mvn -Dtest=DiscordLiveIntegrationTest test
 - [`edit_guild_scheduled_event`](): Modify event details or change its status (start, complete, cancel), including the recurrence rule
 - [`set_guild_scheduled_event_image`](): Replace an event's cover image from a direct `imageUrl` or a local `filePath` (max 5MB, no animation; covers display at 5:2, so crop first). `imageUrl` needs no filesystem access; `filePath` requires [`DISCORD_MCP_FILE_ROOT`](#-security-notes). Separate from `edit_guild_scheduled_event` so a deployment can allow event edits without granting a local-file read
 - [`delete_guild_scheduled_event`](): Permanently delete a scheduled event
-- [`list_guild_scheduled_events`](): List all active and scheduled events on the server, showing which ones recur and their cover image URL
+- [`list_guild_scheduled_events`](): List all active and scheduled events on the server, showing which ones recur and their cover image URL. Spends one API call per invocation, including on a server with no events — an empty cache is not evidence there are none
 
 > **Recurring events.** JDA has no representation for Discord's `recurrence_rule`, so these tools
 > send that one field through a custom JDA route — same bot token, same rate limiter. Pass
