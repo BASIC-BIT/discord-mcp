@@ -18,6 +18,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -547,12 +548,12 @@ class ScheduledEventServiceTest {
         Map<String, String> covers = Map.of(
                 "11", "https://cdn.discordapp.com/guild-events/11/aaa.png");
 
-        assertThat(ScheduledEventService.renderEvent(night, rules, covers, false))
+        assertThat(ScheduledEventService.renderEvent(night, rules, covers, Set.of(), false))
                 .contains("Community Night")
                 .contains("• Cover image: https://cdn.discordapp.com/guild-events/11/aaa.png")
                 .doesNotContain("Recurs:")
                 .doesNotContain("Interested:");
-        assertThat(ScheduledEventService.renderEvent(chess, rules, covers, true))
+        assertThat(ScheduledEventService.renderEvent(chess, rules, covers, Set.of(), true))
                 .contains("Chess Club")
                 .contains("• Recurs: Weekly on Monday")
                 .doesNotContain("Cover image")
@@ -564,9 +565,32 @@ class ScheduledEventServiceTest {
         // A per-event "no cover image" would be a line of nothing on every coverless event in a
         // listing with no result cap; the header caveat carries that fact once instead.
         assertThat(ScheduledEventService.renderEvent(
-                liveEvent("11", "Community Night"), Map.of(), Map.of(), false))
+                liveEvent("11", "Community Night"), Map.of(), Map.of(), Set.of(), false))
                 .doesNotContain("Cover image")
                 .doesNotContain("Recurs:");
+    }
+
+    @Test
+    void anEventWhoseCoverCouldNotBeReadDoesNotLookLikeOneWithoutACover() {
+        // Nine coverless events beside one whose image field would not parse rendered ten
+        // identical rows: the header counted them separately and no row said which was which,
+        // on exactly the question a caller answers when it picks an event to upload a cover to.
+        ScheduledEvent unreadable = liveEvent("11", "Community Night");
+        ScheduledEvent coverless = liveEvent("22", "Chess Club");
+
+        assertThat(ScheduledEventService.renderEvent(
+                unreadable, Map.of(), Map.of(), Set.of("11"), false))
+                .contains("• Cover image: could not be read")
+                .contains("unknown, not absent");
+        assertThat(ScheduledEventService.renderEvent(
+                coverless, Map.of(), Map.of(), Set.of("11"), false))
+                .doesNotContain("Cover image");
+        // A readable cover wins: the marker is for rows that would otherwise say nothing.
+        assertThat(ScheduledEventService.renderEvent(unreadable, Map.of(),
+                Map.of("11", "https://cdn.discordapp.com/guild-events/11/aaa.png"),
+                Set.of("11"), false))
+                .contains("• Cover image: https://cdn.discordapp.com/guild-events/11/aaa.png")
+                .doesNotContain("could not be read");
     }
 
     private static ScheduledEvent liveEvent(String id, String name) {

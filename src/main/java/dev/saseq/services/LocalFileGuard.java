@@ -82,11 +82,16 @@ public final class LocalFileGuard {
         } catch (IOException | InvalidPathException e) {
             // InvalidPathException too: a configured value the OS cannot parse at all should read
             // as an unusable setting, not escape as an unchecked exception from Paths.get.
+            //
+            // The variable, not its value. These messages go back to the model and often onward
+            // into a channel, and readBounded below refuses to print an absolute path for exactly
+            // that reason — one file cannot hold both answers. The operator set this value, so
+            // naming the variable costs them nothing to act on.
             throw new IllegalArgumentException(
-                    variableName + " does not exist or cannot be resolved: " + configured);
+                    variableName + " does not exist or cannot be resolved");
         }
         if (!Files.isDirectory(root)) {
-            throw new IllegalArgumentException(variableName + " is not a directory: " + configured);
+            throw new IllegalArgumentException(variableName + " is not a directory");
         }
         // A filesystem root has no name components. Accepting "/" would confine
         // nothing at all and silently re-open the whole vulnerability.

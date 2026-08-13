@@ -1468,8 +1468,15 @@ public class ScheduledEventService {
         // across seven clauses; the line above it should not be the one that does not.
         String header = "Retrieved " + events.size()
                 + (events.size() == 1 ? " scheduled event:" : " scheduled events:") + caveat;
+        // Returned, but its details would not parse. Absent and terminal events cannot appear
+        // here — they are not in `returned` at all — which is right: their own caveat clause
+        // already says nothing below was read for them, and a marker on every past event is the
+        // line of nothing the cover line exists to avoid.
+        Set<String> coverUnreadable = returned.stream()
+                .filter(id -> !described.contains(id))
+                .collect(Collectors.toSet());
         String rows = events.stream()
-                .map(e -> renderEvent(e, rules, covers, includeUserCount))
+                .map(e -> renderEvent(e, rules, covers, coverUnreadable, includeUserCount))
                 .collect(Collectors.joining("\n"));
         // The separator only when there is something to separate. An empty cache whose live read
         // also failed reaches here — it cannot claim "none" — and appending the newline anyway
@@ -1487,7 +1494,8 @@ public class ScheduledEventService {
      * {@code ScheduledEvent} — unlike {@code RestActionImpl} — is something a test can mock.
      */
     static String renderEvent(ScheduledEvent e, Map<String, String> rules,
-                              Map<String, String> covers, boolean includeUserCount) {
+                              Map<String, String> covers, Set<String> coverUnreadable,
+                              boolean includeUserCount) {
         StringBuilder sb = new StringBuilder();
         sb.append("- **").append(e.getName()).append("** (ID: ").append(e.getId()).append(")\n");
         sb.append("  • Type: ").append(e.getType()).append(" | Status: ").append(e.getStatus()).append("\n");
@@ -1498,8 +1506,18 @@ public class ScheduledEventService {
         // Only the URL, and only when there is one. A per-event "none" would be a line of nothing
         // per coverless event on a listing with no result cap; the header count carries that once
         // instead. The recurrence line above omits itself for the same reason.
+        //
+        // An event whose cover could not be read is the exception, and it does get a line. Without
+        // one it renders identically to an event known to have no cover, so nine coverless events
+        // beside one unreadable produce ten identical rows and the header's counts cannot say
+        // which is which — on exactly the question a caller answers when it picks an event to
+        // upload a cover to. Rare by construction, so it costs an ordinary listing nothing.
         String cover = covers.get(e.getId());
-        if (cover != null) sb.append("\n  • Cover image: ").append(cover);
+        if (cover != null) {
+            sb.append("\n  • Cover image: ").append(cover);
+        } else if (coverUnreadable.contains(e.getId())) {
+            sb.append("\n  • Cover image: could not be read — unknown, not absent");
+        }
         if (includeUserCount) sb.append("\n  • Interested: ").append(e.getInterestedUserCount()).append(" users");
         return sb.toString();
     }
