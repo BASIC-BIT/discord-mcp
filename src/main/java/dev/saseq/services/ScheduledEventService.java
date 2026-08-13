@@ -529,7 +529,11 @@ public class ScheduledEventService {
         return "Created scheduled event:\n" + formatted;
     }
 
-    @Tool(name = "edit_guild_scheduled_event", description = "Modify details of an existing event or change its status (start, complete, cancel)")
+    // The pointer exists because the split is not obvious from here: a caller asked to change an
+    // event's picture looks for it on the tool that edits events, and finding nothing concludes
+    // the server cannot do it. Naming the other tool is cheaper than the alternative, which is
+    // either a wrong answer or the two tools merged.
+    @Tool(name = "edit_guild_scheduled_event", description = "Modify details of an existing event or change its status (start, complete, cancel). The cover image is not one of these fields: use set_guild_scheduled_event_image for that.")
     public String editScheduledEvent(
             @ToolParam(description = "Discord server ID", required = false) String guildId,
             @ToolParam(description = "ID of the scheduled event") String eventId,
