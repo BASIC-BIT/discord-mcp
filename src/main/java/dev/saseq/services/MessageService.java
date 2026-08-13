@@ -32,6 +32,11 @@ public class MessageService {
     /**
      * The only directory {@code send_file} may read local paths from. Unset disables local
      * paths entirely. Package-private so tests can set it without Spring.
+     *
+     * <p>Not the only tool that reads it: {@code set_guild_scheduled_event_image} binds the same
+     * {@code DISCORD_MCP_FILE_ROOT}. Said here because this is the field a maintainer reaches
+     * first when they follow the variable in from {@code send_file}, and the sole-reader claim
+     * this doc used to make is exactly the one that stopped being true.
      */
     @Value("${DISCORD_MCP_FILE_ROOT:}")
     String fileRoot;

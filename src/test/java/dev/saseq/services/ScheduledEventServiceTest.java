@@ -896,6 +896,26 @@ class ScheduledEventServiceTest {
     }
 
     @Test
+    void aSourceRefusalGainsTheReassuranceItsSiblingsCarry() {
+        // Every refusal from the event read ends by saying nothing was changed, and the source
+        // refusals did not — leaving the one stage that now runs after a Discord request silent
+        // on the question its siblings answer. Asserted here rather than through the tool: the
+        // event read comes first, so a mocked JDA stops the call before a source refusal exists.
+        //
+        // Both house styles, because the two guards differ: appending blindly gives either a
+        // run-on or a double stop.
+        assertThat(ScheduledEventService.andNothingChanged(
+                "filePath is not a readable file inside the allowed upload directory"))
+                .isEqualTo("filePath is not a readable file inside the allowed upload directory."
+                        + " Nothing was changed.");
+        assertThat(ScheduledEventService.andNothingChanged("Cover image exceeds the 5 MB limit."))
+                .isEqualTo("Cover image exceeds the 5 MB limit. Nothing was changed.");
+        // A guard that threw without a message must not produce " Nothing was changed."
+        assertThat(ScheduledEventService.andNothingChanged(null))
+                .isEqualTo("Nothing was changed.");
+    }
+
+    @Test
     void readingASourceByPathNeedsARootRatherThanFailingOnOne() {
         // The pairing the tool guarantees, asserted rather than assumed: this method is
         // package-private so callers other than the tool can reach it, and a null root used to

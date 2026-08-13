@@ -821,7 +821,15 @@ public class ScheduledEventService {
         // refusals are identical — but the outbound request they make now needs an event that
         // exists. Extracted so those refusals stay testable: reaching them through the tool means
         // getting past the event read, and a mocked JDA cannot serve one.
-        CoverSource read = readCoverSource(hasUrl, imageUrl, filePath, root);
+        // Every refusal from the event read above ends by saying nothing was changed, and these
+        // did not — leaving the one stage that now runs after a Discord request silent on the
+        // question its siblings all answer. Nothing here is downstream of the write.
+        CoverSource read;
+        try {
+            read = readCoverSource(hasUrl, imageUrl, filePath, root);
+        } catch (IllegalArgumentException refused) {
+            throw new IllegalArgumentException(andNothingChanged(refused.getMessage()), refused);
+        }
         byte[] bytes = read.bytes();
         String source = read.name();
         Icon.IconType type = read.type();
@@ -1284,6 +1292,24 @@ public class ScheduledEventService {
         // Discord-side change, would otherwise produce a URL that 404s everywhere it is printed.
         return String.format(ScheduledEvent.IMAGE_URL, eventId, hash,
                 hash.startsWith("a_") ? "gif" : "png");
+    }
+
+    /**
+     * A refusal with the reassurance its siblings carry, punctuated to match whatever it says.
+     *
+     * <p>These messages come from two guards with different house styles — one ends its sentences
+     * and one does not — so appending blindly produces either a run-on or a double stop.
+     *
+     * <p>Package-private because it cannot be reached through the tool: the event read runs first
+     * and a mocked JDA cannot serve it, so a test driving setScheduledEventImage stops before any
+     * source refusal exists to decorate.
+     */
+    static String andNothingChanged(String refusal) {
+        if (refusal == null || refusal.isBlank()) {
+            return "Nothing was changed.";
+        }
+        return refusal.endsWith(".") ? refusal + " Nothing was changed."
+                : refusal + ". Nothing was changed.";
     }
 
     /** Bytes to send, the name to report them by, and the format they turned out to be. */
