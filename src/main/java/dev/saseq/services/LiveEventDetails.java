@@ -3,6 +3,7 @@ package dev.saseq.services;
 import net.dv8tion.jda.api.utils.data.DataArray;
 import net.dv8tion.jda.api.utils.data.DataObject;
 
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -24,7 +25,8 @@ import java.util.Set;
  * @param rules            id → rendered recurrence, for events that have one and could be read
  * @param covers           id → cover URL, for events that have one
  * @param described        ids whose cover was read, whether or not there was a cover
- * @param returned         every id Discord returned, parseable details or not
+ * @param returned         every id Discord returned, parseable details or not, in the order it
+ *                         returned them — the caveat names these and prints only the first ten
  * @param recurrenceFailed ids whose recurrence would not parse or render
  * @param unidentifiable   entries that belong to no event: not an object, or no usable id
  */
@@ -34,13 +36,19 @@ record LiveEventDetails(Map<String, String> rules, Map<String, String> covers,
 
     LiveEventDetails {
         // Copied, so this is a value rather than five live handles into read()'s working state.
-        // Set.copyOf preserves the iteration order it is given, which matters for `returned`:
-        // the caveat names those ids, and the order Discord returned them in is the only order
-        // they have any claim to.
+        //
+        // `returned` keeps its order the long way round, because Set.copyOf would destroy it:
+        // the set it returns iterates in an unspecified order that is randomised per JVM run
+        // from an internal salt, precisely so that nothing can depend on it. The caveat names
+        // these ids and prints the first ten of them, so an arbitrary order means the ten a
+        // caller is handed to act on differ between processes.
+        //
+        // The other two are membership tests only — nothing iterates them — so copyOf is right
+        // there, and cheaper.
         rules = Map.copyOf(rules);
         covers = Map.copyOf(covers);
         described = Set.copyOf(described);
-        returned = Set.copyOf(returned);
+        returned = Collections.unmodifiableSet(new LinkedHashSet<>(returned));
         recurrenceFailed = Set.copyOf(recurrenceFailed);
     }
 

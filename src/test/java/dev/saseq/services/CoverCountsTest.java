@@ -136,6 +136,18 @@ class CoverCountsTest {
     }
 
     @Test
+    void unlistedIdsComeOutInTheOrderTheyWentIn() {
+        // The property the caveat's "(IDs: …)" clause rests on, and the reason `returned` is
+        // insertion-ordered upstream: this is a stream over it, and the caveat prints the first
+        // ten. An arbitrary order makes which ten a caller acts on differ between runs.
+        CoverCounts c = CoverCounts.tally(List.of("a"), NONE,
+                new java.util.LinkedHashSet<>(List.of("a", "g1", "g2", "g3", "g4", "g5")),
+                Set.of("a"), Set.of("a"), NONE, 0);
+
+        assertThat(c.unlistedIds()).containsExactly("g1", "g2", "g3", "g4", "g5");
+    }
+
+    @Test
     void unidentifiableEntriesPassThroughUncounted() {
         // They belong to no event in either direction, so they cannot be folded into any of the
         // per-event tallies — the caveat states them on their own.

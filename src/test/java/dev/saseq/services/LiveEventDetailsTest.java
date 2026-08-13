@@ -174,6 +174,19 @@ class LiveEventDetailsTest {
     }
 
     @Test
+    void returnedIdsKeepTheOrderDiscordSentThem() {
+        // containsExactly, not containsExactlyInAnyOrder: the caveat names these ids and prints
+        // only the first ten of them, so which ten a caller is handed to act on depends on this
+        // order holding. Set.copyOf iterates in an order randomised per JVM run from an internal
+        // salt — five ids make an accidental pass a 1-in-120 shot, so this is the assertion that
+        // catches it rather than one that gets lucky.
+        LiveEventDetails d = LiveEventDetails.read(live(
+                event("51"), event("52"), event("53"), event("54"), event("55")));
+
+        assertThat(d.returned()).containsExactly("51", "52", "53", "54", "55");
+    }
+
+    @Test
     void anUnreadResponseClaimsNothing() {
         LiveEventDetails d = LiveEventDetails.unread();
 
