@@ -151,6 +151,9 @@ record LiveEventDetails(Map<String, String> rules, Map<String, String> covers,
                 covers.put(id, cover);
             }
         }
+        // List.copyOf converts here — `returned` is the LinkedHashSet this method deduplicates
+        // into, and the record component is a List — and defends in the constructor against a
+        // caller passing a mutable one. The two calls are not the same copy.
         return new LiveEventDetails(rules, covers, described, List.copyOf(returned),
                 recurrenceFailed, unidentifiable);
     }

@@ -548,12 +548,12 @@ class ScheduledEventServiceTest {
         Map<String, String> covers = Map.of(
                 "11", "https://cdn.discordapp.com/guild-events/11/aaa.png");
 
-        assertThat(ScheduledEventService.renderEvent(night, rules, covers, Set.of(), false))
+        assertThat(ScheduledEventService.renderEvent(night, rules, covers, Set.of(), Set.of(), false))
                 .contains("Community Night")
                 .contains("• Cover image: https://cdn.discordapp.com/guild-events/11/aaa.png")
                 .doesNotContain("Recurs:")
                 .doesNotContain("Interested:");
-        assertThat(ScheduledEventService.renderEvent(chess, rules, covers, Set.of(), true))
+        assertThat(ScheduledEventService.renderEvent(chess, rules, covers, Set.of(), Set.of(), true))
                 .contains("Chess Club")
                 .contains("• Recurs: Weekly on Monday")
                 .doesNotContain("Cover image")
@@ -565,7 +565,7 @@ class ScheduledEventServiceTest {
         // A per-event "no cover image" would be a line of nothing on every coverless event in a
         // listing with no result cap; the header caveat carries that fact once instead.
         assertThat(ScheduledEventService.renderEvent(
-                liveEvent("11", "Community Night"), Map.of(), Map.of(), Set.of(), false))
+                liveEvent("11", "Community Night"), Map.of(), Map.of(), Set.of(), Set.of(), false))
                 .doesNotContain("Cover image")
                 .doesNotContain("Recurs:");
     }
@@ -579,17 +579,39 @@ class ScheduledEventServiceTest {
         ScheduledEvent coverless = liveEvent("22", "Chess Club");
 
         assertThat(ScheduledEventService.renderEvent(
-                unreadable, Map.of(), Map.of(), Set.of("11"), false))
-                .contains("• Cover image: could not be read")
-                .contains("unknown, not absent");
+                unreadable, Map.of(), Map.of(), Set.of("11"), Set.of(), false))
+                .contains("• Cover image: unknown")
+                .contains("the live read did not describe this event");
         assertThat(ScheduledEventService.renderEvent(
-                coverless, Map.of(), Map.of(), Set.of("11"), false))
+                coverless, Map.of(), Map.of(), Set.of("11"), Set.of(), false))
                 .doesNotContain("Cover image");
         // A readable cover wins: the marker is for rows that would otherwise say nothing.
         assertThat(ScheduledEventService.renderEvent(unreadable, Map.of(),
                 Map.of("11", "https://cdn.discordapp.com/guild-events/11/aaa.png"),
-                Set.of("11"), false))
+                Set.of("11"), Set.of(), false))
                 .contains("• Cover image: https://cdn.discordapp.com/guild-events/11/aaa.png")
+                .doesNotContain("unknown");
+    }
+
+    @Test
+    void anUnreadableRecurrenceDoesNotLookLikeAOneOff() {
+        // The same loss on the other field, and the one this listing's recurrence read exists to
+        // prevent: a weekly series whose rule would not parse renders exactly like a one-off, and
+        // gets edited as though it were one. The caveat counts it; only the row can name it.
+        ScheduledEvent unknown = liveEvent("11", "Community Night");
+        ScheduledEvent oneOff = liveEvent("22", "Chess Club");
+
+        assertThat(ScheduledEventService.renderEvent(
+                unknown, Map.of(), Map.of(), Set.of(), Set.of("11"), false))
+                .contains("• Recurs: could not be read")
+                .contains("may be a series");
+        assertThat(ScheduledEventService.renderEvent(
+                oneOff, Map.of(), Map.of(), Set.of(), Set.of("11"), false))
+                .doesNotContain("Recurs:");
+        // A rule that was read wins: the marker is for rows that would otherwise say nothing.
+        assertThat(ScheduledEventService.renderEvent(
+                unknown, Map.of("11", "Weekly on Monday"), Map.of(), Set.of(), Set.of("11"), false))
+                .contains("• Recurs: Weekly on Monday")
                 .doesNotContain("could not be read");
     }
 

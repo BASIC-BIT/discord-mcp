@@ -1078,6 +1078,10 @@ public class ScheduledEventService {
             // Kept rather than suppressed: this line is why a stale or absent cover stops being
             // invisible, which is the whole reason the listing reads them. The absolute phrasing
             // needs a read that saw every listed event, or it claims over ones it never saw.
+            // unlisted() is deliberately not in this condition, and it is the only bucket left
+            // out. "Here" is the rendered list, those events have no row in it, and the clause
+            // saying the list is incomplete follows in the same parenthetical. Adding it would
+            // suppress a true statement about what was printed.
             if (c.coverless() == c.described() && c.unreadable() == 0 && c.absent() == 0
                     && c.terminal() == 0 && c.unidentifiable() == 0) {
                 sb.append("no event here has a cover image");
@@ -1468,15 +1472,22 @@ public class ScheduledEventService {
         // across seven clauses; the line above it should not be the one that does not.
         String header = "Retrieved " + events.size()
                 + (events.size() == 1 ? " scheduled event:" : " scheduled events:") + caveat;
-        // Returned, but its details would not parse. Absent and terminal events cannot appear
-        // here — they are not in `returned` at all — which is right: their own caveat clause
-        // already says nothing below was read for them, and a marker on every past event is the
-        // line of nothing the cover line exists to avoid.
-        Set<String> coverUnreadable = returned.stream()
-                .filter(id -> !described.contains(id))
+        // Every listed event the live read did not describe — returned but unparseable, or not
+        // returned at all — minus the terminal ones, which are a different fact: Discord stops
+        // returning a finished event on purpose, that is expected rather than a gap, and marking
+        // every past event is the line of nothing the cover line exists to avoid.
+        //
+        // Not just the unreadable ones. Their caveat clause says one event is unaccounted for; it
+        // cannot say which, and a row that silently omits its cover line is indistinguishable
+        // from one known to have none — which is the question a caller answers when it picks an
+        // event to upload to. Rare by construction either way.
+        Set<String> undescribed = events.stream()
+                .filter(e -> !described.contains(e.getId()))
+                .filter(e -> !isTerminal(e))
+                .map(ScheduledEvent::getId)
                 .collect(Collectors.toSet());
         String rows = events.stream()
-                .map(e -> renderEvent(e, rules, covers, coverUnreadable, includeUserCount))
+                .map(e -> renderEvent(e, rules, covers, undescribed, recurrenceFailed, includeUserCount))
                 .collect(Collectors.joining("\n"));
         // The separator only when there is something to separate. An empty cache whose live read
         // also failed reaches here — it cannot claim "none" — and appending the newline anyway
@@ -1494,29 +1505,37 @@ public class ScheduledEventService {
      * {@code ScheduledEvent} — unlike {@code RestActionImpl} — is something a test can mock.
      */
     static String renderEvent(ScheduledEvent e, Map<String, String> rules,
-                              Map<String, String> covers, Set<String> coverUnreadable,
-                              boolean includeUserCount) {
+                              Map<String, String> covers, Set<String> undescribed,
+                              Set<String> recurrenceUnreadable, boolean includeUserCount) {
         StringBuilder sb = new StringBuilder();
         sb.append("- **").append(e.getName()).append("** (ID: ").append(e.getId()).append(")\n");
         sb.append("  • Type: ").append(e.getType()).append(" | Status: ").append(e.getStatus()).append("\n");
         sb.append("  • Start: ").append(e.getStartTime());
         if (e.getEndTime() != null) sb.append(" | End: ").append(e.getEndTime());
+        // Same rule as the cover below: omitted when the event does not recur, said outright when
+        // nobody could tell. A malformed recurrence and a genuine one-off render identically
+        // otherwise, and reading a weekly series as a one-off is the mistake this whole recurrence
+        // read exists to prevent.
         String rule = rules.get(e.getId());
-        if (rule != null) sb.append("\n  • Recurs: ").append(rule);
+        if (rule != null) {
+            sb.append("\n  • Recurs: ").append(rule);
+        } else if (recurrenceUnreadable.contains(e.getId())) {
+            sb.append("\n  • Recurs: could not be read — unknown, so this may be a series");
+        }
         // Only the URL, and only when there is one. A per-event "none" would be a line of nothing
         // per coverless event on a listing with no result cap; the header count carries that once
         // instead. The recurrence line above omits itself for the same reason.
         //
-        // An event whose cover could not be read is the exception, and it does get a line. Without
-        // one it renders identically to an event known to have no cover, so nine coverless events
-        // beside one unreadable produce ten identical rows and the header's counts cannot say
-        // which is which — on exactly the question a caller answers when it picks an event to
-        // upload a cover to. Rare by construction, so it costs an ordinary listing nothing.
+        // An event the live read did not describe is the exception, and it does get a line.
+        // Without one it renders identically to an event known to have no cover, so nine coverless
+        // events beside one the read missed produce ten identical rows and the header's counts
+        // cannot say which is which — on exactly the question a caller answers when it picks an
+        // event to upload a cover to. Rare by construction, so an ordinary listing pays nothing.
         String cover = covers.get(e.getId());
         if (cover != null) {
             sb.append("\n  • Cover image: ").append(cover);
-        } else if (coverUnreadable.contains(e.getId())) {
-            sb.append("\n  • Cover image: could not be read — unknown, not absent");
+        } else if (undescribed.contains(e.getId())) {
+            sb.append("\n  • Cover image: unknown — the live read did not describe this event");
         }
         if (includeUserCount) sb.append("\n  • Interested: ").append(e.getInterestedUserCount()).append(" users");
         return sb.toString();
