@@ -306,6 +306,35 @@ two directories removes that, so read the refusal as a guard against reaching th
 accident, not as the reason the shared variable is acceptable. That reason is the upload root
 containing only what you put in it.
 
+### `DISCORD_MCP_ALLOW_SHARED_ROOT`
+
+Optional. Set it to exactly `true` to keep local `filePath` covers working when the two roots
+overlap.
+
+```bash
+export DISCORD_MCP_ALLOW_SHARED_ROOT=true
+```
+
+**Only the string `true` enables it**, case-insensitively and trimmed. `1`, `yes` and `on` do
+not. A variable whose only job is to drop a check should not be satisfiable by accident.
+
+This is for the deployment that keeps **one media directory on purpose** — an agent host where
+what it downloads, what people send it, and what it generates all land in one place, and covers
+get set from there. On that layout the refusal above costs the `filePath` branch and buys
+nothing, because the paragraph above is true: `download_attachment` → `send_file` → `imageUrl`
+already reaches the same end state with no local path at all, and a host running one media
+directory has granted all three.
+
+It changes nothing else. The magic-byte check, the size ceiling, the confinement to
+`DISCORD_MCP_FILE_ROOT` and the symlink refusal all still apply — this drops one comparison
+between two configured directories, not a check on the file. The startup warning still fires
+every boot, with different wording, because "point them at separate directories" is the wrong
+advice once the sharing is deliberate and the exposure is still worth stating to whoever
+inherits the host.
+
+Leave it unset unless the shared directory is the point. Two directories remain the better
+configuration for anything that has a choice.
+
 ### `DISCORD_MCP_DOWNLOAD_ROOT`
 
 Optional. The single directory that `download_attachment` may write saved attachments into.
@@ -325,7 +354,8 @@ LLM-driven tool write access to that directory with no configuration change and 
 notice. Point both at the same directory if you want that — but as a decision, not a
 default, and note that `set_guild_scheduled_event_image` refuses a local `filePath` when the
 two overlap, for the reason given under `DISCORD_MCP_FILE_ROOT` above. `send_file` and
-`download_attachment` still work on a shared root; covers must come from `imageUrl` there.
+`download_attachment` still work on a shared root; covers must come from `imageUrl` there,
+unless you set [`DISCORD_MCP_ALLOW_SHARED_ROOT`](#discord_mcp_allow_shared_root).
 
 Files are named `<attachmentId>-<sanitized original name>`. The attachment ID makes names
 unique across attachments; re-downloading the same one replaces its own file. Uploader

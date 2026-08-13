@@ -11,10 +11,14 @@ import org.springframework.stereotype.Component;
 /**
  * Warns once, at startup, when the upload root and the download root overlap.
  *
- * <p>{@code set_guild_scheduled_event_image} already refuses a local {@code filePath} in this
+ * <p>{@code set_guild_scheduled_event_image} refuses a local {@code filePath} in this
  * configuration, but that refusal is a tool result: it goes to the model, and the person who can
  * fix it — the operator who set the two variables — never sees it. This is the same finding
  * addressed to the audience that can act on it.
+ *
+ * <p>{@code DISCORD_MCP_ALLOW_SHARED_ROOT=true} removes that refusal and this line is then the
+ * only thing left saying the roots are chained, so the overlap still warns — with different
+ * wording, because the fix it should suggest is different once the layout is deliberate.
  *
  * <p>A warning and not a failure. {@code send_file} and {@code download_attachment} work on a
  * shared root and always have, so refusing to start would break deployments that chose this
@@ -35,6 +39,17 @@ public class FileRootStartupCheck implements ApplicationRunner {
 
     @Value("${DISCORD_MCP_DOWNLOAD_ROOT:}")
     String downloadRoot;
+
+    /**
+     * Opt-in for the shared-root layout, read here only to say which warning is true.
+     *
+     * <p>Parsed exactly as {@code ScheduledEventService} parses it: the string {@code "true"},
+     * case-insensitively, and nothing else. A looser reading here would describe a configuration
+     * the server is not running — the worse failure of the two, because this is the line an
+     * operator trusts instead of reading the code.
+     */
+    @Value("${DISCORD_MCP_ALLOW_SHARED_ROOT:}")
+    String allowSharedRoot;
 
     @Override
     public void run(ApplicationArguments args) {
@@ -78,15 +93,31 @@ public class FileRootStartupCheck implements ApplicationRunner {
             // against, and half a comparison establishes nothing about overlap.
             return;
         }
-        if (LocalFileGuard.overlaps(uploads, downloads)) {
-            log.warn("DISCORD_MCP_FILE_ROOT ({}) and DISCORD_MCP_DOWNLOAD_ROOT ({}) overlap."
-                            + " Files written by download_attachment are readable by the tools that"
-                            + " read local paths, so their contents are chosen by whoever can call"
-                            + " this server. set_guild_scheduled_event_image refuses local paths in"
-                            + " this configuration; send_file does not. Point them at separate"
-                            + " directories unless this is deliberate.",
-                    uploads.path(), downloads.path());
+        if (!LocalFileGuard.overlaps(uploads, downloads)) {
+            return;
         }
+        if (allowSharedRoot != null && allowSharedRoot.trim().equalsIgnoreCase("true")) {
+            // Still a warning, and still every boot. The opt-in says the operator meant the
+            // layout, not that the consequence stopped applying — and this is the only line that
+            // will say so on the day somebody inherits the deployment. Softer than the refusal it
+            // replaced because there is nothing left to fix by hand.
+            log.warn("DISCORD_MCP_FILE_ROOT ({}) and DISCORD_MCP_DOWNLOAD_ROOT ({}) overlap, and"
+                            + " DISCORD_MCP_ALLOW_SHARED_ROOT=true allows it. Covers can be set"
+                            + " from files download_attachment wrote, so a caller that can reach"
+                            + " that tool chooses what gets pinned to a permanent unauthenticated"
+                            + " CDN URL. Unset the opt-in to go back to refusing local cover paths"
+                            + " in this configuration.",
+                    uploads.path(), downloads.path());
+            return;
+        }
+        log.warn("DISCORD_MCP_FILE_ROOT ({}) and DISCORD_MCP_DOWNLOAD_ROOT ({}) overlap."
+                        + " Files written by download_attachment are readable by the tools that"
+                        + " read local paths, so their contents are chosen by whoever can call"
+                        + " this server. set_guild_scheduled_event_image refuses local paths in"
+                        + " this configuration; send_file does not. Point them at separate"
+                        + " directories, or set DISCORD_MCP_ALLOW_SHARED_ROOT=true if this is"
+                        + " deliberate.",
+                uploads.path(), downloads.path());
     }
 
     private static boolean isSet(String configured) {

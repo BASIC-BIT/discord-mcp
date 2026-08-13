@@ -72,6 +72,26 @@ public class ScheduledEventService {
     String downloadRoot;
 
     /**
+     * Opts a deployment out of the overlap refusal in {@link #coverRoot()}.
+     *
+     * <p>Exactly {@code "true"} enables it, case-insensitively, and anything else — including
+     * {@code "1"} and {@code "yes"} — leaves the refusal in place. A variable whose whole purpose
+     * is to drop a check should not be satisfiable by accident.
+     *
+     * <p>The refusal it removes was never a boundary. {@link #coverRoot()} says so at length: with
+     * the roots chained, {@code download_attachment} then {@code send_file} then {@code imageUrl}
+     * reaches the same end state in three calls and no local path at all. So a deployment that
+     * grants those tools has already accepted the exposure, and the refusal is only costing it
+     * the {@code filePath} branch. This is for the deployment that keeps one media directory on
+     * purpose: what the agent downloads, what it is sent, and what it generates all land in one
+     * place, and covers are set from there.
+     *
+     * <p>Package-private for the same reason as {@link #coverFileRoot}.
+     */
+    @Value("${DISCORD_MCP_ALLOW_SHARED_ROOT:}")
+    String allowSharedRoot;
+
+    /**
      * A local pre-check on cover size, set deliberately low.
      *
      * <p>What is known: Discord does not document a ceiling for this endpoint; {@link Icon}
@@ -1433,7 +1453,8 @@ public class ScheduledEventService {
      *
      * <p>Refused here rather than at startup, and only on the {@code filePath} branch, so a
      * deployment with the chained config keeps {@code send_file} and {@code imageUrl} working
-     * exactly as before.
+     * exactly as before. {@code DISCORD_MCP_ALLOW_SHARED_ROOT=true} drops the refusal for a
+     * deployment that chained the roots on purpose; see {@link #allowSharedRoot}.
      */
     private LocalFileGuard.Root coverRoot() {
         if (coverFileRoot == null || coverFileRoot.isBlank()) {
@@ -1444,6 +1465,11 @@ public class ScheduledEventService {
         }
         LocalFileGuard.Root root =
                 LocalFileGuard.resolveRoot(coverFileRoot, "DISCORD_MCP_FILE_ROOT");
+        if (sharedRootAllowed()) {
+            // Opted in, so where downloads go is no longer this method's business and there is
+            // nothing below worth running.
+            return root;
+        }
         if (downloadRoot == null || downloadRoot.isBlank()) {
             // download_attachment writes nowhere, so there is nothing to collide with. Gated here
             // rather than left to the catch below: an unset variable is this method's ordinary
@@ -1470,9 +1496,23 @@ public class ScheduledEventService {
                             + "would read covers out of a directory it also writes downloads "
                             + "into — a file a caller chose, with a PNG header it also chose, "
                             + "pinned to a permanent public URL. Point them at separate "
-                            + "directories, or supply imageUrl, which needs no filesystem access.");
+                            + "directories, or supply imageUrl, which needs no filesystem access. "
+                            + "Set DISCORD_MCP_ALLOW_SHARED_ROOT=true if one shared media "
+                            + "directory is deliberate.");
         }
         return root;
+    }
+
+    /**
+     * Whether {@code DISCORD_MCP_ALLOW_SHARED_ROOT} is set to exactly {@code true}.
+     *
+     * <p>{@code FileRootStartupCheck} parses the same variable the same way. Two readings rather
+     * than one shared helper because the alternative is a public method on {@link LocalFileGuard}
+     * that has nothing to do with confining a path; the strictness is what keeps them from
+     * drifting, and both are tested against the values that must not enable it.
+     */
+    private boolean sharedRootAllowed() {
+        return allowSharedRoot != null && allowSharedRoot.trim().equalsIgnoreCase("true");
     }
 
     @Tool(name = "delete_guild_scheduled_event", description = "Permanently delete a scheduled event")
