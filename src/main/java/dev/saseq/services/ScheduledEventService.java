@@ -27,6 +27,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 @Service
@@ -1291,6 +1292,15 @@ public class ScheduledEventService {
      */
     static CoverSource readCoverSource(boolean hasUrl, String imageUrl, String filePath,
                                        LocalFileGuard.Root root) {
+        // The pairing its caller guarantees, checked rather than assumed. LocalFileGuard grew a
+        // null-filePath guard on the principle that shared code cannot rely on every future
+        // caller gating first; this is the same case one layer up, in a method made
+        // package-private precisely so callers other than the tool can reach it. Without it a
+        // null root reaches Path.startsWith and arrives as an NPE.
+        if (!hasUrl && root == null) {
+            throw new IllegalArgumentException(
+                    "filePath needs an upload root, and none was resolved.");
+        }
         String source;
         byte[] bytes;
         try {
@@ -1530,18 +1540,32 @@ public class ScheduledEventService {
         // A Set over the same ids, because the filter below asks per listed event and `returned`
         // is a List — its order is what the caveat names, not what a membership test wants.
         Set<String> returnedIds = Set.copyOf(returned);
-        Set<String> undescribed = !rawKnown ? Set.of() : events.stream()
+        // Terminal AND missing from the live read is the case the terminal clause covers, and
+        // neither marker fires for it. Status alone is the wrong test: CoverCounts counts a
+        // finished event that Discord did return but could not parse as `unreadable`, so the
+        // caveat says its cover is unknown while its row said nothing.
+        Predicate<ScheduledEvent> explainedByTheTerminalClause =
+                e -> isTerminal(e) && !returnedIds.contains(e.getId());
+        Set<String> coverUnknown = !rawKnown ? Set.of() : events.stream()
                 .filter(e -> !described.contains(e.getId()))
-                // Terminal AND missing from the live read, which is the case the terminal clause
-                // covers. Status alone is the wrong test: CoverCounts counts a finished event
-                // that Discord did return but could not parse as `unreadable`, so the caveat says
-                // its cover is unknown while its row said nothing — the mismatch this marker
-                // exists to remove, reappearing on the one status that skipped the check.
-                .filter(e -> !(isTerminal(e) && !returnedIds.contains(e.getId())))
+                .filter(explainedByTheTerminalClause.negate())
+                .map(ScheduledEvent::getId)
+                .collect(Collectors.toSet());
+        // A different question, and it needs its own answer: `described` is gated on the cover
+        // read alone, so an event whose recurrence parsed perfectly well — as "does not recur" —
+        // lands outside it whenever its image field did not. Marking that row's schedule unknown
+        // contradicts both the read and the header, which says only that its cover is unknown.
+        //
+        // What this asks instead is whether the recurrence was ever read: it was not if the parse
+        // failed, and it was not if Discord never returned the event at all.
+        Set<String> scheduleUnknown = !rawKnown ? Set.of() : events.stream()
+                .filter(e -> recurrenceFailed.contains(e.getId())
+                        || !returnedIds.contains(e.getId()))
+                .filter(explainedByTheTerminalClause.negate())
                 .map(ScheduledEvent::getId)
                 .collect(Collectors.toSet());
         String rows = events.stream()
-                .map(e -> renderEvent(e, rules, covers, undescribed, recurrenceFailed, includeUserCount))
+                .map(e -> renderEvent(e, rules, covers, coverUnknown, scheduleUnknown, includeUserCount))
                 .collect(Collectors.joining("\n"));
         // The separator only when there is something to separate. An empty cache whose live read
         // also failed reaches here — it cannot claim "none" — and appending the newline anyway
@@ -1559,8 +1583,8 @@ public class ScheduledEventService {
      * {@code ScheduledEvent} — unlike {@code RestActionImpl} — is something a test can mock.
      */
     static String renderEvent(ScheduledEvent e, Map<String, String> rules,
-                              Map<String, String> covers, Set<String> undescribed,
-                              Set<String> recurrenceUnreadable, boolean includeUserCount) {
+                              Map<String, String> covers, Set<String> coverUnknown,
+                              Set<String> scheduleUnknown, boolean includeUserCount) {
         StringBuilder sb = new StringBuilder();
         sb.append("- **").append(e.getName()).append("** (ID: ").append(e.getId()).append(")\n");
         sb.append("  • Type: ").append(e.getType()).append(" | Status: ").append(e.getStatus()).append("\n");
@@ -1573,16 +1597,16 @@ public class ScheduledEventService {
         String rule = rules.get(e.getId());
         if (rule != null) {
             sb.append("\n  • Recurs: ").append(rule);
-        } else if (recurrenceUnreadable.contains(e.getId())) {
-            sb.append("\n  • Recurs: could not be read — unknown, so this may be a series");
-        } else if (undescribed.contains(e.getId())) {
-            // The same fall-through the cover line has, for the same reason and with more at
-            // stake. An event Discord did not return had no recurrence read either, and without
-            // this its row is indistinguishable from a genuine one-off — editing a weekly series
-            // as though it were a single event is the mistake this recurrence read exists to
-            // prevent. The header counts these, but a count cannot say which row, which is the
-            // whole argument the cover marker was added on.
-            sb.append("\n  • Recurs: unknown — the live read did not describe this event");
+        } else if (scheduleUnknown.contains(e.getId())) {
+            // One marker for both ways of not knowing — the rule would not parse, or Discord
+            // never returned the event at all — because what the row owes the reader is that the
+            // schedule is unknown, not which read failed. The caveat above carries the cause.
+            //
+            // Editing a weekly series as though it were a single event is the mistake this
+            // recurrence read exists to prevent, and without a marker such a row is
+            // indistinguishable from a genuine one-off.
+            sb.append("\n  • Recurs: unknown — the live read did not establish whether this"
+                    + " event recurs");
         }
         // Only the URL, and only when there is one. A per-event "none" would be a line of nothing
         // per coverless event on a listing with no result cap; the header count carries that once
@@ -1596,7 +1620,7 @@ public class ScheduledEventService {
         String cover = covers.get(e.getId());
         if (cover != null) {
             sb.append("\n  • Cover image: ").append(cover);
-        } else if (undescribed.contains(e.getId())) {
+        } else if (coverUnknown.contains(e.getId())) {
             sb.append("\n  • Cover image: unknown — the live read did not describe this event");
         }
         if (includeUserCount) sb.append("\n  • Interested: ").append(e.getInterestedUserCount()).append(" users");

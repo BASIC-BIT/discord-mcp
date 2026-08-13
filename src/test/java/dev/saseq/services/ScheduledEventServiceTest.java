@@ -613,8 +613,8 @@ class ScheduledEventServiceTest {
 
         assertThat(ScheduledEventService.renderEvent(
                 unknown, Map.of(), Map.of(), Set.of(), Set.of("11"), false))
-                .contains("• Recurs: could not be read")
-                .contains("may be a series");
+                .contains("• Recurs: unknown")
+                .contains("did not establish whether this event recurs");
         assertThat(ScheduledEventService.renderEvent(
                 oneOff, Map.of(), Map.of(), Set.of(), Set.of("11"), false))
                 .doesNotContain("Recurs:");
@@ -622,7 +622,14 @@ class ScheduledEventServiceTest {
         assertThat(ScheduledEventService.renderEvent(
                 unknown, Map.of("11", "Weekly on Monday"), Map.of(), Set.of(), Set.of("11"), false))
                 .contains("• Recurs: Weekly on Monday")
-                .doesNotContain("could not be read");
+                .doesNotContain("Recurs: unknown");
+        // And the two markers are independent. An event whose image would not parse but whose
+        // recurrence read fine — as "does not recur" — is in the cover set and not this one, so
+        // its row must not call a schedule unknown that the read established.
+        assertThat(ScheduledEventService.renderEvent(
+                unknown, Map.of(), Map.of(), Set.of("11"), Set.of(), false))
+                .contains("• Cover image: unknown")
+                .doesNotContain("Recurs:");
     }
 
     private static ScheduledEvent liveEvent(String id, String name) {
@@ -872,19 +879,31 @@ class ScheduledEventServiceTest {
         ScheduledEvent missed = liveEvent("11", "Community Night");
         ScheduledEvent oneOff = liveEvent("22", "Chess Club");
 
+        // An event Discord did not return is in both sets: neither field was read.
         assertThat(ScheduledEventService.renderEvent(
-                missed, Map.of(), Map.of(), Set.of("11"), Set.of(), false))
-                .contains("• Recurs: unknown — the live read did not describe this event")
+                missed, Map.of(), Map.of(), Set.of("11"), Set.of("11"), false))
+                .contains("• Recurs: unknown")
                 .contains("• Cover image: unknown");
         // An event the read did describe, with no rule, is a one-off and says nothing.
         assertThat(ScheduledEventService.renderEvent(
-                oneOff, Map.of(), Map.of(), Set.of("11"), Set.of(), false))
+                oneOff, Map.of(), Map.of(), Set.of("11"), Set.of("11"), false))
                 .doesNotContain("Recurs:");
         // A rule that was read still wins over the marker.
-        assertThat(ScheduledEventService.renderEvent(
-                missed, Map.of("11", "Weekly on Monday"), Map.of(), Set.of("11"), Set.of(), false))
+        assertThat(ScheduledEventService.renderEvent(missed, Map.of("11", "Weekly on Monday"),
+                Map.of(), Set.of("11"), Set.of("11"), false))
                 .contains("• Recurs: Weekly on Monday")
                 .doesNotContain("Recurs: unknown");
+    }
+
+    @Test
+    void readingASourceByPathNeedsARootRatherThanFailingOnOne() {
+        // The pairing the tool guarantees, asserted rather than assumed: this method is
+        // package-private so callers other than the tool can reach it, and a null root used to
+        // arrive as an NPE out of Path.startsWith.
+        assertThatThrownBy(() -> ScheduledEventService.readCoverSource(
+                false, null, "/tmp/poster.png", null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("needs an upload root");
     }
 
     @Test
