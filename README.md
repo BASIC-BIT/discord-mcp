@@ -33,6 +33,7 @@ Discord by managing channels, sending messages, and retrieving server informatio
 ```bash
 export DISCORD_TOKEN="YOUR_DISCORD_BOT_TOKEN"
 export DISCORD_GUILD_ID=""
+export DISCORD_MCP_MESSAGE_CONTENT=true
 export SPRING_PROFILES_ACTIVE=http
 # Only if you want download_attachment. Must match the container path mounted below,
 # not a host path — see Security notes.
@@ -49,14 +50,14 @@ export DISCORD_MCP_DOWNLOAD_ROOT=/var/lib/discord-mcp/downloads
 
 > [!IMPORTANT]
 > Instructions for creating a Discord bot and retrieving its token can be found [here](https://discordjs.guide/legacy/preparations/app-setup).
-> On the bot's Developer Portal page, enable both **Server Members Intent** and
-> **Message Content Intent** under Privileged Gateway Intents. Member lookup needs the first;
-> `read_messages` needs the second to receive ordinary message content.
+> On the bot's Developer Portal page, enable **Server Members Intent** under Privileged Gateway
+> Intents. To opt into ordinary message-body reads, also enable **Message Content Intent** and set
+> `DISCORD_MCP_MESSAGE_CONTENT=true`. Existing deployments default this opt-in to `false`.
 
 > [!IMPORTANT]
-> **Upgrading:** this version enables Message Content Intent at startup. Existing bot applications
-> must enable **Message Content Intent** in the Developer Portal before deploying this version, or
-> Discord will reject the gateway connection. Startup stderr identifies this intent failure.
+> `DISCORD_MCP_MESSAGE_CONTENT=true` requires the matching Developer Portal grant. Discord rejects
+> the gateway connection when the application setting is missing. Startup stderr identifies this
+> intent failure. Leave the variable unset or `false` to preserve the previous gateway-intent set.
 
 > [!TIP]
 > The `DISCORD_GUILD_ID` env variable is optional.
@@ -77,6 +78,7 @@ docker run -d -i \
   -e DISCORD_MCP_ALLOWED_TOOLS \
   -e DISCORD_MCP_WRITE_MODE \
   -e DISCORD_EXPECTED_BOT_ID \
+  -e DISCORD_MCP_MESSAGE_CONTENT \
   -e DISCORD_MCP_ACCESS_TOKEN_FILE \
   -e DISCORD_MCP_AUDIT_FILE \
   -e DISCORD_MCP_AUDIT_MAX_BYTES \
@@ -235,6 +237,8 @@ rejected rather than ignored.
   echoed in full. `allow` executes writes. Unknown tool names are
   classified as writes, so new tools do not silently become read-only.
 - `DISCORD_EXPECTED_BOT_ID`: refuses startup when a valid token authenticates the wrong bot.
+- `DISCORD_MCP_MESSAGE_CONTENT`: opt into the privileged Message Content gateway intent. Defaults
+  to `false`; set `true` only after enabling the matching Developer Portal grant.
 - `DISCORD_MCP_ACCESS_TOKEN_FILE`: HTTP-only bearer credential, read from a mounted file. When
   set under the STREAMABLE protocol, the configured MCP endpoint returns `401` unless the request
   has the exact `Authorization: Bearer ...` header. Startup fails unless the protocol is explicitly
@@ -252,6 +256,8 @@ rejected rather than ignored.
   queued Discord mutation later succeeded. Use readback for consequential writes. The active file rotates to one `.1`
   backup before the next append would exceed `DISCORD_MCP_AUDIT_MAX_BYTES` (10 MiB by default),
   so the two files remain bounded. Set a value of at least 1024 bytes if a different cap is needed.
+  This cap is a disk bound, not a retention guarantee. High call volume can rotate older evidence
+  out of both files; forward audit records to a durable log sink when retention matters.
 
 Example hardened HTTP profile:
 
@@ -260,6 +266,7 @@ export DISCORD_MCP_ALLOWED_GUILDS=123456789012345678,234567890123456789
 export DISCORD_MCP_ALLOWED_TOOLS=get_server_info,list_channels,read_messages,send_message,edit_message
 export DISCORD_MCP_WRITE_MODE=preview
 export DISCORD_EXPECTED_BOT_ID=345678901234567890
+export DISCORD_MCP_MESSAGE_CONTENT=true
 export DISCORD_MCP_ACCESS_TOKEN_FILE=/run/secrets/discord-mcp-access-token
 export DISCORD_MCP_AUDIT_FILE=/var/lib/discord-mcp/audit.jsonl
 export DISCORD_MCP_AUDIT_MAX_BYTES=10485760

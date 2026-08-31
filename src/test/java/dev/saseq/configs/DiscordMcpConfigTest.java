@@ -8,10 +8,18 @@ import static org.assertj.core.api.Assertions.assertThat;
 class DiscordMcpConfigTest {
     @Test
     void requiredIntentsIncludeMemberAndMessageReadAccess() {
-        assertThat(DiscordMcpConfig.requiredGatewayIntents()).containsExactlyInAnyOrder(
+        assertThat(DiscordMcpConfig.requiredGatewayIntents(true)).containsExactlyInAnyOrder(
                 GatewayIntent.GUILD_MEMBERS,
                 GatewayIntent.MESSAGE_CONTENT,
                 GatewayIntent.GUILD_VOICE_STATES,
                 GatewayIntent.SCHEDULED_EVENTS);
+    }
+
+    @Test
+    void messageContentIntentIsOptInForExistingDeployments() {
+        assertThat(DiscordMcpConfig.requiredGatewayIntents(false))
+                .contains(GatewayIntent.GUILD_MEMBERS, GatewayIntent.GUILD_VOICE_STATES,
+                        GatewayIntent.SCHEDULED_EVENTS)
+                .doesNotContain(GatewayIntent.MESSAGE_CONTENT);
     }
 }

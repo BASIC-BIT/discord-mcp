@@ -94,7 +94,9 @@ public class DiscordMcpConfig {
 
     @Bean
     public JDA jda(@Value("${DISCORD_TOKEN:}") String token,
-                   @Value("${DISCORD_EXPECTED_BOT_ID:}") String expectedBotId) throws InterruptedException {
+                   @Value("${DISCORD_EXPECTED_BOT_ID:}") String expectedBotId,
+                   @Value("${DISCORD_MCP_MESSAGE_CONTENT:false}") boolean messageContentEnabled)
+            throws InterruptedException {
         if (token == null || token.isEmpty()) {
             System.err.println("ERROR: The environment variable DISCORD_TOKEN is not set. Please set it to run the application properly.");
             System.exit(1);
@@ -102,7 +104,7 @@ public class DiscordMcpConfig {
         JDA jda;
         try {
             jda = JDABuilder.createDefault(token)
-                    .enableIntents(requiredGatewayIntents())
+                    .enableIntents(requiredGatewayIntents(messageContentEnabled))
                     .build()
                     .awaitReady();
         } catch (RuntimeException e) {
@@ -151,8 +153,13 @@ public class DiscordMcpConfig {
         System.err.println("  Details: " + details);
     }
 
-    static Set<GatewayIntent> requiredGatewayIntents() {
-        return Set.of(GatewayIntent.GUILD_MEMBERS, GatewayIntent.MESSAGE_CONTENT,
-                GatewayIntent.GUILD_VOICE_STATES, GatewayIntent.SCHEDULED_EVENTS);
+    static Set<GatewayIntent> requiredGatewayIntents(boolean messageContentEnabled) {
+        var intents = new java.util.LinkedHashSet<>(Set.of(
+                GatewayIntent.GUILD_MEMBERS, GatewayIntent.GUILD_VOICE_STATES,
+                GatewayIntent.SCHEDULED_EVENTS));
+        if (messageContentEnabled) {
+            intents.add(GatewayIntent.MESSAGE_CONTENT);
+        }
+        return Set.copyOf(intents);
     }
 }

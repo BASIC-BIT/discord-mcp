@@ -189,18 +189,28 @@ public final class McpToolPolicy {
 
             if (writeMode == WriteMode.PREVIEW && !READ_ONLY_TOOLS.contains(tool)) {
                 audit(tool, "preview", guildIds, parsed, null);
-                return "WRITE_PREVIEW: " + tool + " was not called. Arguments: "
+                return "WRITE_PREVIEW: This deployment runs in preview mode; " + tool
+                        + " was not called, and retrying here will produce the same result. Arguments: "
                         + previewArguments(parsed.toString(), parsed);
             }
 
-            audit(tool, "started", guildIds, parsed, null);
+            String auditWarning = null;
+            if (READ_ONLY_TOOLS.contains(tool)) {
+                auditWarning = auditBestEffort(tool, "started", guildIds, parsed, null);
+            } else {
+                audit(tool, "started", guildIds, parsed, null);
+            }
             try {
                 String delegatedArguments = !policyActive && arguments != null && !arguments.isBlank()
                         ? arguments : parsed.toString();
                 String result = toolContext == null
                         ? delegate.call(delegatedArguments)
                         : delegate.call(delegatedArguments, toolContext);
-                String auditWarning = auditBestEffort(tool, "tool-returned", guildIds, parsed, null);
+                String completionWarning = auditBestEffort(
+                        tool, "tool-returned", guildIds, parsed, null);
+                if (completionWarning != null) {
+                    auditWarning = completionWarning;
+                }
                 return auditWarning == null ? result : result + System.lineSeparator() + auditWarning;
             } catch (RuntimeException error) {
                 auditBestEffort(tool, "failed", guildIds, parsed, error.getClass().getSimpleName());
