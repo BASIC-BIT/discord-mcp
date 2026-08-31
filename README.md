@@ -242,7 +242,9 @@ rejected rather than ignored.
   bearer; every other current or future servlet path defaults to protected. Use a separate random
   token of at least 32 characters, never the Discord bot token. The file is read once at startup,
   so restart the process after rotating it. Only the exact default `/actuator/health` path is public;
-  custom management paths and health subpaths remain bearer-protected.
+  custom management paths and health subpaths remain bearer-protected. This filter covers the main
+  servlet context; if `management.server.port` creates a separate management context, secure or
+  firewall that port independently.
 - `DISCORD_MCP_AUDIT_FILE`: append-only JSONL tool audit. It records tool, outcome, write mode,
   resolved guild IDs, selected Discord object IDs, and an arguments hash. It deliberately does
   not record message bodies, invite credentials, or other complete arguments. A `tool-returned`

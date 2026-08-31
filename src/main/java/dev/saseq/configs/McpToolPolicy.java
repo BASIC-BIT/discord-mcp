@@ -195,9 +195,11 @@ public final class McpToolPolicy {
 
             audit(tool, "started", guildIds, parsed, null);
             try {
+                String delegatedArguments = !policyActive && arguments != null && !arguments.isBlank()
+                        ? arguments : parsed.toString();
                 String result = toolContext == null
-                        ? delegate.call(parsed.toString())
-                        : delegate.call(parsed.toString(), toolContext);
+                        ? delegate.call(delegatedArguments)
+                        : delegate.call(delegatedArguments, toolContext);
                 String auditWarning = auditBestEffort(tool, "tool-returned", guildIds, parsed, null);
                 return auditWarning == null ? result : result + System.lineSeparator() + auditWarning;
             } catch (RuntimeException error) {
@@ -230,9 +232,13 @@ public final class McpToolPolicy {
                                         boolean failOnUnresolvedChannel) {
         Set<String> guildIds = new LinkedHashSet<>();
         JsonNode guildValue = arguments.get("guildId");
-        if (failOnUnresolvedChannel && guildValue != null && !guildValue.isNull()
-                && !guildValue.isTextual()) {
-            throw new SecurityException("Supplied guildId must be a string");
+        if (failOnUnresolvedChannel && guildValue != null && !guildValue.isNull()) {
+            if (!guildValue.isTextual()) {
+                throw new SecurityException("Supplied guildId must be a string");
+            }
+            if (!guildValue.asText().isBlank() && !isSnowflake(guildValue.asText())) {
+                throw new SecurityException("Supplied guildId must be a 17-20 digit Discord snowflake");
+            }
         }
         addText(arguments, "guildId", guildIds);
         if (guildIds.isEmpty() && declaredArguments.contains("guildId") && defaultGuildId != null) {
@@ -301,7 +307,7 @@ public final class McpToolPolicy {
             event.put("outcome", outcome);
             event.put("writeMode", writeMode.name().toLowerCase(Locale.ROOT));
             var guildArray = event.putArray("guildIds");
-            guildIds.forEach(guildArray::add);
+            guildIds.forEach(id -> guildArray.add(boundedAuditIdentifier(id)));
             if (arguments != null) {
                 arguments.properties().forEach(entry -> {
                     if (entry.getKey().matches("(?i).*id$")
@@ -463,9 +469,13 @@ public final class McpToolPolicy {
     }
 
     private static void requireSnowflake(String value, String name) {
-        if (!value.matches("\\d{17,20}")) {
+        if (!isSnowflake(value)) {
             throw startupError(name + " entries must be 17-20 digit Discord snowflakes");
         }
+    }
+
+    private static boolean isSnowflake(String value) {
+        return value.matches("\\d{17,20}");
     }
 
     private static String sha256(String value) {

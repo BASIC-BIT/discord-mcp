@@ -30,9 +30,11 @@ public class McpBearerAuthConfig {
         if (token != null && !"STREAMABLE".equalsIgnoreCase(protocol)) {
             throw startupError("Bearer authentication supports only the STREAMABLE HTTP protocol");
         }
-        String normalizedEndpoint = normalizeEndpoint(mcpEndpoint);
-        if ("/actuator/health".equals(normalizedEndpoint)) {
-            throw startupError("MCP endpoint must not equal the public health endpoint");
+        if (token != null) {
+            String normalizedEndpoint = normalizeEndpoint(mcpEndpoint);
+            if ("/actuator/health".equals(normalizedEndpoint)) {
+                throw startupError("MCP endpoint must not equal the public health endpoint");
+            }
         }
         FilterRegistrationBean<OncePerRequestFilter> registration = new FilterRegistrationBean<>();
         registration.setFilter(new BearerFilter(token));

@@ -69,6 +69,14 @@ class McpBearerAuthConfigTest {
     }
 
     @Test
+    void unsetTokenDoesNotValidateBearerOnlyEndpointSettings() {
+        var registration = new McpBearerAuthConfig()
+                .mcpBearerAuthFilter("", "relative-*", "");
+
+        assertThat(registration.getUrlPatterns()).containsExactly("/*");
+    }
+
+    @Test
     void configuredEndpointAndTrailingNewlineTokenAreAccepted() throws Exception {
         Path tokenFile = tempDir.resolve("token");
         Files.writeString(tokenFile, TOKEN + System.lineSeparator() + System.lineSeparator());

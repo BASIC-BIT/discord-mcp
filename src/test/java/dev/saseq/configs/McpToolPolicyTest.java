@@ -20,6 +20,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -192,6 +193,33 @@ class McpToolPolicyTest {
     }
 
     @Test
+    void auditOnlyForwardsArgumentsUnchanged() {
+        AtomicReference<String> received = new AtomicReference<>();
+        ToolDefinition definition = ToolDefinition.builder().name("send_message")
+                .description("test").inputSchema(schema("channelId", "message")).build();
+        ToolCallback raw = new ToolCallback() {
+            @Override
+            public ToolDefinition getToolDefinition() {
+                return definition;
+            }
+
+            @Override
+            public String call(String arguments) {
+                received.set(arguments);
+                return "called";
+            }
+        };
+        Path audit = tempDir.resolve("audit-only.jsonl");
+        McpToolPolicy policy = policy(mock(JDA.class), "", "", "allow", audit.toString());
+        String arguments = "{ \"message\" : \"x\", \"channelId\" : 32345678901234567 }";
+
+        assertThat(only(policy.apply(ToolCallbackProvider.from(raw))).call(arguments))
+                .isEqualTo("called");
+        assertThat(received).hasValue(arguments);
+        assertThat(audit).exists();
+    }
+
+    @Test
     void invalidLegacyDefaultGuildDoesNotBlockStartupWithoutPolicy() {
         McpToolPolicy policy = new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
                 "", "", "OPTIONAL_DEFAULT_SERVER_ID", "allow", "", "not-an-integer");
@@ -281,6 +309,25 @@ class McpToolPolicyTest {
                 .contains("\"outcome\":\"denied-invalid-target\"")
                 .contains("\"channelId\":\"not-a-snowflake\"")
                 .doesNotContain("malformed snowflake");
+    }
+
+    @Test
+    void malformedGuildIdCannotFlushTheAudit() throws Exception {
+        Path audit = tempDir.resolve("audit.jsonl");
+        String oversizedGuildId = "1".repeat(2_048);
+        McpToolPolicy policy = new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
+                ALLOWED_GUILD, "list_channels", "", "allow", audit.toString(), "1024");
+
+        assertThatThrownBy(() -> only(policy.apply(provider("list_channels", new AtomicInteger())))
+                .call("{\"guildId\":\"" + oversizedGuildId + "\"}"))
+                .isInstanceOf(SecurityException.class)
+                .hasMessageContaining("17-20 digit Discord snowflake");
+
+        assertThat(Files.readString(audit))
+                .contains("\"outcome\":\"denied-invalid-target\"")
+                .contains("<omitted 2048 characters; sha256=")
+                .doesNotContain(oversizedGuildId);
+        assertThat(Files.size(audit)).isLessThanOrEqualTo(1024);
     }
 
     @Test
@@ -574,6 +621,27 @@ class McpToolPolicyTest {
         assertThat(unclassified).as("new ID-shaped parameters need a guild-target review").isEmpty();
         assertThat(staleReviews).as("reviewed non-channel target names must still exist").isEmpty();
         assertThat(idShapedParameters).anyMatch(McpToolPolicy::isGuildChannelArgument);
+    }
+
+    @Test
+    void globalTargetToolsCannotAcquireGuildDefaultAuthorization() {
+        Set<String> globalTargetTools = Set.of(
+                "delete_webhook", "send_webhook_message", "delete_invite", "get_invite_details",
+                "send_private_message", "edit_private_message", "delete_private_message",
+                "read_private_messages");
+        Map<String, Set<String>> parametersByTool = DiscordMcpConfig.toolServiceTypes().stream()
+                .flatMap(type -> Arrays.stream(type.getDeclaredMethods()))
+                .filter(method -> method.getAnnotation(Tool.class) != null)
+                .collect(Collectors.toMap(
+                        method -> method.getAnnotation(Tool.class).name(),
+                        method -> Arrays.stream(method.getParameters())
+                                .map(parameter -> parameter.getName())
+                                .collect(Collectors.toSet())));
+
+        assertThat(parametersByTool.keySet()).containsAll(globalTargetTools);
+        globalTargetTools.forEach(tool -> assertThat(parametersByTool.get(tool))
+                .as(tool + " must remain globally unresolvable under a guild allowlist")
+                .doesNotContain("guildId"));
     }
 
     private static McpToolPolicy policy(JDA jda, String guilds, String tools, String mode, String audit) {
