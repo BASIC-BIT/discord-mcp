@@ -73,6 +73,13 @@ docker run -d -i \
   -e DISCORD_TOKEN \
   -e DISCORD_GUILD_ID \
   -e DISCORD_MCP_DOWNLOAD_ROOT \
+  -e DISCORD_MCP_ALLOWED_GUILDS \
+  -e DISCORD_MCP_ALLOWED_TOOLS \
+  -e DISCORD_MCP_WRITE_MODE \
+  -e DISCORD_EXPECTED_BOT_ID \
+  -e DISCORD_MCP_ACCESS_TOKEN_FILE \
+  -e DISCORD_MCP_AUDIT_FILE \
+  -e DISCORD_MCP_AUDIT_MAX_BYTES \
   -v discord-mcp-downloads:/var/lib/discord-mcp/downloads \
   saseq/discord-mcp:latest
 ```

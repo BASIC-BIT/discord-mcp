@@ -74,7 +74,7 @@ class McpBearerAuthConfigTest {
         Files.writeString(tokenFile, TOKEN + System.lineSeparator() + System.lineSeparator());
 
         var registration = new McpBearerAuthConfig()
-                .mcpBearerAuthFilter(tokenFile.toString(), "STREAMABLE");
+                .mcpBearerAuthFilter(tokenFile.toString(), "/custom-mcp/", "STREAMABLE");
 
         assertThat(registration.getUrlPatterns()).containsExactly("/*");
     }
@@ -122,6 +122,27 @@ class McpBearerAuthConfigTest {
 
         assertThat(subpathResponse.getStatus()).isEqualTo(401);
         assertThat(subpathChain.getRequest()).isNull();
+
+        var postRequest = new MockHttpServletRequest("POST", "/actuator/health");
+        postRequest.setServletPath("/actuator/health");
+        var postResponse = new MockHttpServletResponse();
+        var postChain = new MockFilterChain();
+
+        filter.doFilter(postRequest, postResponse, postChain);
+
+        assertThat(postResponse.getStatus()).isEqualTo(401);
+        assertThat(postChain.getRequest()).isNull();
+    }
+
+    @Test
+    void mcpEndpointCannotCollideWithPublicHealthEndpoint() throws Exception {
+        Path tokenFile = tempDir.resolve("token");
+        Files.writeString(tokenFile, TOKEN);
+
+        assertThatThrownBy(() -> new McpBearerAuthConfig()
+                .mcpBearerAuthFilter(tokenFile.toString(), "/actuator/health", "STREAMABLE"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("public health endpoint");
     }
 
     @Test
@@ -130,7 +151,7 @@ class McpBearerAuthConfigTest {
         Files.writeString(tokenFile, TOKEN);
 
         assertThatThrownBy(() -> new McpBearerAuthConfig()
-                .mcpBearerAuthFilter(tokenFile.toString(), ""))
+                .mcpBearerAuthFilter(tokenFile.toString(), "/mcp", ""))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("STREAMABLE");
     }

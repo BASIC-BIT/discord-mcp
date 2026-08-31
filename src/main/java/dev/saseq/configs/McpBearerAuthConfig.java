@@ -24,10 +24,15 @@ public class McpBearerAuthConfig {
     @Bean
     FilterRegistrationBean<OncePerRequestFilter> mcpBearerAuthFilter(
             @Value("${DISCORD_MCP_ACCESS_TOKEN_FILE:}") String tokenFile,
+            @Value("${spring.ai.mcp.server.streamable-http.mcp-endpoint:/mcp}") String mcpEndpoint,
             @Value("${spring.ai.mcp.server.protocol:}") String protocol) {
         String token = readToken(tokenFile);
         if (token != null && !"STREAMABLE".equalsIgnoreCase(protocol)) {
             throw startupError("Bearer authentication supports only the STREAMABLE HTTP protocol");
+        }
+        String normalizedEndpoint = normalizeEndpoint(mcpEndpoint);
+        if ("/actuator/health".equals(normalizedEndpoint)) {
+            throw startupError("MCP endpoint must not equal the public health endpoint");
         }
         FilterRegistrationBean<OncePerRequestFilter> registration = new FilterRegistrationBean<>();
         registration.setFilter(new BearerFilter(token));
@@ -65,6 +70,15 @@ public class McpBearerAuthConfig {
         return cause == null ? new IllegalArgumentException(message) : new IllegalArgumentException(message, cause);
     }
 
+    private static String normalizeEndpoint(String endpoint) {
+        if (endpoint == null || !endpoint.startsWith("/") || endpoint.contains("*")) {
+            throw startupError("MCP endpoint must be an absolute path without wildcards");
+        }
+        return endpoint.endsWith("/") && endpoint.length() > 1
+                ? endpoint.substring(0, endpoint.length() - 1)
+                : endpoint;
+    }
+
     static final class BearerFilter extends OncePerRequestFilter {
         private final byte[] expected;
 
@@ -96,7 +110,8 @@ public class McpBearerAuthConfig {
 
         private static boolean isExactPublicHealthRequest(HttpServletRequest request) {
             String expectedRawUri = request.getContextPath() + "/actuator/health";
-            return "/actuator/health".equals(request.getServletPath())
+            return "GET".equalsIgnoreCase(request.getMethod())
+                    && "/actuator/health".equals(request.getServletPath())
                     && (request.getPathInfo() == null || request.getPathInfo().isEmpty())
                     && expectedRawUri.equals(request.getRequestURI());
         }

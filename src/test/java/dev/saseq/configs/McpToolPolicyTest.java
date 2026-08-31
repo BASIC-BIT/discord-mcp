@@ -338,6 +338,26 @@ class McpToolPolicyTest {
     }
 
     @Test
+    void undeclaredArgumentDenialIsAuditedWithoutSuppliedValues() throws Exception {
+        Path audit = tempDir.resolve("audit.jsonl");
+        McpToolPolicy policy = new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
+                ALLOWED_GUILD, "send_webhook_message", "", "allow", audit.toString(), "10485760");
+
+        assertThatThrownBy(() -> only(policy.apply(provider("send_webhook_message", new AtomicInteger())))
+                .call("{\"webhookUrl\":\"https://discord.com/api/webhooks/1/secret\","
+                        + "\"guildId\":\"" + ALLOWED_GUILD + "\"}"))
+                .isInstanceOf(SecurityException.class)
+                .hasMessageContaining("undeclared arguments");
+
+        assertThat(Files.readString(audit))
+                .contains("\"outcome\":\"denied-undeclared-argument\"")
+                .doesNotContain("webhookUrl")
+                .doesNotContain("\"guildId\":")
+                .doesNotContain(ALLOWED_GUILD)
+                .doesNotContain("secret");
+    }
+
+    @Test
     void previewRedactsAnyLargeTextArgumentByValueSize() {
         String image = "A".repeat(8_192);
         McpToolPolicy policy = policy(mock(JDA.class), "", "create_emoji", "preview", "");

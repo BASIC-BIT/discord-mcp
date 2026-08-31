@@ -165,7 +165,13 @@ public final class McpToolPolicy {
             String tool = getToolDefinition().name();
             JsonNode parsed = parseArguments(arguments);
             if (policyActive) {
-                rejectUndeclaredArguments(tool, parsed, declaredArguments);
+                try {
+                    rejectUndeclaredArguments(tool, parsed, declaredArguments);
+                } catch (SecurityException error) {
+                    auditBestEffort(tool, "denied-undeclared-argument", Set.of(), null,
+                            error.getClass().getSimpleName());
+                    throw error;
+                }
             }
             Set<String> guildIds;
             try {
