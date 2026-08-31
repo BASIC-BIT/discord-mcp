@@ -216,7 +216,9 @@ For an agent-facing bot installed in more than one server, configure them explic
   characters, never the Discord bot token.
 - `DISCORD_MCP_AUDIT_FILE`: append-only JSONL tool audit. It records tool, outcome, write mode,
   resolved guild IDs, selected Discord object IDs, and an arguments hash. It deliberately does
-  not record message bodies or other complete arguments.
+  not record message bodies or other complete arguments. The active file rotates to one `.1`
+  backup before the next append would exceed `DISCORD_MCP_AUDIT_MAX_BYTES` (10 MiB by default),
+  so the two files remain bounded. Set a value of at least 1024 bytes if a different cap is needed.
 
 Example hardened HTTP profile:
 
@@ -227,12 +229,17 @@ export DISCORD_MCP_WRITE_MODE=preview
 export DISCORD_EXPECTED_BOT_ID=345678901234567890
 export DISCORD_MCP_ACCESS_TOKEN_FILE=/run/secrets/discord-mcp-access-token
 export DISCORD_MCP_AUDIT_FILE=/var/lib/discord-mcp/audit.jsonl
+export DISCORD_MCP_AUDIT_MAX_BYTES=10485760
 ```
 
 Mount the access-token file read-only. The allowlist is application-enforced and complements,
 rather than replaces, Discord role hierarchy, channel overrides, and least-privilege bot grants.
 Use separate runtime profiles for different guild and write scopes instead of widening one
 always-on process.
+
+The generic `docker-compose.yml` does not forward the bearer-token or audit-file paths because it
+cannot conditionally create the required secret bind mount and persistent audit volume. Add both
+in a deployment-specific Compose override, or use a launcher that creates those mounts explicitly.
 
 ### `DISCORD_MCP_FILE_ROOT`
 

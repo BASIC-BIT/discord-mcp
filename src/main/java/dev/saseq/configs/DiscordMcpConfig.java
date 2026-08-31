@@ -70,17 +70,12 @@ public class DiscordMcpConfig {
             System.err.println("ERROR: The environment variable DISCORD_TOKEN is not set. Please set it to run the application properly.");
             System.exit(1);
         }
+        JDA jda;
         try {
-            JDA jda = JDABuilder.createDefault(token)
+            jda = JDABuilder.createDefault(token)
                     .enableIntents(GatewayIntent.GUILD_MEMBERS, GatewayIntent.GUILD_VOICE_STATES, GatewayIntent.SCHEDULED_EVENTS)
                     .build()
                     .awaitReady();
-            if (expectedBotId != null && !expectedBotId.isBlank()
-                    && !jda.getSelfUser().getId().equals(expectedBotId.trim())) {
-                jda.shutdownNow();
-                throw new IllegalStateException("DISCORD_EXPECTED_BOT_ID does not match the authenticated bot");
-            }
-            return jda;
         } catch (RuntimeException e) {
             // In the default stdio transport, logback writes only to a file so stdout stays a clean
             // MCP channel. That makes a startup failure here invisible to the MCP client, which just
@@ -90,6 +85,16 @@ public class DiscordMcpConfig {
             System.exit(1);
             throw e; // unreachable (System.exit does not return), but required to satisfy the compiler
         }
+        if (expectedBotId != null && !expectedBotId.isBlank()
+                && !jda.getSelfUser().getId().equals(expectedBotId.trim())) {
+            String actualBotId = jda.getSelfUser().getId();
+            jda.shutdownNow();
+            System.err.println("ERROR: DISCORD_EXPECTED_BOT_ID does not match the authenticated bot.");
+            System.err.println("  Expected: " + expectedBotId.trim());
+            System.err.println("  Actual:   " + actualBotId);
+            throw new IllegalStateException("DISCORD_EXPECTED_BOT_ID mismatch");
+        }
+        return jda;
     }
 
     private static void reportJdaStartupFailure(Throwable error) {

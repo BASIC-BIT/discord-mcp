@@ -15,8 +15,9 @@ services:
       DISCORD_MCP_ALLOWED_TOOLS: ${DISCORD_MCP_ALLOWED_TOOLS:-}
       DISCORD_MCP_WRITE_MODE: ${DISCORD_MCP_WRITE_MODE:-allow}
       DISCORD_EXPECTED_BOT_ID: ${DISCORD_EXPECTED_BOT_ID:-}
-      DISCORD_MCP_ACCESS_TOKEN_FILE: ${DISCORD_MCP_ACCESS_TOKEN_FILE:-}
-      DISCORD_MCP_AUDIT_FILE: ${DISCORD_MCP_AUDIT_FILE:-}
+      # Bearer-token and audit-file settings are not forwarded by this generic Compose file.
+      # Each requires its own secret bind mount or persistent volume. Use a deployment-specific
+      # override after reading "Multi-server deployment policy" in the README.
       # Unset by default, which leaves download_attachment refusing. Set it to the
       # container path below to enable downloads; the named volume is what keeps them
       # when the container is recreated.
