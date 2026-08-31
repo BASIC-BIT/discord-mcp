@@ -73,7 +73,7 @@ class McpBearerAuthConfigTest {
         Files.writeString(tokenFile, TOKEN + System.lineSeparator() + System.lineSeparator());
 
         var registration = new McpBearerAuthConfig()
-                .mcpBearerAuthFilter(tokenFile.toString(), "/custom-mcp/");
+                .mcpBearerAuthFilter(tokenFile.toString(), "/custom-mcp/", "STREAMABLE");
 
         assertThat(registration.getUrlPatterns()).containsExactlyInAnyOrder("/custom-mcp", "/custom-mcp/*");
     }

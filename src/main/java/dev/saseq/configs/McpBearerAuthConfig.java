@@ -24,8 +24,12 @@ public class McpBearerAuthConfig {
     @Bean
     FilterRegistrationBean<OncePerRequestFilter> mcpBearerAuthFilter(
             @Value("${DISCORD_MCP_ACCESS_TOKEN_FILE:}") String tokenFile,
-            @Value("${spring.ai.mcp.server.streamable-http.mcp-endpoint:/mcp}") String mcpEndpoint) {
+            @Value("${spring.ai.mcp.server.streamable-http.mcp-endpoint:/mcp}") String mcpEndpoint,
+            @Value("${spring.ai.mcp.server.protocol:STREAMABLE}") String protocol) {
         String token = readToken(tokenFile);
+        if (token != null && !"STREAMABLE".equalsIgnoreCase(protocol)) {
+            throw startupError("Bearer authentication supports only the STREAMABLE HTTP protocol");
+        }
         if (mcpEndpoint == null || !mcpEndpoint.startsWith("/") || mcpEndpoint.contains("*")) {
             throw startupError("MCP endpoint must be an absolute path without wildcards");
         }
@@ -45,8 +49,11 @@ public class McpBearerAuthConfig {
             return null;
         }
         try {
-            String token = Files.readString(Path.of(tokenFile), StandardCharsets.UTF_8).stripTrailing();
-            if (token.length() < 32 || token.contains("\r") || token.contains("\n")) {
+            String token = Files.readString(Path.of(tokenFile), StandardCharsets.UTF_8).strip();
+            if (token.startsWith("\uFEFF")) {
+                token = token.substring(1).strip();
+            }
+            if (token.length() < 32 || token.chars().anyMatch(Character::isWhitespace)) {
                 throw startupError(
                         "DISCORD_MCP_ACCESS_TOKEN_FILE must contain exactly one token of at least 32 characters");
             }

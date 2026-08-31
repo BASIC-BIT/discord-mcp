@@ -46,6 +46,22 @@ public final class McpToolPolicy {
             "get_emoji_details", "list_webhooks", "list_invites", "get_invite_details",
             "get_bans", "read_private_messages"
     );
+    private static final Set<String> WRITE_TOOLS = Set.of(
+            "add_reaction", "assign_role", "ban_member", "create_category", "create_emoji",
+            "create_forum_channel", "create_forum_post", "create_guild_scheduled_event",
+            "create_invite", "create_role", "create_stage_channel", "create_text_channel",
+            "create_voice_channel", "create_webhook", "delete_category", "delete_channel",
+            "delete_channel_permission_overwrite", "delete_emoji", "delete_guild_scheduled_event",
+            "delete_invite", "delete_message", "delete_private_message", "delete_role",
+            "delete_webhook", "disconnect_member", "download_attachment", "edit_category",
+            "edit_emoji", "edit_forum_channel", "edit_guild_scheduled_event", "edit_message",
+            "edit_private_message", "edit_role", "edit_text_channel", "edit_voice_channel",
+            "kick_member", "modify_forum_post", "modify_voice_state", "move_channel",
+            "move_member", "remove_reaction", "remove_role", "remove_timeout", "send_file",
+            "send_message", "send_private_message", "send_webhook_message",
+            "set_guild_scheduled_event_image", "set_nickname", "timeout_member", "unban_member",
+            "upsert_member_channel_permissions", "upsert_role_channel_permissions"
+    );
     private static final Set<String> CHANNEL_ID_FIELDS = Set.of(
             "channelId", "categoryId", "forumChannelId", "parentChannelId", "threadId"
     );
@@ -54,6 +70,7 @@ public final class McpToolPolicy {
     private final ObjectMapper objectMapper;
     private final Set<String> allowedGuilds;
     private final Set<String> allowedTools;
+    private final String defaultGuildId;
     private final WriteMode writeMode;
     private final Path auditFile;
     private final long auditMaxBytes;
@@ -71,6 +88,7 @@ public final class McpToolPolicy {
         this.objectMapper = objectMapper;
         this.allowedGuilds = parseCsv(allowedGuilds, "DISCORD_MCP_ALLOWED_GUILDS");
         this.allowedTools = parseCsv(allowedTools, "DISCORD_MCP_ALLOWED_TOOLS");
+        this.defaultGuildId = trimToNull(defaultGuildId);
         this.writeMode = WriteMode.parse(writeMode);
         this.auditFile = trimToNull(auditFile) == null ? null : Path.of(auditFile).toAbsolutePath().normalize();
         if (auditMaxBytes < 1024) {
@@ -79,10 +97,9 @@ public final class McpToolPolicy {
         this.auditMaxBytes = auditMaxBytes;
 
         this.allowedGuilds.forEach(id -> requireSnowflake(id, "DISCORD_MCP_ALLOWED_GUILDS"));
-        String configuredDefault = trimToNull(defaultGuildId);
-        if (configuredDefault != null) {
-            requireSnowflake(configuredDefault, "DISCORD_GUILD_ID");
-            if (!this.allowedGuilds.isEmpty() && !this.allowedGuilds.contains(configuredDefault)) {
+        if (this.defaultGuildId != null) {
+            requireSnowflake(this.defaultGuildId, "DISCORD_GUILD_ID");
+            if (!this.allowedGuilds.isEmpty() && !this.allowedGuilds.contains(this.defaultGuildId)) {
                 throw startupError("DISCORD_GUILD_ID must be in DISCORD_MCP_ALLOWED_GUILDS");
             }
         }
@@ -108,9 +125,11 @@ public final class McpToolPolicy {
 
     private final class PolicyToolCallback implements ToolCallback {
         private final ToolCallback delegate;
+        private final Set<String> declaredArguments;
 
         private PolicyToolCallback(ToolCallback delegate) {
             this.delegate = delegate;
+            this.declaredArguments = schemaProperties(delegate.getToolDefinition());
         }
 
         @Override
@@ -136,9 +155,12 @@ public final class McpToolPolicy {
         private String invoke(String arguments, ToolContext toolContext) {
             String tool = getToolDefinition().name();
             JsonNode parsed = parseArguments(arguments);
+            if (!allowedGuilds.isEmpty()) {
+                rejectUndeclaredArguments(tool, parsed, declaredArguments);
+            }
             Set<String> guildIds;
             try {
-                guildIds = resolveGuildIds(parsed, !allowedGuilds.isEmpty());
+                guildIds = resolveGuildIds(parsed, declaredArguments, !allowedGuilds.isEmpty());
             } catch (SecurityException error) {
                 audit(tool, "denied-unresolved-channel", Set.of(), parsed, null);
                 throw error;
@@ -147,7 +169,8 @@ public final class McpToolPolicy {
 
             if (writeMode == WriteMode.PREVIEW && !READ_ONLY_TOOLS.contains(tool)) {
                 audit(tool, "preview", guildIds, parsed, null);
-                return "WRITE_PREVIEW: " + tool + " was not called. Arguments: " + arguments;
+                return "WRITE_PREVIEW: " + tool + " was not called. Arguments: "
+                        + previewArguments(arguments, parsed);
             }
 
             audit(tool, "started", guildIds, parsed, null);
@@ -177,14 +200,25 @@ public final class McpToolPolicy {
         return parsed;
     }
 
-    private Set<String> resolveGuildIds(JsonNode arguments, boolean failOnUnresolvedChannel) {
+    private Set<String> resolveGuildIds(JsonNode arguments, Set<String> declaredArguments,
+                                        boolean failOnUnresolvedChannel) {
         Set<String> guildIds = new LinkedHashSet<>();
+        JsonNode guildValue = arguments.get("guildId");
+        if (guildValue != null && !guildValue.isNull() && !guildValue.isTextual()) {
+            throw new SecurityException("Supplied guildId must be a string");
+        }
         addText(arguments, "guildId", guildIds);
+        if (guildIds.isEmpty() && declaredArguments.contains("guildId") && defaultGuildId != null) {
+            guildIds.add(defaultGuildId);
+        }
 
         for (String field : CHANNEL_ID_FIELDS) {
             JsonNode value = arguments.get(field);
-            if (value == null || !value.isTextual() || value.asText().isBlank()) {
+            if (value == null || value.isNull() || value.isTextual() && value.asText().isBlank()) {
                 continue;
+            }
+            if (!value.isTextual()) {
+                throw new SecurityException("Supplied " + field + " must be a JSON string");
             }
             GuildChannel channel = jda.getGuildChannelById(value.asText());
             if (channel == null) {
@@ -192,8 +226,9 @@ public final class McpToolPolicy {
             }
             if (channel != null) {
                 guildIds.add(channel.getGuild().getId());
-            } else if (failOnUnresolvedChannel) {
-                throw new SecurityException("Supplied " + field + " could not be resolved to a guild");
+            } else if (failOnUnresolvedChannel && guildIds.isEmpty()) {
+                throw new SecurityException("Supplied " + field
+                        + " is not cached and this tool has no explicit allowed guild target");
             }
         }
         return guildIds;
@@ -233,9 +268,12 @@ public final class McpToolPolicy {
             var guildArray = event.putArray("guildIds");
             guildIds.forEach(guildArray::add);
             if (arguments != null) {
-                copyIdentifier(arguments, event, "channelId");
-                copyIdentifier(arguments, event, "messageId");
-                copyIdentifier(arguments, event, "eventId");
+                arguments.properties().forEach(entry -> {
+                    if (entry.getKey().matches("(?i).*(id|code)$")
+                            && entry.getValue().isValueNode() && !entry.getValue().isNull()) {
+                        event.put(entry.getKey(), entry.getValue().asText());
+                    }
+                });
                 event.put("argumentsSha256", sha256(arguments.toString()));
             }
             if (errorType != null) {
@@ -278,12 +316,51 @@ public final class McpToolPolicy {
         }
     }
 
-    private static void copyIdentifier(JsonNode source, tools.jackson.databind.node.ObjectNode target,
-                                       String field) {
-        JsonNode value = source.get(field);
-        if (value != null && value.isTextual() && !value.asText().isBlank()) {
-            target.put(field, value.asText());
+    private Set<String> schemaProperties(ToolDefinition definition) {
+        try {
+            JsonNode schema = objectMapper.readTree(definition.inputSchema());
+            JsonNode properties = schema == null ? null : schema.get("properties");
+            if (properties == null || !properties.isObject()) {
+                throw startupError("Tool " + definition.name() + " has no object properties in its input schema");
+            }
+            Set<String> names = new LinkedHashSet<>();
+            properties.propertyNames().forEach(names::add);
+            return Set.copyOf(names);
+        } catch (RuntimeException error) {
+            if (error instanceof IllegalArgumentException) {
+                throw error;
+            }
+            throw startupError("Tool " + definition.name() + " has an invalid input schema");
         }
+    }
+
+    private static void rejectUndeclaredArguments(String tool, JsonNode arguments, Set<String> declared) {
+        Set<String> supplied = new LinkedHashSet<>();
+        arguments.propertyNames().forEach(supplied::add);
+        supplied.removeAll(declared);
+        if (!supplied.isEmpty()) {
+            throw new SecurityException("Tool " + tool + " received undeclared arguments: " + supplied);
+        }
+    }
+
+    private String previewArguments(String raw, JsonNode parsed) {
+        final int maximumCharacters = 16_384;
+        if (raw.length() <= maximumCharacters) {
+            return raw;
+        }
+        JsonNode fileData = parsed.get("fileData");
+        if (fileData != null && fileData.isTextual()) {
+            var redacted = parsed.deepCopy();
+            String value = fileData.asText();
+            ((tools.jackson.databind.node.ObjectNode) redacted).put("fileData",
+                    "<omitted " + value.length() + " characters; sha256=" + sha256(value) + ">");
+            String compact = redacted.toString();
+            if (compact.length() <= maximumCharacters) {
+                return compact;
+            }
+        }
+        return raw.substring(0, maximumCharacters)
+                + "<preview truncated; full arguments sha256=" + sha256(raw) + ">";
     }
 
     private static Set<String> parseCsv(String raw, String name) {
@@ -313,6 +390,10 @@ public final class McpToolPolicy {
 
     static Set<String> readOnlyToolNames() {
         return READ_ONLY_TOOLS;
+    }
+
+    static Set<String> writeToolNames() {
+        return WRITE_TOOLS;
     }
 
     private static void requireSnowflake(String value, String name) {

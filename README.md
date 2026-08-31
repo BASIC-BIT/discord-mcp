@@ -203,7 +203,10 @@ For an agent-facing bot installed in more than one server, configure them explic
 
 - `DISCORD_MCP_ALLOWED_GUILDS`: comma-separated guild snowflakes. Every call must name an
   allowed guild or contain a channel ID that resolves to one. When the wrapper cannot resolve a
-  guild, it refuses the call rather than guessing.
+  guild, it refuses the call rather than guessing. If a tool declares `guildId`, an allowed
+  `DISCORD_GUILD_ID` remains its default when the argument is omitted. Tools without a `guildId`
+  parameter can never borrow that default. Message tools that target an uncached channel or
+  archived thread are refused because their schema has no separate guild argument.
 - `DISCORD_MCP_ALLOWED_TOOLS`: comma-separated exact tool names. Unknown names fail startup and
   tools not named here are not exported to MCP clients.
 - `DISCORD_MCP_WRITE_MODE`: `preview` returns `WRITE_PREVIEW` plus the exact proposed arguments
@@ -211,9 +214,10 @@ For an agent-facing bot installed in more than one server, configure them explic
   classified as writes, so new tools do not silently become read-only.
 - `DISCORD_EXPECTED_BOT_ID`: refuses startup when a valid token authenticates the wrong bot.
 - `DISCORD_MCP_ACCESS_TOKEN_FILE`: HTTP-only bearer credential, read from a mounted file. When
-  set, `/mcp` returns `401` unless the request has the exact `Authorization: Bearer ...` header.
-  Health checks remain available without the bearer. Use a separate random token of at least 32
-  characters, never the Discord bot token.
+  set under the STREAMABLE protocol, the configured MCP endpoint returns `401` unless the request
+  has the exact `Authorization: Bearer ...` header. Startup fails if the endpoint is switched to
+  another protocol while the bearer is configured. Health checks remain available without the
+  bearer. Use a separate random token of at least 32 characters, never the Discord bot token.
 - `DISCORD_MCP_AUDIT_FILE`: append-only JSONL tool audit. It records tool, outcome, write mode,
   resolved guild IDs, selected Discord object IDs, and an arguments hash. It deliberately does
   not record message bodies or other complete arguments. The active file rotates to one `.1`
@@ -240,6 +244,9 @@ always-on process.
 The generic `docker-compose.yml` does not forward the bearer-token or audit-file paths because it
 cannot conditionally create the required secret bind mount and persistent audit volume. Add both
 in a deployment-specific Compose override, or use a launcher that creates those mounts explicitly.
+The audit `started` record is fail-closed: if it cannot be appended, the tool is not called. A
+completion-record failure after Discord has already responded is returned as a warning without
+turning the completed action into an MCP failure that invites a duplicate retry.
 
 ### `DISCORD_MCP_FILE_ROOT`
 

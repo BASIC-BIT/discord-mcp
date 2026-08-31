@@ -92,6 +92,7 @@ public class DiscordMcpConfig {
             System.err.println("ERROR: DISCORD_EXPECTED_BOT_ID does not match the authenticated bot.");
             System.err.println("  Expected: " + expectedBotId.trim());
             System.err.println("  Actual:   " + actualBotId);
+            System.exit(1);
             throw new IllegalStateException("DISCORD_EXPECTED_BOT_ID mismatch");
         }
         return jda;
