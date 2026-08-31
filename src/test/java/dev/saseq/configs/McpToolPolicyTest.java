@@ -580,19 +580,18 @@ class McpToolPolicyTest {
     }
 
     @Test
-    void readOnlyCallContinuesWithWarningWhenStartAuditFails() throws Exception {
+    void readOnlyCallFailsClosedWhenStartAuditFails() throws Exception {
         Path audit = tempDir.resolve("audit.jsonl");
         Files.createDirectory(audit);
         AtomicInteger calls = new AtomicInteger();
         McpToolPolicy policy = policy(jdaWithChannel(), ALLOWED_GUILD, "read_messages", "allow",
                 audit.toString());
 
-        String result = only(policy.apply(provider("read_messages", calls)))
-                .call("{\"channelId\":\"32345678901234567\"}");
-
-        assertThat(result).startsWith("called")
-                .contains("audit completion record failed");
-        assertThat(calls).hasValue(1);
+        assertThatThrownBy(() -> only(policy.apply(provider("read_messages", calls)))
+                .call("{\"channelId\":\"32345678901234567\"}"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Could not append");
+        assertThat(calls).hasValue(0);
     }
 
     @Test

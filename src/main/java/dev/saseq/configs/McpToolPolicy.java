@@ -201,13 +201,7 @@ public final class McpToolPolicy {
                         + previewArguments(argumentsForHash, parsed);
             }
 
-            String auditWarning = null;
-            if (READ_ONLY_TOOLS.contains(tool)) {
-                auditWarning = auditBestEffort(
-                        tool, "started", guildIds, parsed, argumentsSha256, null);
-            } else {
-                audit(tool, "started", guildIds, parsed, argumentsSha256, null);
-            }
+            audit(tool, "started", guildIds, parsed, argumentsSha256, null);
             try {
                 String delegatedArguments = !policyActive && arguments != null && !arguments.isBlank()
                         ? arguments : parsed.toString();
@@ -216,10 +210,8 @@ public final class McpToolPolicy {
                         : delegate.call(delegatedArguments, toolContext);
                 String completionWarning = auditBestEffort(
                         tool, "tool-returned", guildIds, parsed, argumentsSha256, null);
-                if (completionWarning != null) {
-                    auditWarning = completionWarning;
-                }
-                return auditWarning == null ? result : result + System.lineSeparator() + auditWarning;
+                return completionWarning == null
+                        ? result : result + System.lineSeparator() + completionWarning;
             } catch (RuntimeException error) {
                 auditBestEffort(tool, "failed", guildIds, parsed, argumentsSha256,
                         error.getClass().getSimpleName());
