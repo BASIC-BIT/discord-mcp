@@ -13,12 +13,16 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
+import java.security.DigestOutputStream;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
@@ -169,11 +173,13 @@ public final class McpToolPolicy {
                         : delegate.call(arguments, toolContext);
             }
             JsonNode parsed = parseArguments(arguments);
+            String argumentsForHash = arguments == null || arguments.isBlank() ? "{}" : arguments;
+            String argumentsSha256 = sha256(argumentsForHash);
             if (policyActive) {
                 try {
                     rejectUndeclaredArguments(tool, parsed, declaredArguments);
                 } catch (SecurityException error) {
-                    auditBestEffort(tool, "denied-undeclared-argument", Set.of(), null,
+                    auditBestEffort(tool, "denied-undeclared-argument", Set.of(), null, null,
                             error.getClass().getSimpleName());
                     throw error;
                 }
@@ -182,23 +188,25 @@ public final class McpToolPolicy {
             try {
                 guildIds = resolveGuildIds(parsed, declaredArguments, !allowedGuilds.isEmpty());
             } catch (SecurityException error) {
-                auditBestEffort(tool, "denied-invalid-target", Set.of(), parsed, null);
+                auditBestEffort(tool, "denied-invalid-target", Set.of(), parsed,
+                        argumentsSha256, null);
                 throw error;
             }
-            enforceGuilds(tool, guildIds, parsed);
+            enforceGuilds(tool, guildIds, parsed, argumentsSha256);
 
             if (writeMode == WriteMode.PREVIEW && !READ_ONLY_TOOLS.contains(tool)) {
-                audit(tool, "preview", guildIds, parsed, null);
+                audit(tool, "preview", guildIds, parsed, argumentsSha256, null);
                 return "WRITE_PREVIEW: This deployment runs in preview mode; " + tool
                         + " was not called, and retrying here will produce the same result. Arguments: "
-                        + previewArguments(parsed.toString(), parsed);
+                        + previewArguments(argumentsForHash, parsed);
             }
 
             String auditWarning = null;
             if (READ_ONLY_TOOLS.contains(tool)) {
-                auditWarning = auditBestEffort(tool, "started", guildIds, parsed, null);
+                auditWarning = auditBestEffort(
+                        tool, "started", guildIds, parsed, argumentsSha256, null);
             } else {
-                audit(tool, "started", guildIds, parsed, null);
+                audit(tool, "started", guildIds, parsed, argumentsSha256, null);
             }
             try {
                 String delegatedArguments = !policyActive && arguments != null && !arguments.isBlank()
@@ -207,13 +215,14 @@ public final class McpToolPolicy {
                         ? delegate.call(delegatedArguments)
                         : delegate.call(delegatedArguments, toolContext);
                 String completionWarning = auditBestEffort(
-                        tool, "tool-returned", guildIds, parsed, null);
+                        tool, "tool-returned", guildIds, parsed, argumentsSha256, null);
                 if (completionWarning != null) {
                     auditWarning = completionWarning;
                 }
                 return auditWarning == null ? result : result + System.lineSeparator() + auditWarning;
             } catch (RuntimeException error) {
-                auditBestEffort(tool, "failed", guildIds, parsed, error.getClass().getSimpleName());
+                auditBestEffort(tool, "failed", guildIds, parsed, argumentsSha256,
+                        error.getClass().getSimpleName());
                 throw error;
             }
         }
@@ -289,24 +298,26 @@ public final class McpToolPolicy {
         return guildIds;
     }
 
-    private void enforceGuilds(String tool, Set<String> guildIds, JsonNode arguments) {
+    private void enforceGuilds(String tool, Set<String> guildIds, JsonNode arguments,
+                               String argumentsSha256) {
         if (allowedGuilds.isEmpty()) {
             return;
         }
         if (guildIds.isEmpty()) {
-            auditBestEffort(tool, "denied-unresolved-guild", guildIds, arguments, null);
+            auditBestEffort(tool, "denied-unresolved-guild", guildIds, arguments,
+                    argumentsSha256, null);
             throw new SecurityException("Guild could not be resolved for allowlisted tool call: " + tool);
         }
         Set<String> denied = new LinkedHashSet<>(guildIds);
         denied.removeAll(allowedGuilds);
         if (!denied.isEmpty()) {
-            auditBestEffort(tool, "denied-guild", guildIds, arguments, null);
+            auditBestEffort(tool, "denied-guild", guildIds, arguments, argumentsSha256, null);
             throw new SecurityException("Guild is not in DISCORD_MCP_ALLOWED_GUILDS");
         }
     }
 
     private synchronized void audit(String tool, String outcome, Set<String> guildIds,
-                                    JsonNode arguments, String errorType) {
+                                    JsonNode arguments, String argumentsSha256, String errorType) {
         if (auditFile == null) {
             return;
         }
@@ -325,7 +336,7 @@ public final class McpToolPolicy {
                         event.put(entry.getKey(), boundedAuditIdentifier(entry.getValue().asText()));
                     }
                 });
-                event.put("argumentsSha256", sha256(arguments.toString()));
+                event.put("argumentsSha256", argumentsSha256);
             }
             if (errorType != null) {
                 event.put("errorType", errorType);
@@ -344,9 +355,9 @@ public final class McpToolPolicy {
     }
 
     private String auditBestEffort(String tool, String outcome, Set<String> guildIds,
-                                   JsonNode arguments, String errorType) {
+                                   JsonNode arguments, String argumentsSha256, String errorType) {
         try {
-            audit(tool, outcome, guildIds, arguments, errorType);
+            audit(tool, outcome, guildIds, arguments, argumentsSha256, errorType);
             return null;
         } catch (RuntimeException auditError) {
             String warning = "WARNING: The tool outcome is preserved, but its audit completion record failed.";
@@ -490,10 +501,14 @@ public final class McpToolPolicy {
 
     private static String sha256(String value) {
         try {
-            byte[] digest = MessageDigest.getInstance("SHA-256")
-                    .digest(value.getBytes(StandardCharsets.UTF_8));
-            return java.util.HexFormat.of().formatHex(digest);
-        } catch (java.security.NoSuchAlgorithmException impossible) {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            try (Writer writer = new OutputStreamWriter(
+                    new DigestOutputStream(OutputStream.nullOutputStream(), digest),
+                    StandardCharsets.UTF_8)) {
+                writer.write(value);
+            }
+            return java.util.HexFormat.of().formatHex(digest.digest());
+        } catch (java.security.NoSuchAlgorithmException | IOException impossible) {
             throw new IllegalStateException(impossible);
         }
     }

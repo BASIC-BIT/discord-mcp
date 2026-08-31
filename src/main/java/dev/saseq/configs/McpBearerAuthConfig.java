@@ -19,16 +19,19 @@ import java.security.MessageDigest;
 
 /** Optional bearer authentication for the HTTP MCP endpoint. */
 @Configuration
-@ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
 public class McpBearerAuthConfig {
     @Bean
-    FilterRegistrationBean<OncePerRequestFilter> mcpBearerAuthFilter(
+    BearerAuthSettings mcpBearerAuthSettings(
             @Value("${DISCORD_MCP_ACCESS_TOKEN_FILE:}") String tokenFile,
             @Value("${spring.ai.mcp.server.streamable-http.mcp-endpoint:/mcp}") String mcpEndpoint,
-            @Value("${spring.ai.mcp.server.protocol:}") String protocol) {
+            @Value("${spring.ai.mcp.server.protocol:}") String protocol,
+            @Value("${spring.main.web-application-type:}") String webApplicationType) {
         String token = readToken(tokenFile);
         if (token != null && !"STREAMABLE".equalsIgnoreCase(protocol)) {
             throw startupError("Bearer authentication supports only the STREAMABLE HTTP protocol");
+        }
+        if (token != null && !"servlet".equalsIgnoreCase(webApplicationType)) {
+            throw startupError("Bearer authentication requires servlet web application mode");
         }
         if (token != null) {
             String normalizedEndpoint = normalizeEndpoint(mcpEndpoint);
@@ -36,12 +39,21 @@ public class McpBearerAuthConfig {
                 throw startupError("MCP endpoint must not equal the public health endpoint");
             }
         }
+        return new BearerAuthSettings(token);
+    }
+
+    @Bean
+    @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
+    FilterRegistrationBean<OncePerRequestFilter> mcpBearerAuthFilter(BearerAuthSettings settings) {
         FilterRegistrationBean<OncePerRequestFilter> registration = new FilterRegistrationBean<>();
-        registration.setFilter(new BearerFilter(token));
+        registration.setFilter(new BearerFilter(settings.token()));
         registration.addUrlPatterns("/*");
         registration.setName("mcpBearerAuthFilter");
         registration.setOrder(Integer.MIN_VALUE);
         return registration;
+    }
+
+    record BearerAuthSettings(String token) {
     }
 
     private static String readToken(String tokenFile) {

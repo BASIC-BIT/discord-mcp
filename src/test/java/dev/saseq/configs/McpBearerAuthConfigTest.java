@@ -70,8 +70,9 @@ class McpBearerAuthConfigTest {
 
     @Test
     void unsetTokenDoesNotValidateBearerOnlyEndpointSettings() {
-        var registration = new McpBearerAuthConfig()
-                .mcpBearerAuthFilter("", "relative-*", "");
+        var config = new McpBearerAuthConfig();
+        var settings = config.mcpBearerAuthSettings("", "relative-*", "", "");
+        var registration = config.mcpBearerAuthFilter(settings);
 
         assertThat(registration.getUrlPatterns()).containsExactly("/*");
     }
@@ -81,8 +82,10 @@ class McpBearerAuthConfigTest {
         Path tokenFile = tempDir.resolve("token");
         Files.writeString(tokenFile, TOKEN + System.lineSeparator() + System.lineSeparator());
 
-        var registration = new McpBearerAuthConfig()
-                .mcpBearerAuthFilter(tokenFile.toString(), "/custom-mcp/", "STREAMABLE");
+        var config = new McpBearerAuthConfig();
+        var settings = config.mcpBearerAuthSettings(
+                tokenFile.toString(), "/custom-mcp/", "STREAMABLE", "servlet");
+        var registration = config.mcpBearerAuthFilter(settings);
 
         assertThat(registration.getUrlPatterns()).containsExactly("/*");
     }
@@ -148,7 +151,8 @@ class McpBearerAuthConfigTest {
         Files.writeString(tokenFile, TOKEN);
 
         assertThatThrownBy(() -> new McpBearerAuthConfig()
-                .mcpBearerAuthFilter(tokenFile.toString(), "/actuator/health", "STREAMABLE"))
+                .mcpBearerAuthSettings(
+                        tokenFile.toString(), "/actuator/health", "STREAMABLE", "servlet"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("public health endpoint");
     }
@@ -159,8 +163,30 @@ class McpBearerAuthConfigTest {
         Files.writeString(tokenFile, TOKEN);
 
         assertThatThrownBy(() -> new McpBearerAuthConfig()
-                .mcpBearerAuthFilter(tokenFile.toString(), "/mcp", ""))
+                .mcpBearerAuthSettings(tokenFile.toString(), "/mcp", "", "none"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("STREAMABLE");
+    }
+
+    @Test
+    void configuredBearerRequiresServletWebApplication() throws Exception {
+        Path tokenFile = tempDir.resolve("token");
+        Files.writeString(tokenFile, TOKEN);
+
+        assertThatThrownBy(() -> new McpBearerAuthConfig()
+                .mcpBearerAuthSettings(tokenFile.toString(), "/mcp", "STREAMABLE", "none"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("servlet");
+    }
+
+    @Test
+    void configuredBearerIsValidatedBeforeServletFilterCreation() throws Exception {
+        Path tokenFile = tempDir.resolve("token");
+        Files.writeString(tokenFile, TOKEN);
+
+        var settings = new McpBearerAuthConfig()
+                .mcpBearerAuthSettings(tokenFile.toString(), "/mcp", "STREAMABLE", "servlet");
+
+        assertThat(settings.token()).isEqualTo(TOKEN);
     }
 }
