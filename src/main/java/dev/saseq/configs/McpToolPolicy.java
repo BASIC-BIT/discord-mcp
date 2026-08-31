@@ -280,7 +280,11 @@ public final class McpToolPolicy {
                 event.put("errorType", errorType);
             }
             String line = objectMapper.writeValueAsString(event) + System.lineSeparator();
-            rotateAuditIfNeeded(line.getBytes(StandardCharsets.UTF_8).length);
+            int lineBytes = line.getBytes(StandardCharsets.UTF_8).length;
+            if (lineBytes > auditMaxBytes) {
+                throw new IllegalStateException("Audit record exceeds DISCORD_MCP_AUDIT_MAX_BYTES");
+            }
+            rotateAuditIfNeeded(lineBytes);
             Files.writeString(auditFile, line,
                     StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
         } catch (IOException error) {

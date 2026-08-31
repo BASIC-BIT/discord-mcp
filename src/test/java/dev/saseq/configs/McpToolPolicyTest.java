@@ -230,6 +230,19 @@ class McpToolPolicyTest {
     }
 
     @Test
+    void oversizedAuditRecordIsRejectedBeforeItCanExceedTheCap() {
+        Path audit = tempDir.resolve("audit.jsonl");
+        McpToolPolicy policy = new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
+                "", "send_message", "", "preview", audit.toString(), 1024);
+
+        assertThatThrownBy(() -> only(policy.apply(provider("send_message", new AtomicInteger())))
+                .call("{\"channelId\":\"" + "1".repeat(2048) + "\",\"message\":\"x\"}"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("exceeds DISCORD_MCP_AUDIT_MAX_BYTES");
+        assertThat(audit).doesNotExist();
+    }
+
+    @Test
     void completedCallIsNotReportedAsFailedWhenCompletionAuditFails() throws Exception {
         Path audit = tempDir.resolve("audit.jsonl");
         McpToolPolicy policy = policy(jdaWithChannel(), ALLOWED_GUILD, "send_message", "allow",
