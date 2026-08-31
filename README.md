@@ -205,18 +205,21 @@ For an agent-facing bot installed in more than one server, configure them explic
   allowed guild or contain a channel ID that resolves to one. When the wrapper cannot resolve a
   guild, it refuses the call rather than guessing. If a tool declares `guildId`, an allowed
   `DISCORD_GUILD_ID` remains its default when the argument is omitted. Tools without a `guildId`
-  parameter can never borrow that default. Message tools that target an uncached channel or
-  archived thread are refused because their schema has no separate guild argument.
+  parameter can never borrow that default. Every supplied channel-like target must resolve from
+  the JDA cache; uncached channels and archived threads are refused even when a guild is explicit.
 - `DISCORD_MCP_ALLOWED_TOOLS`: comma-separated exact tool names. Unknown names fail startup and
-  tools not named here are not exported to MCP clients.
-- `DISCORD_MCP_WRITE_MODE`: `preview` returns `WRITE_PREVIEW` plus the exact proposed arguments
-  for every mutation without calling Discord. `allow` executes writes. Unknown tool names are
+  tools not named here are not exported to MCP clients. When a guild allowlist is active, global
+  target tools that cannot prove a guild are intentionally uncallable and should be omitted:
+  webhook URL/ID operations, invite-code lookup/deletion, and private-message operations.
+- `DISCORD_MCP_WRITE_MODE`: `preview` returns `WRITE_PREVIEW` plus the proposed argument object
+  for every mutation without calling Discord. Large payloads are bounded and hashed rather than
+  echoed in full. `allow` executes writes. Unknown tool names are
   classified as writes, so new tools do not silently become read-only.
 - `DISCORD_EXPECTED_BOT_ID`: refuses startup when a valid token authenticates the wrong bot.
 - `DISCORD_MCP_ACCESS_TOKEN_FILE`: HTTP-only bearer credential, read from a mounted file. When
   set under the STREAMABLE protocol, the configured MCP endpoint returns `401` unless the request
-  has the exact `Authorization: Bearer ...` header. Startup fails if the endpoint is switched to
-  another protocol while the bearer is configured. Health checks remain available without the
+  has the exact `Authorization: Bearer ...` header. Startup fails unless the protocol is explicitly
+  configured as STREAMABLE while the bearer is enabled. Health checks remain available without the
   bearer. Use a separate random token of at least 32 characters, never the Discord bot token.
 - `DISCORD_MCP_AUDIT_FILE`: append-only JSONL tool audit. It records tool, outcome, write mode,
   resolved guild IDs, selected Discord object IDs, and an arguments hash. It deliberately does

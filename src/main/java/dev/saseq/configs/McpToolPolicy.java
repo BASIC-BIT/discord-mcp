@@ -72,6 +72,7 @@ public final class McpToolPolicy {
     private final Set<String> allowedTools;
     private final String defaultGuildId;
     private final WriteMode writeMode;
+    private final boolean policyActive;
     private final Path auditFile;
     private final long auditMaxBytes;
 
@@ -90,7 +91,11 @@ public final class McpToolPolicy {
         this.allowedTools = parseCsv(allowedTools, "DISCORD_MCP_ALLOWED_TOOLS");
         this.defaultGuildId = trimToNull(defaultGuildId);
         this.writeMode = WriteMode.parse(writeMode);
-        this.auditFile = trimToNull(auditFile) == null ? null : Path.of(auditFile).toAbsolutePath().normalize();
+        this.policyActive = !this.allowedGuilds.isEmpty() || !this.allowedTools.isEmpty()
+                || this.writeMode == WriteMode.PREVIEW;
+        String configuredAuditFile = trimToNull(auditFile);
+        this.auditFile = configuredAuditFile == null
+                ? null : Path.of(configuredAuditFile).toAbsolutePath().normalize();
         if (auditMaxBytes < 1024) {
             throw startupError("DISCORD_MCP_AUDIT_MAX_BYTES must be at least 1024");
         }
@@ -155,14 +160,14 @@ public final class McpToolPolicy {
         private String invoke(String arguments, ToolContext toolContext) {
             String tool = getToolDefinition().name();
             JsonNode parsed = parseArguments(arguments);
-            if (!allowedGuilds.isEmpty()) {
+            if (policyActive) {
                 rejectUndeclaredArguments(tool, parsed, declaredArguments);
             }
             Set<String> guildIds;
             try {
                 guildIds = resolveGuildIds(parsed, declaredArguments, !allowedGuilds.isEmpty());
             } catch (SecurityException error) {
-                audit(tool, "denied-unresolved-channel", Set.of(), parsed, null);
+                audit(tool, "denied-invalid-target", Set.of(), parsed, null);
                 throw error;
             }
             enforceGuilds(tool, guildIds, parsed);
@@ -170,14 +175,14 @@ public final class McpToolPolicy {
             if (writeMode == WriteMode.PREVIEW && !READ_ONLY_TOOLS.contains(tool)) {
                 audit(tool, "preview", guildIds, parsed, null);
                 return "WRITE_PREVIEW: " + tool + " was not called. Arguments: "
-                        + previewArguments(arguments, parsed);
+                        + previewArguments(parsed.toString(), parsed);
             }
 
             audit(tool, "started", guildIds, parsed, null);
             try {
                 String result = toolContext == null
-                        ? delegate.call(arguments)
-                        : delegate.call(arguments, toolContext);
+                        ? delegate.call(parsed.toString())
+                        : delegate.call(parsed.toString(), toolContext);
                 String auditWarning = auditBestEffort(tool, "executed", guildIds, parsed, null);
                 return auditWarning == null ? result : result + System.lineSeparator() + auditWarning;
             } catch (RuntimeException error) {
@@ -188,13 +193,19 @@ public final class McpToolPolicy {
     }
 
     private JsonNode parseArguments(String arguments) {
+        if (arguments == null || arguments.isBlank()) {
+            return objectMapper.createObjectNode();
+        }
         JsonNode parsed;
         try {
             parsed = objectMapper.readTree(arguments);
         } catch (RuntimeException error) {
             throw new IllegalArgumentException("Tool arguments are not valid JSON", error);
         }
-        if (parsed == null || !parsed.isObject()) {
+        if (parsed == null || parsed.isNull() || parsed.isMissingNode()) {
+            return objectMapper.createObjectNode();
+        }
+        if (!parsed.isObject()) {
             throw new IllegalArgumentException("Tool arguments must be a JSON object");
         }
         return parsed;
@@ -204,7 +215,8 @@ public final class McpToolPolicy {
                                         boolean failOnUnresolvedChannel) {
         Set<String> guildIds = new LinkedHashSet<>();
         JsonNode guildValue = arguments.get("guildId");
-        if (guildValue != null && !guildValue.isNull() && !guildValue.isTextual()) {
+        if (failOnUnresolvedChannel && guildValue != null && !guildValue.isNull()
+                && !guildValue.isTextual()) {
             throw new SecurityException("Supplied guildId must be a string");
         }
         addText(arguments, "guildId", guildIds);
@@ -218,7 +230,10 @@ public final class McpToolPolicy {
                 continue;
             }
             if (!value.isTextual()) {
-                throw new SecurityException("Supplied " + field + " must be a JSON string");
+                if (failOnUnresolvedChannel) {
+                    throw new SecurityException("Supplied " + field + " must be a JSON string");
+                }
+                continue;
             }
             GuildChannel channel = jda.getGuildChannelById(value.asText());
             if (channel == null) {
@@ -226,9 +241,9 @@ public final class McpToolPolicy {
             }
             if (channel != null) {
                 guildIds.add(channel.getGuild().getId());
-            } else if (failOnUnresolvedChannel && guildIds.isEmpty()) {
+            } else if (failOnUnresolvedChannel) {
                 throw new SecurityException("Supplied " + field
-                        + " is not cached and this tool has no explicit allowed guild target");
+                        + " is not cached; allowlisted calls require every supplied channel target to resolve");
             }
         }
         return guildIds;

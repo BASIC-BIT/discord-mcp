@@ -168,12 +168,58 @@ class McpToolPolicyTest {
     }
 
     @Test
+    void numericIdsPreserveLegacyBindingWhenNoPolicyIsConfigured() {
+        AtomicInteger calls = new AtomicInteger();
+        McpToolPolicy policy = policy(mock(JDA.class), "", "", "allow", "");
+
+        assertThat(only(policy.apply(provider("send_message", calls)))
+                .call("{\"channelId\":32345678901234567,\"message\":\"x\"}"))
+                .isEqualTo("called");
+        assertThat(calls).hasValue(1);
+    }
+
+    @Test
+    void numericIdStillBindsThroughTheGeneratedSpringCallbackWithoutPolicy() {
+        McpToolPolicy policy = policy(mock(JDA.class), "", "", "allow", "");
+        ToolCallbackProvider generated = MethodToolCallbackProvider.builder()
+                .toolObjects(new GeneratedSchemaTool())
+                .build();
+
+        assertThat(only(policy.apply(generated))
+                .call("{\"channelId\":32345678901234567,\"message\":\"x\"}"))
+                .isEqualTo("\"called\"");
+    }
+
+    @Test
     void declaredGuildParameterCanUseAllowedDefault() {
         McpToolPolicy policy = new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
                 ALLOWED_GUILD, "list_channels", ALLOWED_GUILD, "allow", "", 10485760);
 
         assertThat(only(policy.apply(provider("list_channels", new AtomicInteger()))).call("{}"))
                 .isEqualTo("called");
+    }
+
+    @Test
+    void absentArgumentMapsAreNormalizedToEmptyObjects() {
+        AtomicInteger calls = new AtomicInteger();
+        McpToolPolicy policy = new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
+                ALLOWED_GUILD, "list_channels", ALLOWED_GUILD, "allow", "", 10485760);
+        ToolCallback callback = only(policy.apply(provider("list_channels", calls)));
+
+        assertThat(callback.call(null)).isEqualTo("called");
+        assertThat(callback.call("")).isEqualTo("called");
+        assertThat(callback.call("null")).isEqualTo("called");
+        assertThat(calls).hasValue(3);
+    }
+
+    @Test
+    void absentArgumentsReachTheGeneratedSpringCallbackAsAnEmptyObject() {
+        McpToolPolicy policy = policy(mock(JDA.class), "", "", "allow", "");
+        ToolCallbackProvider generated = MethodToolCallbackProvider.builder()
+                .toolObjects(new GeneratedOptionalTool())
+                .build();
+
+        assertThat(only(policy.apply(generated)).call(null)).isEqualTo("\"empty\"");
     }
 
     @Test
@@ -184,6 +230,17 @@ class McpToolPolicyTest {
                 .call("{\"channelId\":\"32345678901234567\"}"))
                 .isInstanceOf(SecurityException.class)
                 .hasMessageContaining("channelId is not cached");
+    }
+
+    @Test
+    void explicitAllowedGuildDoesNotExcuseAnUncachedChannelTarget() {
+        McpToolPolicy policy = policy(mock(JDA.class), ALLOWED_GUILD, "edit_text_channel", "allow", "");
+
+        assertThatThrownBy(() -> only(policy.apply(provider("edit_text_channel", new AtomicInteger())))
+                .call("{\"guildId\":\"" + ALLOWED_GUILD
+                        + "\",\"channelId\":\"32345678901234567\"}"))
+                .isInstanceOf(SecurityException.class)
+                .hasMessageContaining("every supplied channel target to resolve");
     }
 
     @Test
@@ -214,6 +271,15 @@ class McpToolPolicyTest {
     }
 
     @Test
+    void unknownConfiguredToolFailsStartup() {
+        McpToolPolicy policy = policy(mock(JDA.class), "", "not_a_real_tool", "allow", "");
+
+        assertThatThrownBy(() -> policy.apply(provider("read_messages", new AtomicInteger())))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("unknown tools");
+    }
+
+    @Test
     void auditRecordsIdentifiersAndHashButNotMessageBody() throws Exception {
         Path audit = tempDir.resolve("audit.jsonl");
         McpToolPolicy policy = policy(jdaWithChannel(), ALLOWED_GUILD, "send_message", "preview",
@@ -230,6 +296,18 @@ class McpToolPolicyTest {
     }
 
     @Test
+    void whitespaceAroundAuditPathIsIgnored() {
+        Path audit = tempDir.resolve("trimmed-audit.jsonl");
+        McpToolPolicy policy = policy(jdaWithChannel(), ALLOWED_GUILD, "send_message", "preview",
+                "  " + audit + "  ");
+
+        only(policy.apply(provider("send_message", new AtomicInteger())))
+                .call("{\"channelId\":\"32345678901234567\",\"message\":\"x\"}");
+
+        assertThat(audit).exists();
+    }
+
+    @Test
     void oversizedAuditRecordIsRejectedBeforeItCanExceedTheCap() {
         Path audit = tempDir.resolve("audit.jsonl");
         McpToolPolicy policy = new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
@@ -240,6 +318,24 @@ class McpToolPolicyTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("exceeds DISCORD_MCP_AUDIT_MAX_BYTES");
         assertThat(audit).doesNotExist();
+    }
+
+    @Test
+    void auditRotatesBeforeTheActiveFileWouldExceedTheCap() throws Exception {
+        Path audit = tempDir.resolve("audit.jsonl");
+        McpToolPolicy policy = new McpToolPolicy(jdaWithChannel(), new ObjectMapper(),
+                ALLOWED_GUILD, "send_message", "", "preview", audit.toString(), 1024);
+        ToolCallback callback = only(policy.apply(provider("send_message", new AtomicInteger())));
+
+        for (int index = 0; index < 12; index++) {
+            callback.call("{\"channelId\":\"32345678901234567\",\"message\":\"x" + index + "\"}");
+        }
+
+        Path rotated = audit.resolveSibling("audit.jsonl.1");
+        assertThat(audit).exists();
+        assertThat(rotated).exists();
+        assertThat(Files.size(audit)).isLessThanOrEqualTo(1024);
+        assertThat(Files.size(rotated)).isLessThanOrEqualTo(1024);
     }
 
     @Test
@@ -331,6 +427,7 @@ class McpToolPolicyTest {
                 .inputSchema(switch (name) {
                     case "send_message" -> schema("channelId", "message");
                     case "read_messages" -> schema("channelId");
+                    case "edit_text_channel" -> schema("guildId", "channelId");
                     case "send_webhook_message" -> schema("webhookUrl", "message");
                     case "list_channels" -> schema("guildId");
                     default -> schema();
@@ -362,6 +459,14 @@ class McpToolPolicyTest {
         public String sendMessage(@ToolParam(description = "channel") String channelId,
                                   @ToolParam(description = "message") String message) {
             return "called";
+        }
+    }
+
+    static final class GeneratedOptionalTool {
+        @Tool(name = "list_channels", description = "test")
+        public String listChannels(
+                @ToolParam(description = "guild", required = false) String guildId) {
+            return guildId == null ? "empty" : guildId;
         }
     }
 }

@@ -25,7 +25,7 @@ public class McpBearerAuthConfig {
     FilterRegistrationBean<OncePerRequestFilter> mcpBearerAuthFilter(
             @Value("${DISCORD_MCP_ACCESS_TOKEN_FILE:}") String tokenFile,
             @Value("${spring.ai.mcp.server.streamable-http.mcp-endpoint:/mcp}") String mcpEndpoint,
-            @Value("${spring.ai.mcp.server.protocol:STREAMABLE}") String protocol) {
+            @Value("${spring.ai.mcp.server.protocol:}") String protocol) {
         String token = readToken(tokenFile);
         if (token != null && !"STREAMABLE".equalsIgnoreCase(protocol)) {
             throw startupError("Bearer authentication supports only the STREAMABLE HTTP protocol");

@@ -10,6 +10,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class McpBearerAuthConfigTest {
     private static final String TOKEN = "12345678901234567890123456789012";
@@ -76,5 +77,16 @@ class McpBearerAuthConfigTest {
                 .mcpBearerAuthFilter(tokenFile.toString(), "/custom-mcp/", "STREAMABLE");
 
         assertThat(registration.getUrlPatterns()).containsExactlyInAnyOrder("/custom-mcp", "/custom-mcp/*");
+    }
+
+    @Test
+    void configuredBearerRequiresExplicitStreamableProtocol() throws Exception {
+        Path tokenFile = tempDir.resolve("token");
+        Files.writeString(tokenFile, TOKEN);
+
+        assertThatThrownBy(() -> new McpBearerAuthConfig()
+                .mcpBearerAuthFilter(tokenFile.toString(), "/mcp", ""))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("STREAMABLE");
     }
 }
