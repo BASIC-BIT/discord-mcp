@@ -296,6 +296,36 @@ class McpToolPolicyTest {
     }
 
     @Test
+    void auditDoesNotRecordInviteCredentials() throws Exception {
+        Path audit = tempDir.resolve("audit.jsonl");
+        McpToolPolicy policy = policy(mock(JDA.class), "", "get_invite_details", "allow",
+                audit.toString());
+
+        only(policy.apply(provider("get_invite_details", new AtomicInteger())))
+                .call("{\"inviteCode\":\"https://discord.gg/still-secret\"}");
+
+        assertThat(Files.readString(audit))
+                .contains("argumentsSha256")
+                .doesNotContain("still-secret")
+                .doesNotContain("inviteCode");
+    }
+
+    @Test
+    void returnedToolIsNotAuditedAsConfirmedDiscordExecution() throws Exception {
+        Path audit = tempDir.resolve("audit.jsonl");
+        McpToolPolicy policy = policy(jdaWithChannel(), ALLOWED_GUILD, "read_messages", "allow",
+                audit.toString());
+
+        only(policy.apply(provider("read_messages", new AtomicInteger())))
+                .call("{\"channelId\":\"32345678901234567\"}");
+
+        assertThat(Files.readString(audit))
+                .contains("\"outcome\":\"started\"")
+                .contains("\"outcome\":\"tool-returned\"")
+                .doesNotContain("\"outcome\":\"executed\"");
+    }
+
+    @Test
     void whitespaceAroundAuditPathIsIgnored() {
         Path audit = tempDir.resolve("trimmed-audit.jsonl");
         McpToolPolicy policy = policy(jdaWithChannel(), ALLOWED_GUILD, "send_message", "preview",
@@ -429,6 +459,7 @@ class McpToolPolicyTest {
                     case "read_messages" -> schema("channelId");
                     case "edit_text_channel" -> schema("guildId", "channelId");
                     case "send_webhook_message" -> schema("webhookUrl", "message");
+                    case "get_invite_details" -> schema("inviteCode");
                     case "list_channels" -> schema("guildId");
                     default -> schema();
                 })

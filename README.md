@@ -32,7 +32,7 @@ Discord by managing channels, sending messages, and retrieving server informatio
 #### 1) Set local env variables
 ```bash
 export DISCORD_TOKEN="YOUR_DISCORD_BOT_TOKEN"
-export DISCORD_GUILD_ID="OPTIONAL_DEFAULT_SERVER_ID"
+export DISCORD_GUILD_ID=""
 export SPRING_PROFILES_ACTIVE=http
 # Only if you want download_attachment. Must match the container path mounted below,
 # not a host path — see Security notes.
@@ -115,7 +115,7 @@ cd discord-mcp
 cat > .env <<EOF
 SPRING_PROFILES_ACTIVE=http
 DISCORD_TOKEN=<YOUR_DISCORD_BOT_TOKEN>
-DISCORD_GUILD_ID=<OPTIONAL_DEFAULT_SERVER_ID>
+DISCORD_GUILD_ID=
 # Optional, enables download_attachment. Container path, matching the named volume.
 DISCORD_MCP_DOWNLOAD_ROOT=/var/lib/discord-mcp/downloads
 # Optional, enables local-path uploads. Uncomment to grant it — send_file's filePath and
@@ -223,7 +223,9 @@ For an agent-facing bot installed in more than one server, configure them explic
   bearer. Use a separate random token of at least 32 characters, never the Discord bot token.
 - `DISCORD_MCP_AUDIT_FILE`: append-only JSONL tool audit. It records tool, outcome, write mode,
   resolved guild IDs, selected Discord object IDs, and an arguments hash. It deliberately does
-  not record message bodies or other complete arguments. The active file rotates to one `.1`
+  not record message bodies, invite credentials, or other complete arguments. A `tool-returned`
+  outcome means the MCP tool returned to its caller; it does not claim that an asynchronously
+  queued Discord mutation later succeeded. Use readback for consequential writes. The active file rotates to one `.1`
   backup before the next append would exceed `DISCORD_MCP_AUDIT_MAX_BYTES` (10 MiB by default),
   so the two files remain bounded. Set a value of at least 1024 bytes if a different cap is needed.
 

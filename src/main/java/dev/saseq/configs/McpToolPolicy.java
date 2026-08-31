@@ -183,7 +183,7 @@ public final class McpToolPolicy {
                 String result = toolContext == null
                         ? delegate.call(parsed.toString())
                         : delegate.call(parsed.toString(), toolContext);
-                String auditWarning = auditBestEffort(tool, "executed", guildIds, parsed, null);
+                String auditWarning = auditBestEffort(tool, "tool-returned", guildIds, parsed, null);
                 return auditWarning == null ? result : result + System.lineSeparator() + auditWarning;
             } catch (RuntimeException error) {
                 auditBestEffort(tool, "failed", guildIds, parsed, error.getClass().getSimpleName());
@@ -284,7 +284,7 @@ public final class McpToolPolicy {
             guildIds.forEach(guildArray::add);
             if (arguments != null) {
                 arguments.properties().forEach(entry -> {
-                    if (entry.getKey().matches("(?i).*(id|code)$")
+                    if (entry.getKey().matches("(?i).*id$")
                             && entry.getValue().isValueNode() && !entry.getValue().isNull()) {
                         event.put(entry.getKey(), entry.getValue().asText());
                     }
