@@ -196,6 +196,44 @@ Default MCP endpoint URL (HTTP profile): `http://localhost:8085/mcp`
 
 ## 🔒 Security notes
 
+### Multi-server deployment policy
+
+All policy variables below are optional so existing deployments retain their current behavior.
+For an agent-facing bot installed in more than one server, configure them explicitly:
+
+- `DISCORD_MCP_ALLOWED_GUILDS`: comma-separated guild snowflakes. Every call must name an
+  allowed guild or contain a channel ID that resolves to one. When the wrapper cannot resolve a
+  guild, it refuses the call rather than guessing.
+- `DISCORD_MCP_ALLOWED_TOOLS`: comma-separated exact tool names. Unknown names fail startup and
+  tools not named here are not exported to MCP clients.
+- `DISCORD_MCP_WRITE_MODE`: `preview` returns `WRITE_PREVIEW` plus the exact proposed arguments
+  for every mutation without calling Discord. `allow` executes writes. Unknown tool names are
+  classified as writes, so new tools do not silently become read-only.
+- `DISCORD_EXPECTED_BOT_ID`: refuses startup when a valid token authenticates the wrong bot.
+- `DISCORD_MCP_ACCESS_TOKEN_FILE`: HTTP-only bearer credential, read from a mounted file. When
+  set, `/mcp` returns `401` unless the request has the exact `Authorization: Bearer ...` header.
+  Health checks remain available without the bearer. Use a separate random token of at least 32
+  characters, never the Discord bot token.
+- `DISCORD_MCP_AUDIT_FILE`: append-only JSONL tool audit. It records tool, outcome, write mode,
+  resolved guild IDs, selected Discord object IDs, and an arguments hash. It deliberately does
+  not record message bodies or other complete arguments.
+
+Example hardened HTTP profile:
+
+```bash
+export DISCORD_MCP_ALLOWED_GUILDS=123456789012345678,234567890123456789
+export DISCORD_MCP_ALLOWED_TOOLS=get_server_info,list_channels,read_messages,send_message,edit_message
+export DISCORD_MCP_WRITE_MODE=preview
+export DISCORD_EXPECTED_BOT_ID=345678901234567890
+export DISCORD_MCP_ACCESS_TOKEN_FILE=/run/secrets/discord-mcp-access-token
+export DISCORD_MCP_AUDIT_FILE=/var/lib/discord-mcp/audit.jsonl
+```
+
+Mount the access-token file read-only. The allowlist is application-enforced and complements,
+rather than replaces, Discord role hierarchy, channel overrides, and least-privilege bot grants.
+Use separate runtime profiles for different guild and write scopes instead of widening one
+always-on process.
+
 ### `DISCORD_MCP_FILE_ROOT`
 
 Optional. The single directory that `send_file` and `set_guild_scheduled_event_image` may

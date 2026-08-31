@@ -41,8 +41,9 @@ public class DiscordMcpConfig {
                                              InviteService inviteService,
                                              ChannelPermissionService channelPermissionService,
                                              EmojiService emojiService,
-                                             ForumService forumService) {
-        return MethodToolCallbackProvider.builder().toolObjects(
+                                             ForumService forumService,
+                                             McpToolPolicy toolPolicy) {
+        ToolCallbackProvider rawProvider = MethodToolCallbackProvider.builder().toolObjects(
                 discordService,
                 messageService,
                 userService,
@@ -59,19 +60,27 @@ public class DiscordMcpConfig {
                 emojiService,
                 forumService
         ).build();
+        return toolPolicy.apply(rawProvider);
     }
 
     @Bean
-    public JDA jda(@Value("${DISCORD_TOKEN:}") String token) throws InterruptedException {
+    public JDA jda(@Value("${DISCORD_TOKEN:}") String token,
+                   @Value("${DISCORD_EXPECTED_BOT_ID:}") String expectedBotId) throws InterruptedException {
         if (token == null || token.isEmpty()) {
             System.err.println("ERROR: The environment variable DISCORD_TOKEN is not set. Please set it to run the application properly.");
             System.exit(1);
         }
         try {
-            return JDABuilder.createDefault(token)
+            JDA jda = JDABuilder.createDefault(token)
                     .enableIntents(GatewayIntent.GUILD_MEMBERS, GatewayIntent.GUILD_VOICE_STATES, GatewayIntent.SCHEDULED_EVENTS)
                     .build()
                     .awaitReady();
+            if (expectedBotId != null && !expectedBotId.isBlank()
+                    && !jda.getSelfUser().getId().equals(expectedBotId.trim())) {
+                jda.shutdownNow();
+                throw new IllegalStateException("DISCORD_EXPECTED_BOT_ID does not match the authenticated bot");
+            }
+            return jda;
         } catch (RuntimeException e) {
             // In the default stdio transport, logback writes only to a file so stdout stays a clean
             // MCP channel. That makes a startup failure here invisible to the MCP client, which just
