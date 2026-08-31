@@ -163,6 +163,11 @@ public final class McpToolPolicy {
 
         private String invoke(String arguments, ToolContext toolContext) {
             String tool = getToolDefinition().name();
+            if (!policyActive && auditFile == null && arguments != null && !arguments.isBlank()) {
+                return toolContext == null
+                        ? delegate.call(arguments)
+                        : delegate.call(arguments, toolContext);
+            }
             JsonNode parsed = parseArguments(arguments);
             if (policyActive) {
                 try {
@@ -249,9 +254,14 @@ public final class McpToolPolicy {
                 }
                 continue;
             }
-            GuildChannel channel = jda.getGuildChannelById(value.asText());
-            if (channel == null) {
-                channel = jda.getThreadChannelById(value.asText());
+            GuildChannel channel = null;
+            try {
+                channel = jda.getGuildChannelById(value.asText());
+                if (channel == null) {
+                    channel = jda.getThreadChannelById(value.asText());
+                }
+            } catch (IllegalArgumentException ignored) {
+                // Malformed snowflakes are unresolved targets and must follow the audited denial path.
             }
             if (channel != null) {
                 guildIds.add(channel.getGuild().getId());
@@ -344,9 +354,10 @@ public final class McpToolPolicy {
         }
     }
 
-    private static boolean isGuildChannelArgument(String field) {
+    static boolean isGuildChannelArgument(String field) {
         String normalized = field.toLowerCase(Locale.ROOT);
-        return normalized.endsWith("id") && (normalized.contains("channel")
+        boolean idShaped = normalized.endsWith("id") || normalized.endsWith("ids");
+        return idShaped && (normalized.contains("channel")
                 || normalized.contains("category") || normalized.contains("forum")
                 || normalized.contains("thread") || normalized.contains("post"));
     }

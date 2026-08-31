@@ -198,7 +198,7 @@ Run the JAR as a long-running server:
 
 ```bash
 DISCORD_TOKEN=<YOUR_DISCORD_BOT_TOKEN> \
-DISCORD_GUILD_ID=<OPTIONAL_DEFAULT_SERVER_ID> \
+DISCORD_GUILD_ID= \
 SPRING_PROFILES_ACTIVE=http \
 java -jar /absolute/path/to/discord-mcp-1.0.0.jar
 ```
@@ -215,6 +215,9 @@ Default MCP endpoint URL (HTTP profile): `http://localhost:8085/mcp`
 
 All policy variables below are optional so existing deployments retain their current behavior.
 For an agent-facing bot installed in more than one server, configure them explicitly:
+
+When any deployment policy is active, argument keys absent from a tool's generated schema are
+rejected rather than ignored.
 
 - `DISCORD_MCP_ALLOWED_GUILDS`: comma-separated guild snowflakes. Every call must name an
   allowed guild or contain a channel ID that resolves to one. When the wrapper cannot resolve a

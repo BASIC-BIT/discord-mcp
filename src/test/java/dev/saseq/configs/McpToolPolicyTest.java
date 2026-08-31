@@ -16,7 +16,10 @@ import tools.jackson.databind.ObjectMapper;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.Arrays;
+import java.util.LinkedHashSet;
+import java.util.Locale;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -164,6 +167,31 @@ class McpToolPolicyTest {
     }
 
     @Test
+    void unconfiguredPolicyForwardsArgumentsUnchanged() {
+        AtomicReference<String> received = new AtomicReference<>();
+        ToolDefinition definition = ToolDefinition.builder().name("send_message")
+                .description("test").inputSchema(schema("channelId", "message")).build();
+        ToolCallback raw = new ToolCallback() {
+            @Override
+            public ToolDefinition getToolDefinition() {
+                return definition;
+            }
+
+            @Override
+            public String call(String arguments) {
+                received.set(arguments);
+                return "called";
+            }
+        };
+        McpToolPolicy policy = policy(mock(JDA.class), "", "", "allow", "");
+        String arguments = "{ \"message\" : \"x\", \"channelId\" : 32345678901234567 }";
+
+        assertThat(only(policy.apply(ToolCallbackProvider.from(raw))).call(arguments))
+                .isEqualTo("called");
+        assertThat(received).hasValue(arguments);
+    }
+
+    @Test
     void invalidLegacyDefaultGuildDoesNotBlockStartupWithoutPolicy() {
         McpToolPolicy policy = new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
                 "", "", "OPTIONAL_DEFAULT_SERVER_ID", "allow", "", "not-an-integer");
@@ -233,6 +261,26 @@ class McpToolPolicyTest {
                 .call("{\"channelId\":\"32345678901234567\"}"))
                 .isInstanceOf(SecurityException.class)
                 .hasMessageContaining("channelId is not cached");
+    }
+
+    @Test
+    void malformedChannelIdIsAuditedAsAnInvalidTarget() throws Exception {
+        Path audit = tempDir.resolve("audit.jsonl");
+        JDA jda = mock(JDA.class);
+        when(jda.getGuildChannelById("not-a-snowflake"))
+                .thenThrow(new NumberFormatException("malformed snowflake"));
+        McpToolPolicy policy = policy(jda, ALLOWED_GUILD, "read_messages", "allow",
+                audit.toString());
+
+        assertThatThrownBy(() -> only(policy.apply(provider("read_messages", new AtomicInteger())))
+                .call("{\"channelId\":\"not-a-snowflake\"}"))
+                .isInstanceOf(SecurityException.class)
+                .hasMessageContaining("channelId is not cached");
+
+        assertThat(Files.readString(audit))
+                .contains("\"outcome\":\"denied-invalid-target\"")
+                .contains("\"channelId\":\"not-a-snowflake\"")
+                .doesNotContain("malformed snowflake");
     }
 
     @Test
@@ -498,6 +546,34 @@ class McpToolPolicyTest {
                 java.util.stream.Stream.concat(McpToolPolicy.readOnlyToolNames().stream(),
                                 McpToolPolicy.writeToolNames().stream())
                         .collect(Collectors.toSet()));
+    }
+
+    @Test
+    void everyIdShapedToolParameterHasAReviewedGuildTargetClassification() {
+        Set<String> reviewedNonChannelTargets = Set.of(
+                "attachmentId", "emojiId", "eventId", "guildId", "messageId", "roleId",
+                "tagIds", "targetId", "userId", "webhookId");
+        Set<String> idShapedParameters = DiscordMcpConfig.toolServiceTypes().stream()
+                .flatMap(type -> Arrays.stream(type.getDeclaredMethods()))
+                .filter(method -> method.getAnnotation(Tool.class) != null)
+                .flatMap(method -> Arrays.stream(method.getParameters()))
+                .map(parameter -> parameter.getName())
+                .filter(name -> {
+                    String normalized = name.toLowerCase(Locale.ROOT);
+                    return normalized.endsWith("id") || normalized.endsWith("ids");
+                })
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+
+        Set<String> unclassified = idShapedParameters.stream()
+                .filter(name -> !McpToolPolicy.isGuildChannelArgument(name))
+                .filter(name -> !reviewedNonChannelTargets.contains(name))
+                .collect(Collectors.toSet());
+        Set<String> staleReviews = new LinkedHashSet<>(reviewedNonChannelTargets);
+        staleReviews.removeAll(idShapedParameters);
+
+        assertThat(unclassified).as("new ID-shaped parameters need a guild-target review").isEmpty();
+        assertThat(staleReviews).as("reviewed non-channel target names must still exist").isEmpty();
+        assertThat(idShapedParameters).anyMatch(McpToolPolicy::isGuildChannelArgument);
     }
 
     private static McpToolPolicy policy(JDA jda, String guilds, String tools, String mode, String audit) {

@@ -70,6 +70,8 @@ public class DiscordMcpConfig {
                 emojiService,
                 forumService
         };
+        // Keep runtime exports tied to the parameter classification inventory asserted by
+        // policy tests.
         validateToolServiceTypes(toolObjects);
         ToolCallbackProvider rawProvider = MethodToolCallbackProvider.builder()
                 .toolObjects(toolObjects)
