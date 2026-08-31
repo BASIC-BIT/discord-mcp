@@ -49,6 +49,9 @@ export DISCORD_MCP_DOWNLOAD_ROOT=/var/lib/discord-mcp/downloads
 
 > [!IMPORTANT]
 > Instructions for creating a Discord bot and retrieving its token can be found [here](https://discordjs.guide/legacy/preparations/app-setup).
+> On the bot's Developer Portal page, enable both **Server Members Intent** and
+> **Message Content Intent** under Privileged Gateway Intents. Member lookup needs the first;
+> `read_messages` needs the second to receive ordinary message content.
 
 > [!TIP]
 > The `DISCORD_GUILD_ID` env variable is optional.

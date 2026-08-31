@@ -24,6 +24,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.util.Set;
+
 @Configuration
 public class DiscordMcpConfig {
     @Bean
@@ -73,7 +75,7 @@ public class DiscordMcpConfig {
         JDA jda;
         try {
             jda = JDABuilder.createDefault(token)
-                    .enableIntents(GatewayIntent.GUILD_MEMBERS, GatewayIntent.GUILD_VOICE_STATES, GatewayIntent.SCHEDULED_EVENTS)
+                    .enableIntents(requiredGatewayIntents())
                     .build()
                     .awaitReady();
         } catch (RuntimeException e) {
@@ -117,8 +119,13 @@ public class DiscordMcpConfig {
         } else if (lower.contains("intent") || lower.contains("4014")) {
             System.err.println("  Likely cause: a privileged gateway intent is not enabled for this bot.");
             System.err.println("  Fix: in the Discord Developer Portal (Bot -> Privileged Gateway Intents), enable");
-            System.err.println("       'Server Members Intent' (GUILD_MEMBERS).");
+            System.err.println("       'Server Members Intent' and 'Message Content Intent'.");
         }
         System.err.println("  Details: " + details);
+    }
+
+    static Set<GatewayIntent> requiredGatewayIntents() {
+        return Set.of(GatewayIntent.GUILD_MEMBERS, GatewayIntent.MESSAGE_CONTENT,
+                GatewayIntent.GUILD_VOICE_STATES, GatewayIntent.SCHEDULED_EVENTS);
     }
 }
