@@ -19,7 +19,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -69,7 +68,7 @@ class McpToolPolicyTest {
 
         assertThatThrownBy(() -> callback.call("{\"channelId\":\"32345678901234567\"}"))
                 .isInstanceOf(SecurityException.class)
-                .hasMessageContaining("not in DISCORD_MCP_ALLOWED_GUILDS");
+                .hasMessageContaining("unavailable or outside");
         assertThat(calls).hasValue(0);
     }
 
@@ -97,7 +96,7 @@ class McpToolPolicyTest {
         assertThatThrownBy(() -> only(policy.apply(provider("read_messages", new AtomicInteger())))
                 .call("{}"))
                 .isInstanceOf(SecurityException.class)
-                .hasMessageContaining("could not be resolved");
+                .hasMessageContaining("unavailable or outside");
     }
 
     @Test
@@ -108,7 +107,7 @@ class McpToolPolicyTest {
         assertThatThrownBy(() -> only(policy.apply(provider("send_webhook_message", new AtomicInteger())))
                 .call("{\"webhookUrl\":\"https://discord.com/api/webhooks/1/x\"}"))
                 .isInstanceOf(SecurityException.class)
-                .hasMessageContaining("could not be resolved");
+                .hasMessageContaining("unavailable or outside");
     }
 
     @Test
@@ -292,7 +291,7 @@ class McpToolPolicyTest {
         assertThatThrownBy(() -> only(policy.apply(provider("read_messages", new AtomicInteger())))
                 .call("{\"channelId\":\"32345678901234567\"}"))
                 .isInstanceOf(SecurityException.class)
-                .hasMessageContaining("channelId is not cached");
+                .hasMessageContaining("unavailable or outside");
     }
 
     @Test
@@ -307,7 +306,7 @@ class McpToolPolicyTest {
         assertThatThrownBy(() -> only(policy.apply(provider("read_messages", new AtomicInteger())))
                 .call("{\"channelId\":\"not-a-snowflake\"}"))
                 .isInstanceOf(SecurityException.class)
-                .hasMessageContaining("channelId is not cached");
+                .hasMessageContaining("unavailable or outside");
 
         assertThat(Files.readString(audit))
                 .contains("\"outcome\":\"denied-invalid-target\"")
@@ -361,7 +360,7 @@ class McpToolPolicyTest {
         assertThatThrownBy(() -> only(policy.apply(provider("list_channels", new AtomicInteger())))
                 .call("{\"guildId\":\"" + oversizedGuildId + "\"}"))
                 .isInstanceOf(SecurityException.class)
-                .hasMessageContaining("17-20 digit Discord snowflake");
+                .hasMessageContaining("unavailable or outside");
 
         assertThat(Files.readString(audit))
                 .contains("\"outcome\":\"denied-invalid-target\"")
@@ -378,7 +377,7 @@ class McpToolPolicyTest {
                 .call("{\"guildId\":\"" + ALLOWED_GUILD
                         + "\",\"channelId\":\"32345678901234567\"}"))
                 .isInstanceOf(SecurityException.class)
-                .hasMessageContaining("every supplied channel target to resolve");
+                .hasMessageContaining("unavailable or outside");
     }
 
     @Test
@@ -389,7 +388,7 @@ class McpToolPolicyTest {
         assertThatThrownBy(() -> only(policy.apply(provider("future_channel_tool", new AtomicInteger())))
                 .call("{\"targetChannelId\":\"32345678901234567\"}"))
                 .isInstanceOf(SecurityException.class)
-                .hasMessageContaining("not in DISCORD_MCP_ALLOWED_GUILDS");
+                .hasMessageContaining("unavailable or outside");
     }
 
     @Test
@@ -469,7 +468,7 @@ class McpToolPolicyTest {
         assertThatThrownBy(() -> only(policy.apply(provider("read_messages", new AtomicInteger())))
                 .call("{\"channelId\":\"32345678901234567\"}"))
                 .isInstanceOf(SecurityException.class)
-                .hasMessageContaining("not in DISCORD_MCP_ALLOWED_GUILDS");
+                .hasMessageContaining("unavailable or outside");
     }
 
     @Test
@@ -651,31 +650,37 @@ class McpToolPolicyTest {
     }
 
     @Test
-    void everyIdShapedToolParameterHasAReviewedGuildTargetClassification() {
-        Set<String> reviewedNonChannelTargets = Set.of(
-                "attachmentId", "emojiId", "eventId", "guildId", "messageId", "roleId",
-                "tagIds", "targetId", "userId", "webhookId");
-        Set<String> idShapedParameters = DiscordMcpConfig.toolServiceTypes().stream()
+    void everyToolParameterHasAReviewedGuildTargetClassification() {
+        Set<String> reviewedNonChannelParameters = Set.of(
+                "after", "allowPermissions", "allowRaw", "archived", "around", "attachmentId",
+                "before", "bitrate", "categoryName", "channelName", "color", "count",
+                "deafen", "defaultLayout", "defaultSort", "deleteMessageSeconds", "denyPermissions",
+                "denyRaw", "description", "durationSeconds", "emoji", "emojiId", "entityType",
+                "eventId", "fileData", "fileName", "filePath", "fileUrl", "guildId", "hoist",
+                "image", "imageUrl", "inviteCode", "limit", "location", "locked", "maxAge",
+                "maxUses", "mentionable", "message", "messageId", "mute", "name", "newMessage",
+                "nick", "nsfw", "permissions", "pinned", "position", "query", "reason",
+                "recurrenceRule", "roleId", "roles", "rtcRegion", "scheduledEndTime",
+                "scheduledStartTime", "slowmode", "status", "tagIds", "targetId", "targetType",
+                "temporary", "title", "topic", "unique", "userId", "userLimit", "username",
+                "webhookId", "webhookUrl", "withCounts", "withMember", "withUserCount");
+        Set<String> toolParameters = DiscordMcpConfig.toolServiceTypes().stream()
                 .flatMap(type -> Arrays.stream(type.getDeclaredMethods()))
                 .filter(method -> method.getAnnotation(Tool.class) != null)
                 .flatMap(method -> Arrays.stream(method.getParameters()))
                 .map(parameter -> parameter.getName())
-                .filter(name -> {
-                    String normalized = name.toLowerCase(Locale.ROOT);
-                    return normalized.endsWith("id") || normalized.endsWith("ids");
-                })
                 .collect(Collectors.toCollection(LinkedHashSet::new));
 
-        Set<String> unclassified = idShapedParameters.stream()
+        Set<String> unclassified = toolParameters.stream()
                 .filter(name -> !McpToolPolicy.isGuildChannelArgument(name))
-                .filter(name -> !reviewedNonChannelTargets.contains(name))
+                .filter(name -> !reviewedNonChannelParameters.contains(name))
                 .collect(Collectors.toSet());
-        Set<String> staleReviews = new LinkedHashSet<>(reviewedNonChannelTargets);
-        staleReviews.removeAll(idShapedParameters);
+        Set<String> staleReviews = new LinkedHashSet<>(reviewedNonChannelParameters);
+        staleReviews.removeAll(toolParameters);
 
-        assertThat(unclassified).as("new ID-shaped parameters need a guild-target review").isEmpty();
-        assertThat(staleReviews).as("reviewed non-channel target names must still exist").isEmpty();
-        assertThat(idShapedParameters).anyMatch(McpToolPolicy::isGuildChannelArgument);
+        assertThat(unclassified).as("new tool parameters need an explicit guild-target review").isEmpty();
+        assertThat(staleReviews).as("reviewed non-channel parameter names must still exist").isEmpty();
+        assertThat(toolParameters).anyMatch(McpToolPolicy::isGuildChannelArgument);
     }
 
     @Test

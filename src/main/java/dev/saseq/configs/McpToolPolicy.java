@@ -39,6 +39,8 @@ import java.util.stream.Collectors;
  */
 @Component
 public final class McpToolPolicy {
+    private static final String TARGET_ACCESS_DENIED =
+            "Discord target is unavailable or outside the allowed guild scope";
     private static final Set<String> READ_ONLY_TOOLS = Set.of(
             "get_server_info", "find_channel", "list_channels", "get_channel_info",
             "find_category", "list_channels_in_category", "list_channel_permission_overwrites",
@@ -172,6 +174,8 @@ public final class McpToolPolicy {
                         ? delegate.call(arguments)
                         : delegate.call(arguments, toolContext);
             }
+            // Hash the raw caller representation so the audit can correlate the original request,
+            // while policy-active delegates receive the normalized tree inspected below.
             String argumentsForHash = arguments == null || arguments.isBlank() ? "{}" : arguments;
             String argumentsSha256 = sha256(argumentsForHash);
             JsonNode parsed;
@@ -200,7 +204,7 @@ public final class McpToolPolicy {
             } catch (SecurityException error) {
                 auditBestEffort(tool, "denied-invalid-target", Set.of(), parsed,
                         argumentsSha256, null);
-                throw error;
+                throw new SecurityException(TARGET_ACCESS_DENIED);
             }
             enforceGuilds(tool, guildIds, parsed, argumentsSha256);
 
@@ -300,14 +304,13 @@ public final class McpToolPolicy {
         return guildIds;
     }
 
-    private static void normalizePolicyTargetIdentifiers(JsonNode arguments) {
-        var object = (tools.jackson.databind.node.ObjectNode) arguments;
+    private void normalizePolicyTargetIdentifiers(JsonNode arguments) {
         arguments.properties().forEach(entry -> {
             String field = entry.getKey();
             JsonNode value = entry.getValue();
             if (("guildId".equals(field) || isGuildChannelArgument(field))
                     && value != null && value.isIntegralNumber()) {
-                object.put(field, value.asText());
+                entry.setValue(objectMapper.getNodeFactory().textNode(value.asText()));
             }
         });
     }
@@ -320,13 +323,13 @@ public final class McpToolPolicy {
         if (guildIds.isEmpty()) {
             auditBestEffort(tool, "denied-unresolved-guild", guildIds, arguments,
                     argumentsSha256, null);
-            throw new SecurityException("Guild could not be resolved for allowlisted tool call: " + tool);
+            throw new SecurityException(TARGET_ACCESS_DENIED);
         }
         Set<String> denied = new LinkedHashSet<>(guildIds);
         denied.removeAll(allowedGuilds);
         if (!denied.isEmpty()) {
             auditBestEffort(tool, "denied-guild", guildIds, arguments, argumentsSha256, null);
-            throw new SecurityException("Guild is not in DISCORD_MCP_ALLOWED_GUILDS");
+            throw new SecurityException(TARGET_ACCESS_DENIED);
         }
     }
 

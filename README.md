@@ -33,7 +33,6 @@ Discord by managing channels, sending messages, and retrieving server informatio
 ```bash
 export DISCORD_TOKEN="YOUR_DISCORD_BOT_TOKEN"
 export DISCORD_GUILD_ID=""
-export DISCORD_MCP_MESSAGE_CONTENT=true
 export SPRING_PROFILES_ACTIVE=http
 # Only if you want download_attachment. Must match the container path mounted below,
 # not a host path — see Security notes.
@@ -51,13 +50,15 @@ export DISCORD_MCP_DOWNLOAD_ROOT=/var/lib/discord-mcp/downloads
 > [!IMPORTANT]
 > Instructions for creating a Discord bot and retrieving its token can be found [here](https://discordjs.guide/legacy/preparations/app-setup).
 > On the bot's Developer Portal page, enable **Server Members Intent** under Privileged Gateway
-> Intents. To opt into ordinary message-body reads, also enable **Message Content Intent** and set
-> `DISCORD_MCP_MESSAGE_CONTENT=true`. Existing deployments default this opt-in to `false`.
+> Intents. The Developer Portal's **Message Content Intent** grant controls whether Discord returns
+> ordinary message bodies across its APIs. If that grant is enabled, also set
+> `DISCORD_MCP_MESSAGE_CONTENT=true` so this process requests the matching Gateway intent.
 
 > [!IMPORTANT]
-> `DISCORD_MCP_MESSAGE_CONTENT=true` requires the matching Developer Portal grant. Discord rejects
-> the gateway connection when the application setting is missing. Startup stderr identifies this
-> intent failure. Leave the variable unset or `false` to preserve the previous gateway-intent set.
+> `DISCORD_MCP_MESSAGE_CONTENT` is not an in-process content filter. Setting it to `false` preserves
+> the previous Gateway intent set, but does not hide REST-fetched content when the application has
+> the Portal grant. Setting it to `true` without that grant makes Discord reject the Gateway
+> connection. Startup stderr identifies this intent failure.
 
 > [!TIP]
 > The `DISCORD_GUILD_ID` env variable is optional.
@@ -235,12 +236,15 @@ rejected rather than ignored.
   classified as writes, so new tools do not silently become read-only. Preview is a write gate,
   not a data-isolation mode: allowed read tools still execute and can return sensitive data.
   In particular, omit `list_webhooks`, `list_invites`, and `get_invite_details` unless the caller
-  is explicitly allowed to receive their credentials or invite material.
+  is explicitly allowed to receive their credentials or invite material. `create_webhook` and
+  `create_invite` are the write-side equivalents; allowing them lets their results return new
+  credentials after Preview is changed to `allow`.
 - `DISCORD_EXPECTED_BOT_ID`: refuses startup when a valid token authenticates the wrong bot.
-- `DISCORD_MCP_MESSAGE_CONTENT`: opt into the privileged Message Content gateway intent. Defaults
-  to `false`; set `true` only after enabling the matching Developer Portal grant. [Discord applies
-  this restriction across its APIs](https://docs.discord.com/developers/events/gateway#message-content-intent),
-  including HTTP message objects, not only to Gateway events.
+- `DISCORD_MCP_MESSAGE_CONTENT`: request the privileged Message Content Gateway intent so the
+  process matches an application whose Message Content grant is enabled in the Developer Portal.
+  Defaults to `false`; set `true` only after enabling that grant. This variable does not filter
+  REST responses. [Discord applies the application restriction across its APIs](https://docs.discord.com/developers/events/gateway#message-content-intent),
+  including HTTP message objects.
 - `DISCORD_MCP_ACCESS_TOKEN_FILE`: HTTP-only bearer credential, read from a mounted file. When
   set under the STREAMABLE protocol, the configured MCP endpoint returns `401` unless the request
   has the exact `Authorization: Bearer ...` header. Startup fails unless the protocol is explicitly
@@ -259,7 +263,9 @@ rejected rather than ignored.
   backup before the next append would exceed `DISCORD_MCP_AUDIT_MAX_BYTES` (10 MiB by default),
   so the two files remain bounded. Set a value of at least 1024 bytes if a different cap is needed.
   This cap is a disk bound, not a retention guarantee. High call volume can rotate older evidence
-  out of both files; forward audit records to a durable log sink when retention matters.
+  out of both files; forward audit records to a durable log sink when retention matters. Keep the
+  audit file outside `DISCORD_MCP_FILE_ROOT` and `DISCORD_MCP_DOWNLOAD_ROOT` so an MCP tool cannot
+  read or write the audit trail.
 
 Example hardened HTTP profile:
 
