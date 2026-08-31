@@ -246,7 +246,8 @@ schema are rejected rather than ignored. Audit-only deployments retain upstream 
   servlet context; if `management.server.port` creates a separate management context, secure or
   firewall that port independently.
 - `DISCORD_MCP_AUDIT_FILE`: append-only JSONL tool audit. It records tool, outcome, write mode,
-  resolved guild IDs, selected Discord object IDs, and an arguments hash. It deliberately does
+  resolved guild IDs, selected Discord object IDs, an arguments hash, and a per-call invocation ID
+  that pairs `started` with its terminal record under concurrency. It deliberately does
   not record message bodies, invite credentials, or other complete arguments. A `tool-returned`
   outcome means the MCP tool returned to its caller; it does not claim that an asynchronously
   queued Discord mutation later succeeded. Use readback for consequential writes. The active file rotates to one `.1`

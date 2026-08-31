@@ -568,6 +568,27 @@ class McpToolPolicyTest {
     }
 
     @Test
+    void auditPairsStartedAndTerminalRecordsByUniqueInvocation() throws Exception {
+        Path audit = tempDir.resolve("audit.jsonl");
+        McpToolPolicy policy = policy(jdaWithChannel(), ALLOWED_GUILD, "read_messages", "allow",
+                audit.toString());
+        ToolCallback callback = only(policy.apply(provider("read_messages", new AtomicInteger())));
+
+        callback.call("{\"channelId\":\"32345678901234567\"}");
+        callback.call("{\"channelId\":\"32345678901234567\"}");
+
+        var lines = Files.readAllLines(audit);
+        var mapper = new ObjectMapper();
+        String firstStarted = mapper.readTree(lines.get(0)).get("invocationId").asText();
+        String firstReturned = mapper.readTree(lines.get(1)).get("invocationId").asText();
+        String secondStarted = mapper.readTree(lines.get(2)).get("invocationId").asText();
+        String secondReturned = mapper.readTree(lines.get(3)).get("invocationId").asText();
+
+        assertThat(firstStarted).isNotBlank().isEqualTo(firstReturned);
+        assertThat(secondStarted).isNotBlank().isEqualTo(secondReturned).isNotEqualTo(firstStarted);
+    }
+
+    @Test
     void whitespaceAroundAuditPathIsIgnored() {
         Path audit = tempDir.resolve("trimmed-audit.jsonl");
         McpToolPolicy policy = policy(jdaWithChannel(), ALLOWED_GUILD, "send_message", "preview",
