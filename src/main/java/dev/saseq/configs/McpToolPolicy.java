@@ -21,7 +21,6 @@ import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.Arrays;
-import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Set;
@@ -62,10 +61,6 @@ public final class McpToolPolicy {
             "set_guild_scheduled_event_image", "set_nickname", "timeout_member", "unban_member",
             "upsert_member_channel_permissions", "upsert_role_channel_permissions"
     );
-    private static final Set<String> CHANNEL_ID_FIELDS = Set.of(
-            "channelId", "categoryId", "forumChannelId", "parentChannelId", "threadId"
-    );
-
     private final JDA jda;
     private final ObjectMapper objectMapper;
     private final Set<String> allowedGuilds;
@@ -96,13 +91,21 @@ public final class McpToolPolicy {
         String configuredAuditFile = trimToNull(auditFile);
         this.auditFile = configuredAuditFile == null
                 ? null : Path.of(configuredAuditFile).toAbsolutePath().normalize();
-        if (auditMaxBytes < 1024) {
+        if (this.auditFile != null && auditMaxBytes < 1024) {
             throw startupError("DISCORD_MCP_AUDIT_MAX_BYTES must be at least 1024");
         }
         this.auditMaxBytes = auditMaxBytes;
 
+        if (this.auditFile != null && this.auditFile.getParent() != null) {
+            try {
+                Files.createDirectories(this.auditFile.getParent());
+            } catch (IOException error) {
+                throw startupError("Could not create DISCORD_MCP_AUDIT_FILE parent directory");
+            }
+        }
+
         this.allowedGuilds.forEach(id -> requireSnowflake(id, "DISCORD_MCP_ALLOWED_GUILDS"));
-        if (this.defaultGuildId != null) {
+        if (this.defaultGuildId != null && policyActive) {
             requireSnowflake(this.defaultGuildId, "DISCORD_GUILD_ID");
             if (!this.allowedGuilds.isEmpty() && !this.allowedGuilds.contains(this.defaultGuildId)) {
                 throw startupError("DISCORD_GUILD_ID must be in DISCORD_MCP_ALLOWED_GUILDS");
@@ -167,7 +170,7 @@ public final class McpToolPolicy {
             try {
                 guildIds = resolveGuildIds(parsed, declaredArguments, !allowedGuilds.isEmpty());
             } catch (SecurityException error) {
-                audit(tool, "denied-invalid-target", Set.of(), parsed, null);
+                auditBestEffort(tool, "denied-invalid-target", Set.of(), parsed, null);
                 throw error;
             }
             enforceGuilds(tool, guildIds, parsed);
@@ -224,8 +227,12 @@ public final class McpToolPolicy {
             guildIds.add(defaultGuildId);
         }
 
-        for (String field : CHANNEL_ID_FIELDS) {
-            JsonNode value = arguments.get(field);
+        for (var entry : arguments.properties()) {
+            String field = entry.getKey();
+            if (!isGuildChannelArgument(field)) {
+                continue;
+            }
+            JsonNode value = entry.getValue();
             if (value == null || value.isNull() || value.isTextual() && value.asText().isBlank()) {
                 continue;
             }
@@ -254,13 +261,13 @@ public final class McpToolPolicy {
             return;
         }
         if (guildIds.isEmpty()) {
-            audit(tool, "denied-unresolved-guild", guildIds, arguments, null);
+            auditBestEffort(tool, "denied-unresolved-guild", guildIds, arguments, null);
             throw new SecurityException("Guild could not be resolved for allowlisted tool call: " + tool);
         }
         Set<String> denied = new LinkedHashSet<>(guildIds);
         denied.removeAll(allowedGuilds);
         if (!denied.isEmpty()) {
-            audit(tool, "denied-guild", guildIds, arguments, null);
+            auditBestEffort(tool, "denied-guild", guildIds, arguments, null);
             throw new SecurityException("Guild is not in DISCORD_MCP_ALLOWED_GUILDS");
         }
     }
@@ -271,10 +278,6 @@ public final class McpToolPolicy {
             return;
         }
         try {
-            Path parent = auditFile.getParent();
-            if (parent != null) {
-                Files.createDirectories(parent);
-            }
             var event = objectMapper.createObjectNode();
             event.put("timestamp", Instant.now().toString());
             event.put("tool", tool);
@@ -313,9 +316,8 @@ public final class McpToolPolicy {
             audit(tool, outcome, guildIds, arguments, errorType);
             return null;
         } catch (RuntimeException auditError) {
-            String warning = "WARNING: The tool outcome is preserved, but its audit completion record failed: "
-                    + auditError.getMessage();
-            System.err.println(warning);
+            String warning = "WARNING: The tool outcome is preserved, but its audit completion record failed.";
+            System.err.println(warning + " " + auditError.getMessage());
             return warning;
         }
     }
@@ -333,6 +335,13 @@ public final class McpToolPolicy {
         if (value != null && value.isTextual() && !value.asText().isBlank()) {
             values.add(value.asText());
         }
+    }
+
+    private static boolean isGuildChannelArgument(String field) {
+        String normalized = field.toLowerCase(Locale.ROOT);
+        return normalized.endsWith("id") && (normalized.contains("channel")
+                || normalized.contains("category") || normalized.contains("forum")
+                || normalized.contains("thread") || normalized.contains("post"));
     }
 
     private Set<String> schemaProperties(ToolDefinition definition) {
@@ -364,22 +373,22 @@ public final class McpToolPolicy {
 
     private String previewArguments(String raw, JsonNode parsed) {
         final int maximumCharacters = 16_384;
-        if (raw.length() <= maximumCharacters) {
-            return raw;
-        }
-        JsonNode fileData = parsed.get("fileData");
-        if (fileData != null && fileData.isTextual()) {
-            var redacted = parsed.deepCopy();
-            String value = fileData.asText();
-            ((tools.jackson.databind.node.ObjectNode) redacted).put("fileData",
-                    "<omitted " + value.length() + " characters; sha256=" + sha256(value) + ">");
-            String compact = redacted.toString();
-            if (compact.length() <= maximumCharacters) {
-                return compact;
+        final int largeValueCharacters = 4_096;
+        var redacted = (tools.jackson.databind.node.ObjectNode) parsed.deepCopy();
+        parsed.properties().forEach(entry -> {
+            if (entry.getValue().isTextual()
+                    && entry.getValue().asText().length() > largeValueCharacters) {
+                String value = entry.getValue().asText();
+                redacted.put(entry.getKey(),
+                        "<omitted " + value.length() + " characters; sha256=" + sha256(value) + ">");
             }
+        });
+        String compact = redacted.toString();
+        if (compact.length() <= maximumCharacters) {
+            return compact;
         }
-        return raw.substring(0, maximumCharacters)
-                + "<preview truncated; full arguments sha256=" + sha256(raw) + ">";
+        String suffix = "<preview truncated; full arguments sha256=" + sha256(raw) + ">";
+        return compact.substring(0, maximumCharacters - suffix.length()) + suffix;
     }
 
     private static Set<String> parseCsv(String raw, String name) {

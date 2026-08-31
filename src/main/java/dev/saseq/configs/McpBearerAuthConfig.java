@@ -38,7 +38,7 @@ public class McpBearerAuthConfig {
                 : mcpEndpoint;
         FilterRegistrationBean<OncePerRequestFilter> registration = new FilterRegistrationBean<>();
         registration.setFilter(new BearerFilter(token));
-        registration.addUrlPatterns(endpoint, endpoint + "/*");
+        registration.addUrlPatterns("/*");
         registration.setName("mcpBearerAuthFilter");
         registration.setOrder(Integer.MIN_VALUE);
         return registration;
@@ -82,7 +82,9 @@ public class McpBearerAuthConfig {
         @Override
         protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                         FilterChain filterChain) throws ServletException, IOException {
-            if (expected == null) {
+            String requestPath = request.getRequestURI();
+            if (expected == null || "/actuator/health".equals(requestPath)
+                    || requestPath.startsWith("/actuator/health/")) {
                 filterChain.doFilter(request, response);
                 return;
             }

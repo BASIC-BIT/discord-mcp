@@ -220,7 +220,9 @@ For an agent-facing bot installed in more than one server, configure them explic
   set under the STREAMABLE protocol, the configured MCP endpoint returns `401` unless the request
   has the exact `Authorization: Bearer ...` header. Startup fails unless the protocol is explicitly
   configured as STREAMABLE while the bearer is enabled. Health checks remain available without the
-  bearer. Use a separate random token of at least 32 characters, never the Discord bot token.
+  bearer; every other current or future servlet path defaults to protected. Use a separate random
+  token of at least 32 characters, never the Discord bot token. The file is read once at startup,
+  so restart the process after rotating it.
 - `DISCORD_MCP_AUDIT_FILE`: append-only JSONL tool audit. It records tool, outcome, write mode,
   resolved guild IDs, selected Discord object IDs, and an arguments hash. It deliberately does
   not record message bodies, invite credentials, or other complete arguments. A `tool-returned`

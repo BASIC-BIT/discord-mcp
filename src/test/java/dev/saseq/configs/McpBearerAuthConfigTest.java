@@ -76,7 +76,27 @@ class McpBearerAuthConfigTest {
         var registration = new McpBearerAuthConfig()
                 .mcpBearerAuthFilter(tokenFile.toString(), "/custom-mcp/", "STREAMABLE");
 
-        assertThat(registration.getUrlPatterns()).containsExactlyInAnyOrder("/custom-mcp", "/custom-mcp/*");
+        assertThat(registration.getUrlPatterns()).containsExactly("/*");
+    }
+
+    @Test
+    void healthRemainsPublicWhileOtherFuturePathsDefaultToProtected() throws Exception {
+        var filter = new McpBearerAuthConfig.BearerFilter(TOKEN);
+        var healthRequest = new MockHttpServletRequest("GET", "/actuator/health");
+        var healthChain = new MockFilterChain();
+
+        filter.doFilter(healthRequest, new MockHttpServletResponse(), healthChain);
+
+        assertThat(healthChain.getRequest()).isSameAs(healthRequest);
+
+        var futureRequest = new MockHttpServletRequest("GET", "/future-endpoint");
+        var futureResponse = new MockHttpServletResponse();
+        var futureChain = new MockFilterChain();
+
+        filter.doFilter(futureRequest, futureResponse, futureChain);
+
+        assertThat(futureResponse.getStatus()).isEqualTo(401);
+        assertThat(futureChain.getRequest()).isNull();
     }
 
     @Test

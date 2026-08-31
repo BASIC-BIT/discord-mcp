@@ -179,6 +179,24 @@ class McpToolPolicyTest {
     }
 
     @Test
+    void invalidLegacyDefaultGuildDoesNotBlockStartupWithoutPolicy() {
+        McpToolPolicy policy = new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
+                "", "", "OPTIONAL_DEFAULT_SERVER_ID", "allow", "", 1);
+
+        assertThat(only(policy.apply(provider("list_channels", new AtomicInteger())))
+                .call("{\"guildId\":\"123\"}"))
+                .isEqualTo("called");
+    }
+
+    @Test
+    void invalidDefaultGuildFailsStartupWhenPolicyIsActive() {
+        assertThatThrownBy(() -> new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
+                "", "list_channels", "OPTIONAL_DEFAULT_SERVER_ID", "allow", "", 10485760))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("DISCORD_GUILD_ID");
+    }
+
+    @Test
     void numericIdStillBindsThroughTheGeneratedSpringCallbackWithoutPolicy() {
         McpToolPolicy policy = policy(mock(JDA.class), "", "", "allow", "");
         ToolCallbackProvider generated = MethodToolCallbackProvider.builder()
@@ -241,6 +259,17 @@ class McpToolPolicyTest {
                         + "\",\"channelId\":\"32345678901234567\"}"))
                 .isInstanceOf(SecurityException.class)
                 .hasMessageContaining("every supplied channel target to resolve");
+    }
+
+    @Test
+    void futureChannelLikeArgumentIsResolvedWithoutUpdatingAFieldList() {
+        McpToolPolicy policy = policy(jdaWithChannel(DENIED_GUILD), ALLOWED_GUILD,
+                "future_channel_tool", "allow", "");
+
+        assertThatThrownBy(() -> only(policy.apply(provider("future_channel_tool", new AtomicInteger())))
+                .call("{\"targetChannelId\":\"32345678901234567\"}"))
+                .isInstanceOf(SecurityException.class)
+                .hasMessageContaining("not in DISCORD_MCP_ALLOWED_GUILDS");
     }
 
     @Test
@@ -308,6 +337,32 @@ class McpToolPolicyTest {
                 .contains("argumentsSha256")
                 .doesNotContain("still-secret")
                 .doesNotContain("inviteCode");
+    }
+
+    @Test
+    void deniedGuildReasonSurvivesARuntimeAuditFailure() throws Exception {
+        Path audit = tempDir.resolve("audit.jsonl");
+        McpToolPolicy policy = policy(jdaWithChannel(DENIED_GUILD), ALLOWED_GUILD,
+                "read_messages", "allow", audit.toString());
+        Files.createDirectory(audit);
+
+        assertThatThrownBy(() -> only(policy.apply(provider("read_messages", new AtomicInteger())))
+                .call("{\"channelId\":\"32345678901234567\"}"))
+                .isInstanceOf(SecurityException.class)
+                .hasMessageContaining("not in DISCORD_MCP_ALLOWED_GUILDS");
+    }
+
+    @Test
+    void previewRedactsAnyLargeTextArgumentByValueSize() {
+        String image = "A".repeat(8_192);
+        McpToolPolicy policy = policy(mock(JDA.class), "", "create_emoji", "preview", "");
+
+        String result = only(policy.apply(provider("create_emoji", new AtomicInteger())))
+                .call("{\"image\":\"" + image + "\"}");
+
+        assertThat(result)
+                .contains("<omitted 8192 characters; sha256=")
+                .doesNotContain(image);
     }
 
     @Test
@@ -460,6 +515,8 @@ class McpToolPolicyTest {
                     case "edit_text_channel" -> schema("guildId", "channelId");
                     case "send_webhook_message" -> schema("webhookUrl", "message");
                     case "get_invite_details" -> schema("inviteCode");
+                    case "create_emoji" -> schema("image");
+                    case "future_channel_tool" -> schema("targetChannelId");
                     case "list_channels" -> schema("guildId");
                     default -> schema();
                 })
