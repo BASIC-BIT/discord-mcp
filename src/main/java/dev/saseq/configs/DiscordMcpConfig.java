@@ -84,7 +84,21 @@ public class DiscordMcpConfig {
                 && TOOL_SERVICE_TYPES.stream()
                 .allMatch(type -> Arrays.stream(toolObjects).anyMatch(type::isInstance));
         if (!exactInventory) {
-            throw new IllegalStateException("Discord MCP tool service inventory is inconsistent");
+            String missing = TOOL_SERVICE_TYPES.stream()
+                    .filter(type -> Arrays.stream(toolObjects).noneMatch(type::isInstance))
+                    .map(Class::getSimpleName)
+                    .sorted()
+                    .collect(java.util.stream.Collectors.joining(", "));
+            String unexpected = Arrays.stream(toolObjects)
+                    .filter(object -> TOOL_SERVICE_TYPES.stream().noneMatch(type -> type.isInstance(object)))
+                    .map(object -> object.getClass().getSimpleName())
+                    .distinct()
+                    .sorted()
+                    .collect(java.util.stream.Collectors.joining(", "));
+            throw new IllegalStateException("Discord MCP tool service inventory is inconsistent: "
+                    + "expected count " + TOOL_SERVICE_TYPES.size() + ", actual count "
+                    + toolObjects.length + ", missing [" + missing + "], unexpected ["
+                    + unexpected + "]");
         }
     }
 

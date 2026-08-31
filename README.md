@@ -220,7 +220,8 @@ schema are rejected rather than ignored. Audit-only deployments retain upstream 
   `DISCORD_GUILD_ID` remains its default when the argument is omitted. Tools without a `guildId`
   parameter can never borrow that default. Every supplied channel-like target must resolve from
   the JDA cache; uncached channels and archived threads, including auto-archived forum posts, are
-  refused even when a guild is explicit.
+  refused even when a guild is explicit. This matches the existing service implementations, which
+  already depend on the same cache for those channel and thread lookups.
 - `DISCORD_MCP_ALLOWED_TOOLS`: comma-separated exact tool names. Unknown names fail startup and
   tools not named here are not exported to MCP clients. When a guild allowlist is active, global
   target tools that cannot prove a guild are intentionally uncallable and should be omitted:
@@ -246,8 +247,10 @@ schema are rejected rather than ignored. Audit-only deployments retain upstream 
   servlet context; if `management.server.port` creates a separate management context, secure or
   firewall that port independently.
 - `DISCORD_MCP_AUDIT_FILE`: append-only JSONL tool audit. It records tool, outcome, write mode,
-  resolved guild IDs, selected Discord object IDs, an arguments hash, and a per-call invocation ID
-  that pairs `started` with its terminal record under concurrency. It deliberately does
+  resolved guild IDs, an arguments hash, and a per-call invocation ID that pairs `started` with its
+  terminal record under concurrency. When deployment policy is active, selected declared Discord
+  object IDs are nested under `argumentIds`; audit-only deployments omit argument-provided IDs so
+  ignored undeclared keys cannot shape reserved audit fields or inflate records. It deliberately does
   not record message bodies, invite credentials, or other complete arguments. A `tool-returned`
   outcome means the MCP tool returned to its caller; it does not claim that an asynchronously
   queued Discord mutation later succeeded. Use readback for consequential writes. The active file rotates to one `.1`

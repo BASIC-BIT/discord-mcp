@@ -361,13 +361,18 @@ public final class McpToolPolicy {
             event.put("writeMode", writeMode.name().toLowerCase(Locale.ROOT));
             var guildArray = event.putArray("guildIds");
             guildIds.forEach(id -> guildArray.add(boundedAuditIdentifier(id)));
-            if (arguments != null) {
+            if (arguments != null && policyActive) {
+                var argumentIds = objectMapper.createObjectNode();
                 arguments.properties().forEach(entry -> {
                     if (entry.getKey().matches("(?i).*id$")
                             && entry.getValue().isValueNode() && !entry.getValue().isNull()) {
-                        event.put(entry.getKey(), boundedAuditIdentifier(entry.getValue().asText()));
+                        argumentIds.put(entry.getKey(),
+                                boundedAuditIdentifier(entry.getValue().asText()));
                     }
                 });
+                if (!argumentIds.isEmpty()) {
+                    event.set("argumentIds", argumentIds);
+                }
             }
             if (argumentsSha256 != null) {
                 event.put("argumentsSha256", argumentsSha256);

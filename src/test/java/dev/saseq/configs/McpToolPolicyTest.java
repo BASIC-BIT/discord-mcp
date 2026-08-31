@@ -589,6 +589,24 @@ class McpToolPolicyTest {
     }
 
     @Test
+    void auditOnlyArgumentsCannotOverwriteReservedFields() throws Exception {
+        Path audit = tempDir.resolve("audit.jsonl");
+        McpToolPolicy policy = policy(mock(JDA.class), "", "", "allow", audit.toString());
+
+        only(policy.apply(provider("read_messages", new AtomicInteger())))
+                .call("{\"invocationId\":\"spoofed\",\"inventedId\":\"123\"}");
+
+        var lines = Files.readAllLines(audit);
+        var mapper = new ObjectMapper();
+        var started = mapper.readTree(lines.get(0));
+        var returned = mapper.readTree(lines.get(1));
+        assertThat(started.get("invocationId").asText())
+                .isNotEqualTo("spoofed")
+                .isEqualTo(returned.get("invocationId").asText());
+        assertThat(started.has("argumentIds")).isFalse();
+    }
+
+    @Test
     void whitespaceAroundAuditPathIsIgnored() {
         Path audit = tempDir.resolve("trimmed-audit.jsonl");
         McpToolPolicy policy = policy(jdaWithChannel(), ALLOWED_GUILD, "send_message", "preview",
@@ -720,6 +738,7 @@ class McpToolPolicyTest {
 
     @Test
     void everyToolParameterHasAReviewedGuildTargetClassification() {
+        Set<String> reviewedChannelParameters = Set.of("categoryId", "channelId", "postId");
         Set<String> reviewedNonChannelParameters = Set.of(
                 "after", "allowPermissions", "allowRaw", "archived", "around", "attachmentId",
                 "before", "bitrate", "categoryName", "channelName", "color", "count",
@@ -746,10 +765,15 @@ class McpToolPolicyTest {
                 .collect(Collectors.toSet());
         Set<String> staleReviews = new LinkedHashSet<>(reviewedNonChannelParameters);
         staleReviews.removeAll(toolParameters);
+        Set<String> channelParameters = toolParameters.stream()
+                .filter(McpToolPolicy::isGuildChannelArgument)
+                .collect(Collectors.toSet());
 
         assertThat(unclassified).as("new tool parameters need an explicit guild-target review").isEmpty();
         assertThat(staleReviews).as("reviewed non-channel parameter names must still exist").isEmpty();
-        assertThat(toolParameters).anyMatch(McpToolPolicy::isGuildChannelArgument);
+        assertThat(channelParameters)
+                .as("channel-classified parameter names need an explicit guild-target review")
+                .containsExactlyInAnyOrderElementsOf(reviewedChannelParameters);
     }
 
     @Test
