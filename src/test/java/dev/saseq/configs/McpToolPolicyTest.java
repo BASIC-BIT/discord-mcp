@@ -316,6 +316,42 @@ class McpToolPolicyTest {
     }
 
     @Test
+    void malformedArgumentsAreDeniedAndAuditedWithoutTheirContent() throws Exception {
+        Path audit = tempDir.resolve("audit.jsonl");
+        String malformed = "{\"message\":\"secret copy\"";
+        McpToolPolicy policy = policy(mock(JDA.class), ALLOWED_GUILD,
+                "send_message", "allow", audit.toString());
+
+        assertThatThrownBy(() -> only(policy.apply(provider("send_message", new AtomicInteger())))
+                .call(malformed))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("not valid JSON");
+
+        assertThat(Files.readString(audit))
+                .contains("\"outcome\":\"denied-invalid-arguments\"")
+                .contains("\"argumentsSha256\"")
+                .contains("\"errorType\":\"IllegalArgumentException\"")
+                .doesNotContain("secret copy");
+    }
+
+    @Test
+    void nonObjectArgumentsAreDeniedAndAudited() throws Exception {
+        Path audit = tempDir.resolve("audit.jsonl");
+        McpToolPolicy policy = policy(mock(JDA.class), ALLOWED_GUILD,
+                "send_message", "allow", audit.toString());
+
+        assertThatThrownBy(() -> only(policy.apply(provider("send_message", new AtomicInteger())))
+                .call("[\"not-an-object\"]"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must be a JSON object");
+
+        assertThat(Files.readString(audit))
+                .contains("\"outcome\":\"denied-invalid-arguments\"")
+                .contains("\"argumentsSha256\"")
+                .doesNotContain("not-an-object");
+    }
+
+    @Test
     void malformedGuildIdCannotFlushTheAudit() throws Exception {
         Path audit = tempDir.resolve("audit.jsonl");
         String oversizedGuildId = "1".repeat(2_048);

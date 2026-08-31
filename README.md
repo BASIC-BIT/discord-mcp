@@ -79,9 +79,6 @@ docker run -d -i \
   -e DISCORD_MCP_WRITE_MODE \
   -e DISCORD_EXPECTED_BOT_ID \
   -e DISCORD_MCP_MESSAGE_CONTENT \
-  -e DISCORD_MCP_ACCESS_TOKEN_FILE \
-  -e DISCORD_MCP_AUDIT_FILE \
-  -e DISCORD_MCP_AUDIT_MAX_BYTES \
   -v discord-mcp-downloads:/var/lib/discord-mcp/downloads \
   saseq/discord-mcp:latest
 ```
@@ -277,7 +274,19 @@ export DISCORD_MCP_AUDIT_FILE=/var/lib/discord-mcp/audit.jsonl
 export DISCORD_MCP_AUDIT_MAX_BYTES=10485760
 ```
 
-Mount the access-token file read-only. The allowlist is application-enforced and complements,
+For plain `docker run`, create `./discord-mcp-access-token` as an operator-readable file outside
+Git, then add these arguments to the command above. The bind mount is required; forwarding only
+the container pathname makes startup fail because the credential is not present in the container.
+
+```bash
+  --mount type=bind,src="$PWD/discord-mcp-access-token",dst=/run/secrets/discord-mcp-access-token,readonly \
+  --mount type=volume,src=discord-mcp-audit,dst=/var/lib/discord-mcp \
+  -e DISCORD_MCP_ACCESS_TOKEN_FILE \
+  -e DISCORD_MCP_AUDIT_FILE \
+  -e DISCORD_MCP_AUDIT_MAX_BYTES \
+```
+
+The allowlist is application-enforced and complements,
 rather than replaces, Discord role hierarchy, channel overrides, and least-privilege bot grants.
 Use separate runtime profiles for different guild and write scopes instead of widening one
 always-on process.

@@ -172,9 +172,16 @@ public final class McpToolPolicy {
                         ? delegate.call(arguments)
                         : delegate.call(arguments, toolContext);
             }
-            JsonNode parsed = parseArguments(arguments);
             String argumentsForHash = arguments == null || arguments.isBlank() ? "{}" : arguments;
             String argumentsSha256 = sha256(argumentsForHash);
+            JsonNode parsed;
+            try {
+                parsed = parseArguments(arguments);
+            } catch (IllegalArgumentException error) {
+                auditBestEffort(tool, "denied-invalid-arguments", Set.of(), null,
+                        argumentsSha256, error.getClass().getSimpleName());
+                throw error;
+            }
             if (policyActive) {
                 try {
                     rejectUndeclaredArguments(tool, parsed, declaredArguments);
@@ -343,6 +350,8 @@ public final class McpToolPolicy {
                         event.put(entry.getKey(), boundedAuditIdentifier(entry.getValue().asText()));
                     }
                 });
+            }
+            if (argumentsSha256 != null) {
                 event.put("argumentsSha256", argumentsSha256);
             }
             if (errorType != null) {
