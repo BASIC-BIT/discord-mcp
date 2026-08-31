@@ -24,18 +24,11 @@ public class McpBearerAuthConfig {
     @Bean
     FilterRegistrationBean<OncePerRequestFilter> mcpBearerAuthFilter(
             @Value("${DISCORD_MCP_ACCESS_TOKEN_FILE:}") String tokenFile,
-            @Value("${spring.ai.mcp.server.streamable-http.mcp-endpoint:/mcp}") String mcpEndpoint,
             @Value("${spring.ai.mcp.server.protocol:}") String protocol) {
         String token = readToken(tokenFile);
         if (token != null && !"STREAMABLE".equalsIgnoreCase(protocol)) {
             throw startupError("Bearer authentication supports only the STREAMABLE HTTP protocol");
         }
-        if (mcpEndpoint == null || !mcpEndpoint.startsWith("/") || mcpEndpoint.contains("*")) {
-            throw startupError("MCP endpoint must be an absolute path without wildcards");
-        }
-        String endpoint = mcpEndpoint.endsWith("/") && mcpEndpoint.length() > 1
-                ? mcpEndpoint.substring(0, mcpEndpoint.length() - 1)
-                : mcpEndpoint;
         FilterRegistrationBean<OncePerRequestFilter> registration = new FilterRegistrationBean<>();
         registration.setFilter(new BearerFilter(token));
         registration.addUrlPatterns("/*");
@@ -82,9 +75,7 @@ public class McpBearerAuthConfig {
         @Override
         protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                         FilterChain filterChain) throws ServletException, IOException {
-            String requestPath = request.getRequestURI();
-            if (expected == null || "/actuator/health".equals(requestPath)
-                    || requestPath.startsWith("/actuator/health/")) {
+            if (expected == null || isExactPublicHealthRequest(request)) {
                 filterChain.doFilter(request, response);
                 return;
             }
@@ -101,6 +92,13 @@ public class McpBearerAuthConfig {
                 return;
             }
             filterChain.doFilter(request, response);
+        }
+
+        private static boolean isExactPublicHealthRequest(HttpServletRequest request) {
+            String expectedRawUri = request.getContextPath() + "/actuator/health";
+            return "/actuator/health".equals(request.getServletPath())
+                    && (request.getPathInfo() == null || request.getPathInfo().isEmpty())
+                    && expectedRawUri.equals(request.getRequestURI());
         }
     }
 }

@@ -24,10 +24,18 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.util.Arrays;
 import java.util.Set;
 
 @Configuration
 public class DiscordMcpConfig {
+    private static final Set<Class<?>> TOOL_SERVICE_TYPES = Set.of(
+            DiscordService.class, MessageService.class, UserService.class,
+            ChannelService.class, CategoryService.class, WebhookService.class,
+            ThreadService.class, RoleService.class, ModerationService.class,
+            VoiceChannelService.class, ScheduledEventService.class, InviteService.class,
+            ChannelPermissionService.class, EmojiService.class, ForumService.class);
+
     @Bean
     public ToolCallbackProvider discordTools(DiscordService discordService,
                                              MessageService messageService,
@@ -45,7 +53,7 @@ public class DiscordMcpConfig {
                                              EmojiService emojiService,
                                              ForumService forumService,
                                              McpToolPolicy toolPolicy) {
-        ToolCallbackProvider rawProvider = MethodToolCallbackProvider.builder().toolObjects(
+        Object[] toolObjects = {
                 discordService,
                 messageService,
                 userService,
@@ -61,8 +69,25 @@ public class DiscordMcpConfig {
                 channelPermissionService,
                 emojiService,
                 forumService
-        ).build();
+        };
+        validateToolServiceTypes(toolObjects);
+        ToolCallbackProvider rawProvider = MethodToolCallbackProvider.builder()
+                .toolObjects(toolObjects)
+                .build();
         return toolPolicy.apply(rawProvider);
+    }
+
+    private static void validateToolServiceTypes(Object[] toolObjects) {
+        boolean exactInventory = toolObjects.length == TOOL_SERVICE_TYPES.size()
+                && TOOL_SERVICE_TYPES.stream()
+                .allMatch(type -> Arrays.stream(toolObjects).anyMatch(type::isInstance));
+        if (!exactInventory) {
+            throw new IllegalStateException("Discord MCP tool service inventory is inconsistent");
+        }
+    }
+
+    static Set<Class<?>> toolServiceTypes() {
+        return TOOL_SERVICE_TYPES;
     }
 
     @Bean

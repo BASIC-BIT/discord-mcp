@@ -45,6 +45,7 @@ public final class McpToolPolicy {
             "get_emoji_details", "list_webhooks", "list_invites", "get_invite_details",
             "get_bans", "read_private_messages"
     );
+    /** Classification inventory for tests; runtime treats every tool not listed read-only as a write. */
     private static final Set<String> WRITE_TOOLS = Set.of(
             "add_reaction", "assign_role", "ban_member", "create_category", "create_emoji",
             "create_forum_channel", "create_forum_post", "create_guild_scheduled_event",
@@ -79,7 +80,7 @@ public final class McpToolPolicy {
             @Value("${DISCORD_GUILD_ID:}") String defaultGuildId,
             @Value("${DISCORD_MCP_WRITE_MODE:allow}") String writeMode,
             @Value("${DISCORD_MCP_AUDIT_FILE:}") String auditFile,
-            @Value("${DISCORD_MCP_AUDIT_MAX_BYTES:10485760}") long auditMaxBytes) {
+            @Value("${DISCORD_MCP_AUDIT_MAX_BYTES:10485760}") String auditMaxBytes) {
         this.jda = jda;
         this.objectMapper = objectMapper;
         this.allowedGuilds = parseCsv(allowedGuilds, "DISCORD_MCP_ALLOWED_GUILDS");
@@ -91,10 +92,10 @@ public final class McpToolPolicy {
         String configuredAuditFile = trimToNull(auditFile);
         this.auditFile = configuredAuditFile == null
                 ? null : Path.of(configuredAuditFile).toAbsolutePath().normalize();
-        if (this.auditFile != null && auditMaxBytes < 1024) {
+        this.auditMaxBytes = this.auditFile == null ? 10_485_760L : parseAuditMaxBytes(auditMaxBytes);
+        if (this.auditFile != null && this.auditMaxBytes < 1024) {
             throw startupError("DISCORD_MCP_AUDIT_MAX_BYTES must be at least 1024");
         }
-        this.auditMaxBytes = auditMaxBytes;
 
         if (this.auditFile != null && this.auditFile.getParent() != null) {
             try {
@@ -289,7 +290,7 @@ public final class McpToolPolicy {
                 arguments.properties().forEach(entry -> {
                     if (entry.getKey().matches("(?i).*id$")
                             && entry.getValue().isValueNode() && !entry.getValue().isNull()) {
-                        event.put(entry.getKey(), entry.getValue().asText());
+                        event.put(entry.getKey(), boundedAuditIdentifier(entry.getValue().asText()));
                     }
                 });
                 event.put("argumentsSha256", sha256(arguments.toString()));
@@ -297,7 +298,7 @@ public final class McpToolPolicy {
             if (errorType != null) {
                 event.put("errorType", errorType);
             }
-            String line = objectMapper.writeValueAsString(event) + System.lineSeparator();
+            String line = event.toString() + System.lineSeparator();
             int lineBytes = line.getBytes(StandardCharsets.UTF_8).length;
             if (lineBytes > auditMaxBytes) {
                 throw new IllegalStateException("Audit record exceeds DISCORD_MCP_AUDIT_MAX_BYTES");
@@ -411,6 +412,26 @@ public final class McpToolPolicy {
         return value.trim();
     }
 
+    private static String boundedAuditIdentifier(String value) {
+        final int maximumCharacters = 64;
+        if (value.length() <= maximumCharacters) {
+            return value;
+        }
+        return "<omitted " + value.length() + " characters; sha256=" + sha256(value) + ">";
+    }
+
+    private static long parseAuditMaxBytes(String value) {
+        String normalized = trimToNull(value);
+        if (normalized == null) {
+            return 10_485_760L;
+        }
+        try {
+            return Long.parseLong(normalized);
+        } catch (NumberFormatException error) {
+            throw startupError("DISCORD_MCP_AUDIT_MAX_BYTES must be an integer");
+        }
+    }
+
     private static IllegalArgumentException startupError(String message) {
         System.err.println("ERROR: Discord MCP policy configuration is invalid: " + message);
         return new IllegalArgumentException(message);
@@ -445,8 +466,12 @@ public final class McpToolPolicy {
         PREVIEW;
 
         private static WriteMode parse(String value) {
+            String normalized = trimToNull(value);
+            if (normalized == null) {
+                return ALLOW;
+            }
             try {
-                return WriteMode.valueOf(value.trim().toUpperCase(Locale.ROOT));
+                return WriteMode.valueOf(normalized.toUpperCase(Locale.ROOT));
             } catch (RuntimeException error) {
                 throw startupError("DISCORD_MCP_WRITE_MODE must be 'allow' or 'preview'");
             }

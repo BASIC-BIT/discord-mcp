@@ -53,6 +53,11 @@ export DISCORD_MCP_DOWNLOAD_ROOT=/var/lib/discord-mcp/downloads
 > **Message Content Intent** under Privileged Gateway Intents. Member lookup needs the first;
 > `read_messages` needs the second to receive ordinary message content.
 
+> [!IMPORTANT]
+> **Upgrading:** this version enables Message Content Intent at startup. Existing bot applications
+> must enable **Message Content Intent** in the Developer Portal before deploying this version, or
+> Discord will reject the gateway connection. Startup stderr identifies this intent failure.
+
 > [!TIP]
 > The `DISCORD_GUILD_ID` env variable is optional.
 > 
@@ -209,7 +214,8 @@ For an agent-facing bot installed in more than one server, configure them explic
   guild, it refuses the call rather than guessing. If a tool declares `guildId`, an allowed
   `DISCORD_GUILD_ID` remains its default when the argument is omitted. Tools without a `guildId`
   parameter can never borrow that default. Every supplied channel-like target must resolve from
-  the JDA cache; uncached channels and archived threads are refused even when a guild is explicit.
+  the JDA cache; uncached channels and archived threads, including auto-archived forum posts, are
+  refused even when a guild is explicit.
 - `DISCORD_MCP_ALLOWED_TOOLS`: comma-separated exact tool names. Unknown names fail startup and
   tools not named here are not exported to MCP clients. When a guild allowlist is active, global
   target tools that cannot prove a guild are intentionally uncallable and should be omitted:
@@ -225,7 +231,8 @@ For an agent-facing bot installed in more than one server, configure them explic
   configured as STREAMABLE while the bearer is enabled. Health checks remain available without the
   bearer; every other current or future servlet path defaults to protected. Use a separate random
   token of at least 32 characters, never the Discord bot token. The file is read once at startup,
-  so restart the process after rotating it.
+  so restart the process after rotating it. Only the exact default `/actuator/health` path is public;
+  custom management paths and health subpaths remain bearer-protected.
 - `DISCORD_MCP_AUDIT_FILE`: append-only JSONL tool audit. It records tool, outcome, write mode,
   resolved guild IDs, selected Discord object IDs, and an arguments hash. It deliberately does
   not record message bodies, invite credentials, or other complete arguments. A `tool-returned`

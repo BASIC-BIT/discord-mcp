@@ -11,21 +11,6 @@ import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.ai.tool.method.MethodToolCallbackProvider;
-import dev.saseq.services.CategoryService;
-import dev.saseq.services.ChannelPermissionService;
-import dev.saseq.services.ChannelService;
-import dev.saseq.services.DiscordService;
-import dev.saseq.services.EmojiService;
-import dev.saseq.services.ForumService;
-import dev.saseq.services.InviteService;
-import dev.saseq.services.MessageService;
-import dev.saseq.services.ModerationService;
-import dev.saseq.services.RoleService;
-import dev.saseq.services.ScheduledEventService;
-import dev.saseq.services.ThreadService;
-import dev.saseq.services.UserService;
-import dev.saseq.services.VoiceChannelService;
-import dev.saseq.services.WebhookService;
 import tools.jackson.databind.ObjectMapper;
 
 import java.nio.file.Files;
@@ -113,7 +98,7 @@ class McpToolPolicyTest {
     @Test
     void defaultGuildDoesNotAuthorizeToolWithoutGuildTarget() {
         McpToolPolicy policy = new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
-                ALLOWED_GUILD, "send_webhook_message", ALLOWED_GUILD, "allow", "", 10485760);
+                ALLOWED_GUILD, "send_webhook_message", ALLOWED_GUILD, "allow", "", "10485760");
 
         assertThatThrownBy(() -> only(policy.apply(provider("send_webhook_message", new AtomicInteger())))
                 .call("{\"webhookUrl\":\"https://discord.com/api/webhooks/1/x\"}"))
@@ -159,7 +144,7 @@ class McpToolPolicyTest {
     @Test
     void numericGuildIdIsRejectedRatherThanReplacedByDefault() {
         McpToolPolicy policy = new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
-                ALLOWED_GUILD, "list_channels", ALLOWED_GUILD, "allow", "", 10485760);
+                ALLOWED_GUILD, "list_channels", ALLOWED_GUILD, "allow", "", "10485760");
 
         assertThatThrownBy(() -> only(policy.apply(provider("list_channels", new AtomicInteger())))
                 .call("{\"guildId\":32345678901234567}"))
@@ -181,7 +166,7 @@ class McpToolPolicyTest {
     @Test
     void invalidLegacyDefaultGuildDoesNotBlockStartupWithoutPolicy() {
         McpToolPolicy policy = new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
-                "", "", "OPTIONAL_DEFAULT_SERVER_ID", "allow", "", 1);
+                "", "", "OPTIONAL_DEFAULT_SERVER_ID", "allow", "", "not-an-integer");
 
         assertThat(only(policy.apply(provider("list_channels", new AtomicInteger())))
                 .call("{\"guildId\":\"123\"}"))
@@ -191,7 +176,7 @@ class McpToolPolicyTest {
     @Test
     void invalidDefaultGuildFailsStartupWhenPolicyIsActive() {
         assertThatThrownBy(() -> new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
-                "", "list_channels", "OPTIONAL_DEFAULT_SERVER_ID", "allow", "", 10485760))
+                "", "list_channels", "OPTIONAL_DEFAULT_SERVER_ID", "allow", "", "10485760"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("DISCORD_GUILD_ID");
     }
@@ -211,7 +196,7 @@ class McpToolPolicyTest {
     @Test
     void declaredGuildParameterCanUseAllowedDefault() {
         McpToolPolicy policy = new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
-                ALLOWED_GUILD, "list_channels", ALLOWED_GUILD, "allow", "", 10485760);
+                ALLOWED_GUILD, "list_channels", ALLOWED_GUILD, "allow", "", "10485760");
 
         assertThat(only(policy.apply(provider("list_channels", new AtomicInteger()))).call("{}"))
                 .isEqualTo("called");
@@ -221,7 +206,7 @@ class McpToolPolicyTest {
     void absentArgumentMapsAreNormalizedToEmptyObjects() {
         AtomicInteger calls = new AtomicInteger();
         McpToolPolicy policy = new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
-                ALLOWED_GUILD, "list_channels", ALLOWED_GUILD, "allow", "", 10485760);
+                ALLOWED_GUILD, "list_channels", ALLOWED_GUILD, "allow", "", "10485760");
         ToolCallback callback = only(policy.apply(provider("list_channels", calls)));
 
         assertThat(callback.call(null)).isEqualTo("called");
@@ -393,23 +378,46 @@ class McpToolPolicyTest {
     }
 
     @Test
-    void oversizedAuditRecordIsRejectedBeforeItCanExceedTheCap() {
+    void oversizedIdentifierIsBoundedInAudit() throws Exception {
         Path audit = tempDir.resolve("audit.jsonl");
         McpToolPolicy policy = new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
-                "", "send_message", "", "preview", audit.toString(), 1024);
+                "", "send_message", "", "preview", audit.toString(), "1024");
+        String oversizedId = "1".repeat(2048);
 
-        assertThatThrownBy(() -> only(policy.apply(provider("send_message", new AtomicInteger())))
-                .call("{\"channelId\":\"" + "1".repeat(2048) + "\",\"message\":\"x\"}"))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("exceeds DISCORD_MCP_AUDIT_MAX_BYTES");
-        assertThat(audit).doesNotExist();
+        only(policy.apply(provider("send_message", new AtomicInteger())))
+                .call("{\"channelId\":\"" + oversizedId + "\",\"message\":\"x\"}");
+
+        assertThat(Files.readString(audit))
+                .contains("<omitted 2048 characters; sha256=")
+                .doesNotContain(oversizedId);
+    }
+
+    @Test
+    void blankWriteModePreservesLegacyAllowBehavior() {
+        AtomicInteger calls = new AtomicInteger();
+        McpToolPolicy policy = policy(mock(JDA.class), "", "send_message", "", "");
+
+        assertThat(only(policy.apply(provider("send_message", calls))).call("{}"))
+                .isEqualTo("called");
+        assertThat(calls).hasValue(1);
+    }
+
+    @Test
+    void blankAuditMaximumUsesTheDefault() throws Exception {
+        Path audit = tempDir.resolve("blank-max-audit.jsonl");
+        McpToolPolicy policy = new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
+                "", "send_message", "", "preview", audit.toString(), "");
+
+        only(policy.apply(provider("send_message", new AtomicInteger()))).call("{}");
+
+        assertThat(audit).exists();
     }
 
     @Test
     void auditRotatesBeforeTheActiveFileWouldExceedTheCap() throws Exception {
         Path audit = tempDir.resolve("audit.jsonl");
         McpToolPolicy policy = new McpToolPolicy(jdaWithChannel(), new ObjectMapper(),
-                ALLOWED_GUILD, "send_message", "", "preview", audit.toString(), 1024);
+                ALLOWED_GUILD, "send_message", "", "preview", audit.toString(), "1024");
         ToolCallback callback = only(policy.apply(provider("send_message", new AtomicInteger())));
 
         for (int index = 0; index < 12; index++) {
@@ -457,13 +465,7 @@ class McpToolPolicyTest {
 
     @Test
     void everyReadOnlyClassificationNamesAnExistingTool() {
-        Set<String> actualTools = Arrays.stream(new Class<?>[]{
-                        DiscordService.class, MessageService.class, UserService.class,
-                        ChannelService.class, CategoryService.class, WebhookService.class,
-                        ThreadService.class, RoleService.class, ModerationService.class,
-                        VoiceChannelService.class, ScheduledEventService.class, InviteService.class,
-                        ChannelPermissionService.class, EmojiService.class, ForumService.class
-                })
+        Set<String> actualTools = DiscordMcpConfig.toolServiceTypes().stream()
                 .flatMap(type -> Arrays.stream(type.getDeclaredMethods()))
                 .map(method -> method.getAnnotation(Tool.class))
                 .filter(annotation -> annotation != null)
@@ -479,7 +481,7 @@ class McpToolPolicyTest {
     }
 
     private static McpToolPolicy policy(JDA jda, String guilds, String tools, String mode, String audit) {
-        return new McpToolPolicy(jda, new ObjectMapper(), guilds, tools, "", mode, audit, 10485760);
+        return new McpToolPolicy(jda, new ObjectMapper(), guilds, tools, "", mode, audit, "10485760");
     }
 
     private static JDA jdaWithChannel() {

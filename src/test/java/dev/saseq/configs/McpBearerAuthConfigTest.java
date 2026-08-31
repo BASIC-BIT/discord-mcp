@@ -74,7 +74,7 @@ class McpBearerAuthConfigTest {
         Files.writeString(tokenFile, TOKEN + System.lineSeparator() + System.lineSeparator());
 
         var registration = new McpBearerAuthConfig()
-                .mcpBearerAuthFilter(tokenFile.toString(), "/custom-mcp/", "STREAMABLE");
+                .mcpBearerAuthFilter(tokenFile.toString(), "STREAMABLE");
 
         assertThat(registration.getUrlPatterns()).containsExactly("/*");
     }
@@ -83,6 +83,7 @@ class McpBearerAuthConfigTest {
     void healthRemainsPublicWhileOtherFuturePathsDefaultToProtected() throws Exception {
         var filter = new McpBearerAuthConfig.BearerFilter(TOKEN);
         var healthRequest = new MockHttpServletRequest("GET", "/actuator/health");
+        healthRequest.setServletPath("/actuator/health");
         var healthChain = new MockFilterChain();
 
         filter.doFilter(healthRequest, new MockHttpServletResponse(), healthChain);
@@ -100,12 +101,36 @@ class McpBearerAuthConfigTest {
     }
 
     @Test
+    void healthTraversalAndSubpathsRemainProtected() throws Exception {
+        var filter = new McpBearerAuthConfig.BearerFilter(TOKEN);
+        var traversalRequest = new MockHttpServletRequest("GET", "/actuator/health/../mcp");
+        traversalRequest.setServletPath("/mcp");
+        var traversalResponse = new MockHttpServletResponse();
+        var traversalChain = new MockFilterChain();
+
+        filter.doFilter(traversalRequest, traversalResponse, traversalChain);
+
+        assertThat(traversalResponse.getStatus()).isEqualTo(401);
+        assertThat(traversalChain.getRequest()).isNull();
+
+        var subpathRequest = new MockHttpServletRequest("GET", "/actuator/health/liveness");
+        subpathRequest.setServletPath("/actuator/health/liveness");
+        var subpathResponse = new MockHttpServletResponse();
+        var subpathChain = new MockFilterChain();
+
+        filter.doFilter(subpathRequest, subpathResponse, subpathChain);
+
+        assertThat(subpathResponse.getStatus()).isEqualTo(401);
+        assertThat(subpathChain.getRequest()).isNull();
+    }
+
+    @Test
     void configuredBearerRequiresExplicitStreamableProtocol() throws Exception {
         Path tokenFile = tempDir.resolve("token");
         Files.writeString(tokenFile, TOKEN);
 
         assertThatThrownBy(() -> new McpBearerAuthConfig()
-                .mcpBearerAuthFilter(tokenFile.toString(), "/mcp", ""))
+                .mcpBearerAuthFilter(tokenFile.toString(), ""))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("STREAMABLE");
     }
