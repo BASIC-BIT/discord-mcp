@@ -144,7 +144,10 @@ public final class McpToolPolicy {
 
         private PolicyToolCallback(ToolCallback delegate) {
             this.delegate = delegate;
-            this.declaredArguments = schemaProperties(delegate.getToolDefinition());
+            // Schema enforcement belongs to policy-active deployments. Audit-only and legacy
+            // profiles keep upstream argument handling and cannot be broken by schema drift.
+            this.declaredArguments = policyActive
+                    ? schemaProperties(delegate.getToolDefinition()) : Set.of();
         }
 
         @Override
@@ -190,7 +193,8 @@ public final class McpToolPolicy {
                 try {
                     rejectUndeclaredArguments(tool, parsed, declaredArguments);
                 } catch (SecurityException error) {
-                    auditBestEffort(tool, "denied-undeclared-argument", Set.of(), null, null,
+                    auditBestEffort(tool, "denied-undeclared-argument", Set.of(), null,
+                            argumentsSha256,
                             error.getClass().getSimpleName());
                     throw error;
                 }
@@ -333,6 +337,8 @@ public final class McpToolPolicy {
         }
     }
 
+    // Expected operator traffic is low. Serializing the two append operations keeps each JSONL
+    // record and size-based rotation atomic without retaining a file handle across rotations.
     private synchronized void audit(String tool, String outcome, Set<String> guildIds,
                                     JsonNode arguments, String argumentsSha256, String errorType) {
         if (auditFile == null) {
@@ -375,6 +381,10 @@ public final class McpToolPolicy {
 
     private String auditBestEffort(String tool, String outcome, Set<String> guildIds,
                                    JsonNode arguments, String argumentsSha256, String errorType) {
+        if (auditFile == null && outcome.startsWith("denied-")) {
+            System.err.println("Discord MCP policy denied tool " + tool + " (" + outcome + ").");
+            return null;
+        }
         try {
             audit(tool, outcome, guildIds, arguments, argumentsSha256, errorType);
             return null;

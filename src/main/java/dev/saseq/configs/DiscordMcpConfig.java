@@ -94,8 +94,7 @@ public class DiscordMcpConfig {
 
     @Bean
     public JDA jda(@Value("${DISCORD_TOKEN:}") String token,
-                   @Value("${DISCORD_EXPECTED_BOT_ID:}") String expectedBotId,
-                   @Value("${DISCORD_MCP_MESSAGE_CONTENT:false}") boolean messageContentEnabled)
+                   @Value("${DISCORD_EXPECTED_BOT_ID:}") String expectedBotId)
             throws InterruptedException {
         if (token == null || token.isEmpty()) {
             System.err.println("ERROR: The environment variable DISCORD_TOKEN is not set. Please set it to run the application properly.");
@@ -104,7 +103,7 @@ public class DiscordMcpConfig {
         JDA jda;
         try {
             jda = JDABuilder.createDefault(token)
-                    .enableIntents(requiredGatewayIntents(messageContentEnabled))
+                    .enableIntents(requiredGatewayIntents())
                     .build()
                     .awaitReady();
         } catch (RuntimeException e) {
@@ -112,12 +111,11 @@ public class DiscordMcpConfig {
             // MCP channel. That makes a startup failure here invisible to the MCP client, which just
             // sees the process exit and reports an opaque transport error (-32000). Echo an actionable
             // summary to stderr, which MCP clients capture and surface in their logs.
-            reportJdaStartupFailure(e, messageContentEnabled);
+            reportJdaStartupFailure(e);
             System.exit(1);
             throw e; // unreachable (System.exit does not return), but required to satisfy the compiler
         }
-        if (expectedBotId != null && !expectedBotId.isBlank()
-                && !jda.getSelfUser().getId().equals(expectedBotId.trim())) {
+        if (!botIdMatches(expectedBotId, jda.getSelfUser().getId())) {
             String actualBotId = jda.getSelfUser().getId();
             jda.shutdownNow();
             System.err.println("ERROR: DISCORD_EXPECTED_BOT_ID does not match the authenticated bot.");
@@ -129,7 +127,7 @@ public class DiscordMcpConfig {
         return jda;
     }
 
-    private static void reportJdaStartupFailure(Throwable error, boolean messageContentEnabled) {
+    private static void reportJdaStartupFailure(Throwable error) {
         StringBuilder chain = new StringBuilder();
         for (Throwable t = error; t != null; t = t.getCause()) {
             if (chain.length() > 0) {
@@ -148,24 +146,19 @@ public class DiscordMcpConfig {
         } else if (lower.contains("intent") || lower.contains("4014")) {
             System.err.println("  Likely cause: a privileged gateway intent is not enabled for this bot.");
             System.err.println("  Fix: in the Discord Developer Portal (Bot -> Privileged Gateway Intents), enable");
-            System.err.println("       " + privilegedIntentsForHint(messageContentEnabled) + ".");
+            System.err.println("       'Server Members Intent'.");
         }
         System.err.println("  Details: " + details);
     }
 
-    static String privilegedIntentsForHint(boolean messageContentEnabled) {
-        return messageContentEnabled
-                ? "'Server Members Intent' and 'Message Content Intent'"
-                : "'Server Members Intent'";
+    static boolean botIdMatches(String expectedBotId, String actualBotId) {
+        return expectedBotId == null || expectedBotId.isBlank()
+                || actualBotId.equals(expectedBotId.trim());
     }
 
-    static Set<GatewayIntent> requiredGatewayIntents(boolean messageContentEnabled) {
-        var intents = new java.util.LinkedHashSet<>(Set.of(
+    static Set<GatewayIntent> requiredGatewayIntents() {
+        return Set.of(
                 GatewayIntent.GUILD_MEMBERS, GatewayIntent.GUILD_VOICE_STATES,
-                GatewayIntent.SCHEDULED_EVENTS));
-        if (messageContentEnabled) {
-            intents.add(GatewayIntent.MESSAGE_CONTENT);
-        }
-        return Set.copyOf(intents);
+                GatewayIntent.SCHEDULED_EVENTS);
     }
 }

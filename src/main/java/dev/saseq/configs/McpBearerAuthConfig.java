@@ -28,10 +28,12 @@ public class McpBearerAuthConfig {
             @Value("${spring.main.web-application-type:}") String webApplicationType) {
         String token = readToken(tokenFile);
         if (token != null && !"STREAMABLE".equalsIgnoreCase(protocol)) {
-            throw startupError("Bearer authentication supports only the STREAMABLE HTTP protocol");
+            throw startupError("Bearer authentication supports only the STREAMABLE HTTP protocol; "
+                    + "set SPRING_PROFILES_ACTIVE=http");
         }
         if (token != null && !"servlet".equalsIgnoreCase(webApplicationType)) {
-            throw startupError("Bearer authentication requires servlet web application mode");
+            throw startupError("Bearer authentication requires servlet web application mode; "
+                    + "set SPRING_PROFILES_ACTIVE=http");
         }
         if (token != null) {
             String normalizedEndpoint = normalizeEndpoint(mcpEndpoint);

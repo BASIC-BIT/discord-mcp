@@ -196,6 +196,27 @@ class McpToolPolicyTest {
     }
 
     @Test
+    void unconfiguredPolicyDoesNotInspectToolSchemas() {
+        ToolDefinition definition = ToolDefinition.builder().name("future_tool")
+                .description("test").inputSchema("{}").build();
+        ToolCallback raw = new ToolCallback() {
+            @Override
+            public ToolDefinition getToolDefinition() {
+                return definition;
+            }
+
+            @Override
+            public String call(String arguments) {
+                return "called";
+            }
+        };
+        McpToolPolicy policy = policy(mock(JDA.class), "", "", "allow", "");
+
+        assertThat(only(policy.apply(ToolCallbackProvider.from(raw))).call("{}"))
+                .isEqualTo("called");
+    }
+
+    @Test
     void auditOnlyForwardsArgumentsUnchanged() {
         AtomicReference<String> received = new AtomicReference<>();
         ToolDefinition definition = ToolDefinition.builder().name("send_message")
@@ -485,6 +506,7 @@ class McpToolPolicyTest {
 
         assertThat(Files.readString(audit))
                 .contains("\"outcome\":\"denied-undeclared-argument\"")
+                .contains("\"argumentsSha256\":")
                 .doesNotContain("webhookUrl")
                 .doesNotContain("\"guildId\":")
                 .doesNotContain(ALLOWED_GUILD)
@@ -684,6 +706,21 @@ class McpToolPolicyTest {
     }
 
     @Test
+    void policyWrapsTheGeneratedSchemasForEveryRealToolService() {
+        JDA jda = mock(JDA.class);
+        Object[] toolServices = DiscordMcpConfig.toolServiceTypes().stream()
+                .map(type -> instantiateToolService(type, jda))
+                .toArray();
+        ToolCallbackProvider upstream = MethodToolCallbackProvider.builder()
+                .toolObjects(toolServices)
+                .build();
+        McpToolPolicy policy = policy(jda, ALLOWED_GUILD, "", "preview", "");
+
+        assertThat(policy.apply(upstream).getToolCallbacks())
+                .hasSameSizeAs(upstream.getToolCallbacks());
+    }
+
+    @Test
     void globalTargetToolsCannotAcquireGuildDefaultAuthorization() {
         Set<String> globalTargetTools = Set.of(
                 "delete_webhook", "send_webhook_message", "delete_invite", "get_invite_details",
@@ -706,6 +743,14 @@ class McpToolPolicyTest {
 
     private static McpToolPolicy policy(JDA jda, String guilds, String tools, String mode, String audit) {
         return new McpToolPolicy(jda, new ObjectMapper(), guilds, tools, "", mode, audit, "10485760");
+    }
+
+    private static Object instantiateToolService(Class<?> type, JDA jda) {
+        try {
+            return type.getConstructor(JDA.class).newInstance(jda);
+        } catch (ReflectiveOperationException error) {
+            throw new AssertionError("Could not instantiate tool service " + type.getName(), error);
+        }
     }
 
     private static JDA jdaWithChannel() {

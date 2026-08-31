@@ -15,7 +15,6 @@ services:
       DISCORD_MCP_ALLOWED_TOOLS: ${DISCORD_MCP_ALLOWED_TOOLS:-}
       DISCORD_MCP_WRITE_MODE: ${DISCORD_MCP_WRITE_MODE:-allow}
       DISCORD_EXPECTED_BOT_ID: ${DISCORD_EXPECTED_BOT_ID:-}
-      DISCORD_MCP_MESSAGE_CONTENT: ${DISCORD_MCP_MESSAGE_CONTENT:-false}
       # Bearer-token and audit-file settings are not forwarded by this generic Compose file.
       # Each requires its own secret bind mount or persistent volume. Use a deployment-specific
       # override after reading "Multi-server deployment policy" in the README.
