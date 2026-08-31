@@ -199,9 +199,8 @@ public final class McpToolPolicy {
                     throw error;
                 }
             }
-            if (!allowedGuilds.isEmpty()) {
-                normalizePolicyTargetIdentifiers(parsed);
-            }
+            boolean normalizedTargetIdentifiers = !allowedGuilds.isEmpty()
+                    && normalizePolicyTargetIdentifiers(parsed);
             Set<String> guildIds;
             try {
                 guildIds = resolveGuildIds(parsed, declaredArguments, !allowedGuilds.isEmpty());
@@ -221,8 +220,8 @@ public final class McpToolPolicy {
 
             audit(tool, "started", guildIds, parsed, argumentsSha256, null);
             try {
-                String delegatedArguments = !policyActive && arguments != null && !arguments.isBlank()
-                        ? arguments : parsed.toString();
+                String delegatedArguments = normalizedTargetIdentifiers
+                        ? parsed.toString() : argumentsForHash;
                 String result = toolContext == null
                         ? delegate.call(delegatedArguments)
                         : delegate.call(delegatedArguments, toolContext);
@@ -308,15 +307,18 @@ public final class McpToolPolicy {
         return guildIds;
     }
 
-    private void normalizePolicyTargetIdentifiers(JsonNode arguments) {
-        arguments.properties().forEach(entry -> {
+    private boolean normalizePolicyTargetIdentifiers(JsonNode arguments) {
+        boolean changed = false;
+        for (var entry : arguments.properties()) {
             String field = entry.getKey();
             JsonNode value = entry.getValue();
             if (("guildId".equals(field) || isGuildChannelArgument(field))
                     && value != null && value.isIntegralNumber()) {
                 entry.setValue(objectMapper.getNodeFactory().textNode(value.asText()));
+                changed = true;
             }
-        });
+        }
+        return changed;
     }
 
     private void enforceGuilds(String tool, Set<String> guildIds, JsonNode arguments,

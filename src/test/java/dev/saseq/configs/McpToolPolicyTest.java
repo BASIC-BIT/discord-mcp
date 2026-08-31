@@ -244,6 +244,32 @@ class McpToolPolicyTest {
     }
 
     @Test
+    void policyForwardsLargeArgumentsUnchangedWhenTargetNormalizationIsUnneeded() {
+        AtomicReference<String> received = new AtomicReference<>();
+        ToolDefinition definition = ToolDefinition.builder().name("send_file")
+                .description("test").inputSchema(schema("channelId", "fileData")).build();
+        ToolCallback raw = new ToolCallback() {
+            @Override
+            public ToolDefinition getToolDefinition() {
+                return definition;
+            }
+
+            @Override
+            public String call(String arguments) {
+                received.set(arguments);
+                return "called";
+            }
+        };
+        McpToolPolicy policy = policy(jdaWithChannel(), ALLOWED_GUILD, "send_file", "allow", "");
+        String arguments = "{\"channelId\":\"32345678901234567\",\"fileData\":\""
+                + "A".repeat(1_000_000) + "\"}";
+
+        assertThat(only(policy.apply(ToolCallbackProvider.from(raw))).call(arguments))
+                .isEqualTo("called");
+        assertThat(received.get()).isSameAs(arguments);
+    }
+
+    @Test
     void invalidLegacyDefaultGuildDoesNotBlockStartupWithoutPolicy() {
         McpToolPolicy policy = new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
                 "", "", "OPTIONAL_DEFAULT_SERVER_ID", "allow", "", "not-an-integer");
