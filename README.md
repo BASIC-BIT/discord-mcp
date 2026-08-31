@@ -235,10 +235,15 @@ rejected rather than ignored.
 - `DISCORD_MCP_WRITE_MODE`: `preview` returns `WRITE_PREVIEW` plus the proposed argument object
   for every mutation without calling Discord. Large payloads are bounded and hashed rather than
   echoed in full. `allow` executes writes. Unknown tool names are
-  classified as writes, so new tools do not silently become read-only.
+  classified as writes, so new tools do not silently become read-only. Preview is a write gate,
+  not a data-isolation mode: allowed read tools still execute and can return sensitive data.
+  In particular, omit `list_webhooks`, `list_invites`, and `get_invite_details` unless the caller
+  is explicitly allowed to receive their credentials or invite material.
 - `DISCORD_EXPECTED_BOT_ID`: refuses startup when a valid token authenticates the wrong bot.
 - `DISCORD_MCP_MESSAGE_CONTENT`: opt into the privileged Message Content gateway intent. Defaults
-  to `false`; set `true` only after enabling the matching Developer Portal grant.
+  to `false`; set `true` only after enabling the matching Developer Portal grant. [Discord applies
+  this restriction across its APIs](https://docs.discord.com/developers/events/gateway#message-content-intent),
+  including HTTP message objects, not only to Gateway events.
 - `DISCORD_MCP_ACCESS_TOKEN_FILE`: HTTP-only bearer credential, read from a mounted file. When
   set under the STREAMABLE protocol, the configured MCP endpoint returns `401` unless the request
   has the exact `Authorization: Bearer ...` header. Startup fails unless the protocol is explicitly

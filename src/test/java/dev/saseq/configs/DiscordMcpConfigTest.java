@@ -22,4 +22,12 @@ class DiscordMcpConfigTest {
                         GatewayIntent.SCHEDULED_EVENTS)
                 .doesNotContain(GatewayIntent.MESSAGE_CONTENT);
     }
+
+    @Test
+    void privilegedIntentHintMatchesRequestedIntents() {
+        assertThat(DiscordMcpConfig.privilegedIntentsForHint(false))
+                .isEqualTo("'Server Members Intent'");
+        assertThat(DiscordMcpConfig.privilegedIntentsForHint(true))
+                .isEqualTo("'Server Members Intent' and 'Message Content Intent'");
+    }
 }

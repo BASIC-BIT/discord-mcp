@@ -112,7 +112,7 @@ public class DiscordMcpConfig {
             // MCP channel. That makes a startup failure here invisible to the MCP client, which just
             // sees the process exit and reports an opaque transport error (-32000). Echo an actionable
             // summary to stderr, which MCP clients capture and surface in their logs.
-            reportJdaStartupFailure(e);
+            reportJdaStartupFailure(e, messageContentEnabled);
             System.exit(1);
             throw e; // unreachable (System.exit does not return), but required to satisfy the compiler
         }
@@ -129,7 +129,7 @@ public class DiscordMcpConfig {
         return jda;
     }
 
-    private static void reportJdaStartupFailure(Throwable error) {
+    private static void reportJdaStartupFailure(Throwable error, boolean messageContentEnabled) {
         StringBuilder chain = new StringBuilder();
         for (Throwable t = error; t != null; t = t.getCause()) {
             if (chain.length() > 0) {
@@ -148,9 +148,15 @@ public class DiscordMcpConfig {
         } else if (lower.contains("intent") || lower.contains("4014")) {
             System.err.println("  Likely cause: a privileged gateway intent is not enabled for this bot.");
             System.err.println("  Fix: in the Discord Developer Portal (Bot -> Privileged Gateway Intents), enable");
-            System.err.println("       'Server Members Intent' and 'Message Content Intent'.");
+            System.err.println("       " + privilegedIntentsForHint(messageContentEnabled) + ".");
         }
         System.err.println("  Details: " + details);
+    }
+
+    static String privilegedIntentsForHint(boolean messageContentEnabled) {
+        return messageContentEnabled
+                ? "'Server Members Intent' and 'Message Content Intent'"
+                : "'Server Members Intent'";
     }
 
     static Set<GatewayIntent> requiredGatewayIntents(boolean messageContentEnabled) {

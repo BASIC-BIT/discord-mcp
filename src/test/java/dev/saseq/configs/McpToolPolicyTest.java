@@ -137,24 +137,27 @@ class McpToolPolicyTest {
     }
 
     @Test
-    void numericChannelIdIsRejectedRatherThanSkipped() {
-        McpToolPolicy policy = policy(mock(JDA.class), ALLOWED_GUILD, "send_message", "allow", "");
+    void numericChannelIdIsNormalizedAndInspected() {
+        AtomicInteger calls = new AtomicInteger();
+        McpToolPolicy policy = policy(
+                jdaWithChannel(), ALLOWED_GUILD, "send_message", "allow", "");
 
-        assertThatThrownBy(() -> only(policy.apply(provider("send_message", new AtomicInteger())))
+        assertThat(only(policy.apply(provider("send_message", calls)))
                 .call("{\"channelId\":32345678901234567,\"message\":\"x\"}"))
-                .isInstanceOf(SecurityException.class)
-                .hasMessageContaining("must be a JSON string");
+                .isEqualTo("called");
+        assertThat(calls).hasValue(1);
     }
 
     @Test
-    void numericGuildIdIsRejectedRatherThanReplacedByDefault() {
+    void numericGuildIdIsNormalizedAndInspected() {
+        AtomicInteger calls = new AtomicInteger();
         McpToolPolicy policy = new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
                 ALLOWED_GUILD, "list_channels", ALLOWED_GUILD, "allow", "", "10485760");
 
-        assertThatThrownBy(() -> only(policy.apply(provider("list_channels", new AtomicInteger())))
-                .call("{\"guildId\":32345678901234567}"))
-                .isInstanceOf(SecurityException.class)
-                .hasMessageContaining("guildId must be a string");
+        assertThat(only(policy.apply(provider("list_channels", calls)))
+                .call("{\"guildId\":12345678901234567}"))
+                .isEqualTo("called");
+        assertThat(calls).hasValue(1);
     }
 
     @Test

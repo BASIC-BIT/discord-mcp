@@ -184,6 +184,9 @@ public final class McpToolPolicy {
                     throw error;
                 }
             }
+            if (!allowedGuilds.isEmpty()) {
+                normalizePolicyTargetIdentifiers(parsed);
+            }
             Set<String> guildIds;
             try {
                 guildIds = resolveGuildIds(parsed, declaredArguments, !allowedGuilds.isEmpty());
@@ -288,6 +291,18 @@ public final class McpToolPolicy {
             }
         }
         return guildIds;
+    }
+
+    private static void normalizePolicyTargetIdentifiers(JsonNode arguments) {
+        var object = (tools.jackson.databind.node.ObjectNode) arguments;
+        arguments.properties().forEach(entry -> {
+            String field = entry.getKey();
+            JsonNode value = entry.getValue();
+            if (("guildId".equals(field) || isGuildChannelArgument(field))
+                    && value != null && value.isIntegralNumber()) {
+                object.put(field, value.asText());
+            }
+        });
     }
 
     private void enforceGuilds(String tool, Set<String> guildIds, JsonNode arguments,
