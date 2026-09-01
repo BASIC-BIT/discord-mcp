@@ -55,18 +55,6 @@ public class McpBearerAuthConfig {
         return new BearerAuthSettings(token);
     }
 
-    BearerAuthSettings mcpBearerAuthSettings(String tokenFile, String mcpEndpoint,
-                                             String protocol, String webApplicationType) {
-        return mcpBearerAuthSettings(tokenFile, mcpEndpoint, protocol, webApplicationType, "", "", "");
-    }
-
-    BearerAuthSettings mcpBearerAuthSettings(String tokenFile, String mcpEndpoint,
-                                             String protocol, String webApplicationType,
-                                             String fileRoot, String downloadRoot) {
-        return mcpBearerAuthSettings(tokenFile, mcpEndpoint, protocol, webApplicationType,
-                fileRoot, downloadRoot, "");
-    }
-
     @Bean
     @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
     FilterRegistrationBean<OncePerRequestFilter> mcpBearerAuthFilter(BearerAuthSettings settings) {

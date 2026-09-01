@@ -85,7 +85,7 @@ class McpBearerAuthConfigTest {
     @Test
     void unsetTokenDoesNotValidateBearerOnlyEndpointSettings() {
         var config = new McpBearerAuthConfig();
-        var settings = config.mcpBearerAuthSettings("", "relative-*", "", "");
+        var settings = settings("", "relative-*", "", "");
         var registration = config.mcpBearerAuthFilter(settings);
 
         assertThat(registration.getUrlPatterns()).containsExactly("/*");
@@ -97,7 +97,7 @@ class McpBearerAuthConfigTest {
         Files.writeString(tokenFile, TOKEN + System.lineSeparator() + System.lineSeparator());
 
         var config = new McpBearerAuthConfig();
-        var settings = config.mcpBearerAuthSettings(
+        var settings = settings(
                 tokenFile.toString(), "/custom-mcp/", "STREAMABLE", "servlet");
         var registration = config.mcpBearerAuthFilter(settings);
 
@@ -109,8 +109,7 @@ class McpBearerAuthConfigTest {
         Path tokenFile = tempDir.resolve("oversized-token");
         Files.writeString(tokenFile, "x".repeat(4_097));
 
-        assertThatThrownBy(() -> new McpBearerAuthConfig()
-                .mcpBearerAuthSettings(tokenFile.toString(), "/mcp", "STREAMABLE", "servlet"))
+        assertThatThrownBy(() -> settings(tokenFile.toString(), "/mcp", "STREAMABLE", "servlet"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("exceeds 4096 bytes");
     }
@@ -175,9 +174,8 @@ class McpBearerAuthConfigTest {
         Path tokenFile = tempDir.resolve("token");
         Files.writeString(tokenFile, TOKEN);
 
-        assertThatThrownBy(() -> new McpBearerAuthConfig()
-                .mcpBearerAuthSettings(
-                        tokenFile.toString(), "/actuator/health", "STREAMABLE", "servlet"))
+        assertThatThrownBy(() -> settings(
+                tokenFile.toString(), "/actuator/health", "STREAMABLE", "servlet"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("public health endpoint");
     }
@@ -187,8 +185,7 @@ class McpBearerAuthConfigTest {
         Path tokenFile = tempDir.resolve("token");
         Files.writeString(tokenFile, TOKEN);
 
-        assertThatThrownBy(() -> new McpBearerAuthConfig()
-                .mcpBearerAuthSettings(tokenFile.toString(), "/mcp", "", "none"))
+        assertThatThrownBy(() -> settings(tokenFile.toString(), "/mcp", "", "none"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("STREAMABLE");
     }
@@ -198,8 +195,7 @@ class McpBearerAuthConfigTest {
         Path tokenFile = tempDir.resolve("token");
         Files.writeString(tokenFile, TOKEN);
 
-        assertThatThrownBy(() -> new McpBearerAuthConfig()
-                .mcpBearerAuthSettings(tokenFile.toString(), "/mcp", "STREAMABLE", "none"))
+        assertThatThrownBy(() -> settings(tokenFile.toString(), "/mcp", "STREAMABLE", "none"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("servlet");
     }
@@ -209,8 +205,7 @@ class McpBearerAuthConfigTest {
         Path tokenFile = tempDir.resolve("token");
         Files.writeString(tokenFile, TOKEN);
 
-        var settings = new McpBearerAuthConfig()
-                .mcpBearerAuthSettings(tokenFile.toString(), "/mcp", "STREAMABLE", "servlet");
+        var settings = settings(tokenFile.toString(), "/mcp", "STREAMABLE", "servlet");
 
         assertThat(settings.token()).isEqualTo(TOKEN);
     }
@@ -221,13 +216,13 @@ class McpBearerAuthConfigTest {
         Path tokenFile = uploads.resolve("access-token");
         Files.writeString(tokenFile, TOKEN);
 
-        assertThatThrownBy(() -> new McpBearerAuthConfig().mcpBearerAuthSettings(
+        assertThatThrownBy(() -> settings(
                 tokenFile.toString(), "/mcp", "STREAMABLE", "servlet",
                 uploads.toString(), ""))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("outside DISCORD_MCP_FILE_ROOT");
 
-        assertThatThrownBy(() -> new McpBearerAuthConfig().mcpBearerAuthSettings(
+        assertThatThrownBy(() -> settings(
                 tokenFile.toString(), "/mcp", "STREAMABLE", "servlet",
                 "", uploads.toString()))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -239,7 +234,7 @@ class McpBearerAuthConfigTest {
         Path audit = tempDir.resolve("audit.jsonl");
         Files.writeString(audit, TOKEN);
 
-        assertThatThrownBy(() -> new McpBearerAuthConfig().mcpBearerAuthSettings(
+        assertThatThrownBy(() -> settings(
                 audit.toString(), "/mcp", "STREAMABLE", "servlet",
                 "", "", "  " + audit + "  "))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -247,10 +242,30 @@ class McpBearerAuthConfigTest {
 
         Path rotatedAudit = tempDir.resolve("second-audit.jsonl.1");
         Files.writeString(rotatedAudit, TOKEN);
-        assertThatThrownBy(() -> new McpBearerAuthConfig().mcpBearerAuthSettings(
+        assertThatThrownBy(() -> settings(
                 rotatedAudit.toString(), "/mcp", "STREAMABLE", "servlet",
                 "", "", tempDir.resolve("second-audit.jsonl").toString()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("must differ from DISCORD_MCP_AUDIT_FILE");
+    }
+
+    private static McpBearerAuthConfig.BearerAuthSettings settings(
+            String tokenFile, String mcpEndpoint, String protocol, String webApplicationType) {
+        return settings(tokenFile, mcpEndpoint, protocol, webApplicationType, "", "", "");
+    }
+
+    private static McpBearerAuthConfig.BearerAuthSettings settings(
+            String tokenFile, String mcpEndpoint, String protocol, String webApplicationType,
+            String fileRoot, String downloadRoot) {
+        return settings(tokenFile, mcpEndpoint, protocol, webApplicationType,
+                fileRoot, downloadRoot, "");
+    }
+
+    private static McpBearerAuthConfig.BearerAuthSettings settings(
+            String tokenFile, String mcpEndpoint, String protocol, String webApplicationType,
+            String fileRoot, String downloadRoot, String auditFile) {
+        return new McpBearerAuthConfig().mcpBearerAuthSettings(
+                tokenFile, mcpEndpoint, protocol, webApplicationType,
+                fileRoot, downloadRoot, auditFile);
     }
 }

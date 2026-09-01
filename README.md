@@ -221,7 +221,10 @@ schema are rejected rather than ignored. Audit-only deployments retain upstream 
   parameter can never borrow that default. Every supplied channel-like target must resolve from
   the JDA cache; uncached channels and archived threads, including auto-archived forum posts, are
   refused even when a guild is explicit. This matches the existing service implementations, which
-  already depend on the same cache for those channel and thread lookups.
+  already depend on the same cache for those channel and thread lookups. Activating a guild
+  allowlist also removes webhook URL/ID operations, invite-code operations, and private-message
+  operations from tool discovery because those global targets cannot prove guild scope, even when
+  `DISCORD_MCP_ALLOWED_TOOLS` is unset.
 - `DISCORD_MCP_ALLOWED_TOOLS`: comma-separated exact tool names. Unknown names fail startup and
   tools not named here are not exported to MCP clients. Setting this variable also enables strict
   generated-schema checking, so caller-supplied argument keys that the selected tool does not
@@ -264,8 +267,10 @@ schema are rejected rather than ignored. Audit-only deployments retain upstream 
   queued Discord mutation later succeeded. Use readback for consequential writes. The active file rotates to one `.1`
   backup before the next append would exceed `DISCORD_MCP_AUDIT_MAX_BYTES` (10 MiB by default),
   so the two files remain bounded. Set a value of at least 4096 bytes if a different cap is needed.
-  This cap is a disk bound, not a retention guarantee. High call volume can rotate older evidence
-  out of both files; forward audit records to a durable log sink when retention matters. Keep the
+  This cap is a disk bound, not a retention guarantee. Lowering it discards any active or rotated
+  file already above the new cap and writes a warning to the operational log. High call volume can
+  rotate older evidence out of both files; forward audit records to a durable log sink when
+  retention matters. Keep the
   audit file outside `DISCORD_MCP_FILE_ROOT` and `DISCORD_MCP_DOWNLOAD_ROOT` so an MCP tool cannot
   read or write the audit trail. Startup rejects either configured path when its lexical or resolved
   location contains the audit file.

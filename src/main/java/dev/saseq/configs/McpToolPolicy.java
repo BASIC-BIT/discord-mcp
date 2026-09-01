@@ -105,6 +105,14 @@ public final class McpToolPolicy {
             throw startupError("DISCORD_MCP_AUDIT_MAX_BYTES must be at least 4096");
         }
 
+        this.allowedGuilds.forEach(id -> requireSnowflake(id, "DISCORD_MCP_ALLOWED_GUILDS"));
+        if (this.defaultGuildId != null && policyActive) {
+            requireSnowflake(this.defaultGuildId, "DISCORD_GUILD_ID");
+            if (!this.allowedGuilds.isEmpty() && !this.allowedGuilds.contains(this.defaultGuildId)) {
+                throw startupError("DISCORD_GUILD_ID must be in DISCORD_MCP_ALLOWED_GUILDS");
+            }
+        }
+
         if (this.auditFile != null) {
             // Refuse the ordinary containment case before creating the parent or probe file.
             // The resolved check below still catches aliases and symlinks once the file exists.
@@ -128,14 +136,6 @@ public final class McpToolPolicy {
             }
             requireResolvedAuditIsolation(fileRoot, "DISCORD_MCP_FILE_ROOT");
             requireResolvedAuditIsolation(downloadRoot, "DISCORD_MCP_DOWNLOAD_ROOT");
-        }
-
-        this.allowedGuilds.forEach(id -> requireSnowflake(id, "DISCORD_MCP_ALLOWED_GUILDS"));
-        if (this.defaultGuildId != null && policyActive) {
-            requireSnowflake(this.defaultGuildId, "DISCORD_GUILD_ID");
-            if (!this.allowedGuilds.isEmpty() && !this.allowedGuilds.contains(this.defaultGuildId)) {
-                throw startupError("DISCORD_GUILD_ID must be in DISCORD_MCP_ALLOWED_GUILDS");
-            }
         }
     }
 
@@ -428,21 +428,28 @@ public final class McpToolPolicy {
             return null;
         } catch (RuntimeException auditError) {
             String warning = "WARNING: The tool outcome is preserved, but its audit completion record failed.";
-            LOGGER.warn("{} {}", warning, auditError.getMessage());
+            LOGGER.warn("{} Tool {} outcome {}. {}", warning, tool, outcome, auditError.getMessage());
             return warning;
         }
     }
 
     private void rotateAuditIfNeeded(int nextLineBytes) throws IOException {
         Path rotated = auditFile.resolveSibling(auditFile.getFileName() + ".1");
-        if (Files.exists(rotated) && Files.size(rotated) > auditMaxBytes) {
-            Files.delete(rotated);
+        if (Files.exists(rotated)) {
+            long rotatedBytes = Files.size(rotated);
+            if (rotatedBytes > auditMaxBytes) {
+                LOGGER.warn("Discarding oversized Discord MCP audit file {} ({} bytes) after cap was lowered to {} bytes.",
+                        rotated, rotatedBytes, auditMaxBytes);
+                Files.delete(rotated);
+            }
         }
         if (!Files.exists(auditFile)) {
             return;
         }
         long activeBytes = Files.size(auditFile);
         if (activeBytes > auditMaxBytes) {
+            LOGGER.warn("Discarding oversized Discord MCP audit file {} ({} bytes) after cap was lowered to {} bytes.",
+                    auditFile, activeBytes, auditMaxBytes);
             Files.delete(auditFile);
             return;
         }

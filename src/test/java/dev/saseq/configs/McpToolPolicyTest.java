@@ -318,6 +318,18 @@ class McpToolPolicyTest {
     }
 
     @Test
+    void invalidGuildFailsBeforeAuditFilesystemChanges() {
+        Path audit = tempDir.resolve("new-audit-directory").resolve("audit.jsonl");
+
+        assertThatThrownBy(() -> new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
+                "not-a-snowflake", "", "", "allow", audit.toString(), "10485760",
+                "", ""))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("DISCORD_MCP_ALLOWED_GUILDS");
+        assertThat(audit.getParent()).doesNotExist();
+    }
+
+    @Test
     void numericIdStillBindsThroughTheGeneratedSpringCallbackWithoutPolicy() {
         McpToolPolicy policy = policy(mock(JDA.class), "", "", "allow", "");
         ToolCallbackProvider generated = MethodToolCallbackProvider.builder()
