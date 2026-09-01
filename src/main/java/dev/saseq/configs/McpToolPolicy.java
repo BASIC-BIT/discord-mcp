@@ -509,13 +509,19 @@ public final class McpToolPolicy {
     private String previewArguments(String raw, JsonNode parsed) {
         final int maximumCharacters = 16_384;
         final int largeValueCharacters = 4_096;
-        var redacted = (ObjectNode) parsed.deepCopy();
+        var redacted = objectMapper.createObjectNode();
         parsed.properties().forEach(entry -> {
-            if (entry.getValue().isTextual()
-                    && entry.getValue().asText().length() > largeValueCharacters) {
-                String value = entry.getValue().asText();
+            JsonNode valueNode = entry.getValue();
+            if (valueNode.isTextual() && valueNode.asText().length() > largeValueCharacters) {
+                String value = valueNode.asText();
                 redacted.put(entry.getKey(),
                         "<omitted " + value.length() + " characters; sha256=" + sha256(value) + ">");
+            } else if (valueNode.isArray() || valueNode.isObject()) {
+                String kind = valueNode.isArray() ? "array" : "object";
+                redacted.put(entry.getKey(), "<omitted " + kind + " with "
+                        + valueNode.size() + " top-level entries>");
+            } else {
+                redacted.set(entry.getKey(), valueNode);
             }
         });
         String compact = redacted.toString();

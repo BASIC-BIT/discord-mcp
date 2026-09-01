@@ -660,6 +660,20 @@ class McpToolPolicyTest {
     }
 
     @Test
+    void previewSummarizesNestedValuesBeforeSerialization() {
+        String nestedItems = "\"x\",".repeat(50_000) + "\"x\"";
+        McpToolPolicy policy = policy(mock(JDA.class), "", "create_emoji", "preview", "");
+
+        String result = only(policy.apply(provider("create_emoji", new AtomicInteger())))
+                .call("{\"image\":[" + nestedItems + "]}");
+
+        assertThat(result)
+                .contains("<omitted array with 50001 top-level entries>")
+                .hasSizeLessThan(16_500)
+                .doesNotContain(nestedItems);
+    }
+
+    @Test
     void returnedToolIsNotAuditedAsConfirmedDiscordExecution() throws Exception {
         Path audit = tempDir.resolve("audit.jsonl");
         McpToolPolicy policy = policy(jdaWithChannel(), ALLOWED_GUILD, "read_messages", "allow",
