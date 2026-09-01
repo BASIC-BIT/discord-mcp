@@ -3,6 +3,7 @@ package dev.saseq.services;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.MessageHistory;
+import net.dv8tion.jda.api.entities.Mentions;
 import net.dv8tion.jda.api.entities.User;
 import net.dv8tion.jda.api.entities.SelfUser;
 import net.dv8tion.jda.api.entities.Guild;
@@ -137,6 +138,7 @@ class MessageServiceTest {
         TextChannel channel = mock(TextChannel.class);
         Guild guild = mock(Guild.class);
         Message message = mock(Message.class);
+        Mentions mentions = mock(Mentions.class);
         User author = mock(User.class);
         SelfUser self = mock(SelfUser.class);
         @SuppressWarnings("unchecked")
@@ -152,6 +154,7 @@ class MessageServiceTest {
         when(author.getId()).thenReturn("234567890123456789");
         when(author.getName()).thenReturn("alice");
         when(message.getContentRaw()).thenReturn("");
+        when(message.getMentions()).thenReturn(mentions);
         when(message.getJumpUrl()).thenReturn("https://discord.com/channels/123/456/789");
         when(jda.getGatewayIntents()).thenReturn(EnumSet.noneOf(GatewayIntent.class));
         when(jda.getSelfUser()).thenReturn(self);
@@ -159,6 +162,38 @@ class MessageServiceTest {
 
         assertThat(messageService.getMessage(CHANNEL_ID, MESSAGE_ID))
                 .contains("\"content\":\"\",\"contentAvailable\":false");
+    }
+
+    @Test
+    void getMessageMarksMentionedContentAvailableWithoutIntent() {
+        TextChannel channel = mock(TextChannel.class);
+        Guild guild = mock(Guild.class);
+        Message message = mock(Message.class);
+        Mentions mentions = mock(Mentions.class);
+        User author = mock(User.class);
+        SelfUser self = mock(SelfUser.class);
+        @SuppressWarnings("unchecked")
+        RestAction<Message> retrieve = mock(RestAction.class);
+
+        when(jda.getTextChannelById(CHANNEL_ID)).thenReturn(channel);
+        when(channel.getGuild()).thenReturn(guild);
+        when(guild.getId()).thenReturn("123456789012345678");
+        when(channel.retrieveMessageById(MESSAGE_ID)).thenReturn(retrieve);
+        when(retrieve.complete()).thenReturn(message);
+        when(message.getId()).thenReturn(MESSAGE_ID);
+        when(message.getAuthor()).thenReturn(author);
+        when(author.getId()).thenReturn("234567890123456789");
+        when(author.getName()).thenReturn("alice");
+        when(message.getContentRaw()).thenReturn("<@999999999999999999> exact copy");
+        when(message.getMentions()).thenReturn(mentions);
+        when(message.getJumpUrl()).thenReturn("https://discord.com/channels/123/456/789");
+        when(jda.getGatewayIntents()).thenReturn(EnumSet.noneOf(GatewayIntent.class));
+        when(jda.getSelfUser()).thenReturn(self);
+        when(self.getId()).thenReturn("999999999999999999");
+        when(mentions.isMentioned(self)).thenReturn(true);
+
+        assertThat(messageService.getMessage(CHANNEL_ID, MESSAGE_ID))
+                .contains("\"contentAvailable\":true");
     }
 
     @Test

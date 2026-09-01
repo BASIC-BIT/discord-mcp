@@ -383,7 +383,8 @@ public class MessageService {
             throw new IllegalArgumentException("Message not found by messageId");
         }
         boolean contentAvailable = jda.getGatewayIntents().contains(GatewayIntent.MESSAGE_CONTENT)
-                || message.getAuthor().getId().equals(jda.getSelfUser().getId());
+                || message.getAuthor().getId().equals(jda.getSelfUser().getId())
+                || message.getMentions().isMentioned(jda.getSelfUser());
         return JSON.writeValueAsString(new MessageSnapshot(
                 guildChannel.getGuild().getId(),
                 channelId,

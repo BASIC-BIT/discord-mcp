@@ -31,8 +31,9 @@ import java.util.stream.Collectors;
 @Component
 public final class McpAccessPolicy {
     // A 50 MiB upload becomes 69,905,068 base64 characters. Keep guild scoping compatible with
-    // that documented tool contract while retaining a hard parser bound.
+    // that documented tool contract while retaining hard per-string and whole-document bounds.
     static final int MAX_ARGUMENT_STRING_CHARACTERS = 70_000_000;
+    static final long MAX_ARGUMENT_DOCUMENT_CHARACTERS = 70_100_000L;
     private static final String TARGET_ACCESS_DENIED =
             "Discord target is unavailable or outside the allowed guild scope";
 
@@ -69,6 +70,7 @@ public final class McpAccessPolicy {
         var argumentFactory = objectMapper.tokenStreamFactory().rebuild()
                 .streamReadConstraints(StreamReadConstraints.builder()
                         .maxStringLength(MAX_ARGUMENT_STRING_CHARACTERS)
+                        .maxDocumentLength(MAX_ARGUMENT_DOCUMENT_CHARACTERS)
                         .build())
                 .build();
         return new ObjectMapper(argumentFactory).rebuild()

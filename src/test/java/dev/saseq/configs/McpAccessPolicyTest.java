@@ -59,6 +59,8 @@ class McpAccessPolicyTest {
         ObjectMapper mapper = McpAccessPolicy.createArgumentObjectMapper(new ObjectMapper());
         assertThat(mapper.tokenStreamFactory().streamReadConstraints().getMaxStringLength())
                 .isEqualTo(McpAccessPolicy.MAX_ARGUMENT_STRING_CHARACTERS);
+        assertThat(mapper.tokenStreamFactory().streamReadConstraints().getMaxDocumentLength())
+                .isEqualTo(McpAccessPolicy.MAX_ARGUMENT_DOCUMENT_CHARACTERS);
     }
 
     @Test
