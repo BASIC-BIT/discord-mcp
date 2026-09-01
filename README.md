@@ -233,7 +233,9 @@ schema are rejected rather than ignored. Audit-only deployments retain upstream 
 - `DISCORD_MCP_ALLOWED_TOOLS`: comma-separated exact tool names. Unknown names fail startup and
   tools not named here are not exported to MCP clients. Setting this variable also enables strict
   generated-schema checking, so caller-supplied argument keys that the selected tool does not
-  declare are rejected. When a guild allowlist is active, global target tools that cannot prove a
+  declare are rejected. Whenever deployment policy is active, supplied Discord guild and channel
+  identifiers must use the generated schema's JSON string form rather than JSON numbers. When a
+  guild allowlist is active, global target tools that cannot prove a
   guild are rejected at startup and must be omitted: webhook URL/ID operations, invite-code
   lookup/deletion, and private-message operations. Whenever deployment policy is active and this
   variable is unset, credential-returning or credential-creating tools (`create_webhook`,
@@ -276,6 +278,10 @@ schema are rejected rather than ignored. Audit-only deployments retain upstream 
   before the credential reader opens them. The bearer file must also differ from
   `logging.file.name`. After startup validation, only its SHA-256 digest remains in the settings
   bean and request filter; the plaintext token is not retained there or rendered by `toString()`.
+- Policy-active and audit-enabled deployments also require `logging.file.name` to remain outside
+  `DISCORD_MCP_FILE_ROOT` and `DISCORD_MCP_DOWNLOAD_ROOT`. Operational diagnostics can contain tool
+  names, Discord object IDs, and declared argument-key names, so MCP tools must not be able to read
+  that file.
 - `DISCORD_MCP_AUDIT_FILE`: append-only JSONL tool audit. It records tool, outcome, write mode,
   a per-process salted arguments hash, and a per-call invocation ID that pairs `started` with its
   terminal record under concurrency. When deployment policy is active, it also records resolved
@@ -297,7 +303,9 @@ schema are rejected rather than ignored. Audit-only deployments retain upstream 
   crash durability matters. Keep the
   audit file outside `DISCORD_MCP_FILE_ROOT` and `DISCORD_MCP_DOWNLOAD_ROOT` so an MCP tool cannot
   read or write the audit trail. Startup rejects either configured path when its lexical or resolved
-  location contains the audit file.
+  location contains the audit file. The start record is fail-closed: a full, missing, or unwritable
+  audit sink takes every tool offline rather than allowing unaudited calls. Audit appends and
+  rotation are synchronized for this server's expected low-volume operator traffic.
   The sink and any existing `.1` rotation target must be regular files, not symbolic links,
   directories, devices, or FIFOs. On filesystems that expose `unix:nlink`, both must also have a
   single hard link so an in-root alias cannot expose the audit trail. Neither may be the configured

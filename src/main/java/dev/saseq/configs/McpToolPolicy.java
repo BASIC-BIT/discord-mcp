@@ -136,12 +136,15 @@ public final class McpToolPolicy {
             }
         }
 
+        if (policyActive || this.auditFile != null) {
+            requireOperationalLogIsolation(operationalLogFile, fileRoot, downloadRoot);
+        }
+
         if (this.auditFile != null) {
             SensitiveFileGuard.requireOutsideRoot(this.auditFile, fileRoot,
                     "DISCORD_MCP_AUDIT_FILE", "DISCORD_MCP_FILE_ROOT");
             SensitiveFileGuard.requireOutsideRoot(this.auditFile, downloadRoot,
                     "DISCORD_MCP_AUDIT_FILE", "DISCORD_MCP_DOWNLOAD_ROOT");
-            requireOperationalLogIsolation(operationalLogFile);
             try {
                 SensitiveFileGuard.requireExclusiveRegularFile(this.auditFile, true);
             } catch (IOException error) {
@@ -211,8 +214,9 @@ public final class McpToolPolicy {
         SensitiveFileGuard.requireExclusiveRegularFile(rotated, true);
     }
 
-    private void requireOperationalLogIsolation(String configuredLogFile) {
-        if (auditFile == null || configuredLogFile == null || configuredLogFile.isBlank()) {
+    private void requireOperationalLogIsolation(String configuredLogFile, String fileRoot,
+                                                String downloadRoot) {
+        if (configuredLogFile == null || configuredLogFile.isBlank()) {
             return;
         }
         Path logFile;
@@ -220,6 +224,13 @@ public final class McpToolPolicy {
             logFile = Path.of(configuredLogFile).toAbsolutePath().normalize();
         } catch (InvalidPathException error) {
             throw startupError("logging.file.name is not a valid path");
+        }
+        SensitiveFileGuard.requireOutsideRoot(logFile, fileRoot,
+                "logging.file.name", "DISCORD_MCP_FILE_ROOT");
+        SensitiveFileGuard.requireOutsideRoot(logFile, downloadRoot,
+                "logging.file.name", "DISCORD_MCP_DOWNLOAD_ROOT");
+        if (auditFile == null) {
+            return;
         }
         for (Path auditCandidate : List.of(
                 auditFile, auditFile.resolveSibling(auditFile.getFileName() + ".1"))) {
@@ -518,7 +529,7 @@ public final class McpToolPolicy {
             return argumentIds;
         }
         arguments.properties().forEach(entry -> {
-            if (entry.getKey().matches("(?i).*id$")
+            if (entry.getKey().endsWith("Id")
                     && entry.getValue().isValueNode() && !entry.getValue().isNull()) {
                 argumentIds.put(entry.getKey(), boundedAuditIdentifier(entry.getValue().asText()));
             }

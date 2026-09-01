@@ -1166,6 +1166,24 @@ class McpToolPolicyTest {
     }
 
     @Test
+    void policyOperationalLogMustRemainOutsideToolFileRoots() throws Exception {
+        Path uploads = Files.createDirectories(tempDir.resolve("uploads"));
+        Path downloads = Files.createDirectories(tempDir.resolve("downloads"));
+
+        assertThatThrownBy(() -> new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
+                "", "send_message", "", "preview", "", "10485760",
+                uploads.toString(), "", uploads.resolve("server.log").toString()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("logging.file.name must be outside DISCORD_MCP_FILE_ROOT");
+
+        assertThatThrownBy(() -> new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
+                "", "send_message", "", "preview", "", "10485760",
+                "", downloads.toString(), downloads.resolve("server.log").toString()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("logging.file.name must be outside DISCORD_MCP_DOWNLOAD_ROOT");
+    }
+
+    @Test
     void auditParentCreationFailureHasAnActionableStartupError() throws Exception {
         Path blockingFile = tempDir.resolve("not-a-directory");
         Files.writeString(blockingFile, "x");
