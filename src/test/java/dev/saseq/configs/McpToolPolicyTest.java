@@ -446,6 +446,20 @@ class McpToolPolicyTest {
     }
 
     @Test
+    void duplicateArgumentKeysAreRejectedBeforeTheDelegateRuns() {
+        AtomicInteger calls = new AtomicInteger();
+        McpToolPolicy policy = policy(jdaWithChannel(), ALLOWED_GUILD,
+                "read_messages", "allow", "");
+        ToolCallback callback = only(policy.apply(provider("read_messages", calls)));
+
+        assertThatThrownBy(() -> callback.call("{\"channelId\":\"32345678901234567\","
+                + "\"channelId\":\"42345678901234567\"}"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("not valid JSON");
+        assertThat(calls).hasValue(0);
+    }
+
+    @Test
     void nonObjectArgumentsAreDeniedAndAudited() throws Exception {
         Path audit = tempDir.resolve("audit.jsonl");
         McpToolPolicy policy = policy(mock(JDA.class), ALLOWED_GUILD,
@@ -983,6 +997,40 @@ class McpToolPolicyTest {
     }
 
     @Test
+    void everyToolHasOneUnambiguousGuildTargetStrategy() {
+        Set<String> globalTargetTools = McpToolPolicy.globalTargetToolNames();
+        Set<String> globalIdentifierParameters = Set.of("webhookUrl", "webhookId", "inviteCode");
+        Map<String, Set<String>> parametersByTool = DiscordMcpConfig.toolServiceTypes().stream()
+                .flatMap(type -> Arrays.stream(type.getDeclaredMethods()))
+                .filter(method -> method.getAnnotation(Tool.class) != null)
+                .collect(Collectors.toMap(
+                        method -> method.getAnnotation(Tool.class).name(),
+                        method -> Arrays.stream(method.getParameters())
+                                .map(parameter -> parameter.getName())
+                                .collect(Collectors.toSet())));
+
+        parametersByTool.forEach((tool, parameters) -> {
+            boolean hasGuildTarget = parameters.contains("guildId")
+                    || parameters.stream().anyMatch(McpToolPolicy::isGuildChannelArgument);
+            boolean hasGlobalIdentifier = parameters.stream().anyMatch(globalIdentifierParameters::contains);
+            if (globalTargetTools.contains(tool)) {
+                assertThat(hasGuildTarget)
+                        .as(tool + " is global-target classified and cannot borrow guild authorization")
+                        .isFalse();
+            } else {
+                assertThat(hasGuildTarget)
+                        .as(tool + " must declare a guild-resolvable target")
+                        .isTrue();
+            }
+            if (hasGlobalIdentifier) {
+                assertThat(globalTargetTools)
+                        .as(tool + " has a global identifier and cannot borrow guild authorization")
+                        .contains(tool);
+            }
+        });
+    }
+
+    @Test
     void policyWrapsTheGeneratedSchemasForEveryRealToolService() {
         JDA jda = mock(JDA.class);
         Object[] toolServices = DiscordMcpConfig.toolServiceTypes().stream()
@@ -992,12 +1040,14 @@ class McpToolPolicyTest {
                 .toolObjects(toolServices)
                 .build();
         McpToolPolicy policy = policy(jda, ALLOWED_GUILD, "", "preview", "");
+        Set<String> hiddenByDefault = new LinkedHashSet<>(McpToolPolicy.globalTargetToolNames());
+        hiddenByDefault.addAll(McpToolPolicy.explicitOptInReadToolNames());
 
         assertThat(policy.apply(upstream).getToolCallbacks())
                 .hasSize(upstream.getToolCallbacks().length
-                        - McpToolPolicy.globalTargetToolNames().size())
+                        - hiddenByDefault.size())
                 .extracting(callback -> callback.getToolDefinition().name())
-                .doesNotContainAnyElementsOf(McpToolPolicy.globalTargetToolNames());
+                .doesNotContainAnyElementsOf(hiddenByDefault);
     }
 
     @Test
@@ -1028,6 +1078,30 @@ class McpToolPolicyTest {
         assertThat(policy.apply(raw).getToolCallbacks())
                 .extracting(callback -> callback.getToolDefinition().name())
                 .containsExactly("read_messages");
+    }
+
+    @Test
+    void policyActiveWithoutToolAllowlistHidesCredentialReturningReads() {
+        McpToolPolicy policy = policy(jdaWithChannel(), ALLOWED_GUILD, "", "preview", "");
+        ToolCallbackProvider raw = ToolCallbackProvider.from(
+                callback("read_messages", new AtomicInteger()),
+                callback("list_webhooks", new AtomicInteger()),
+                callback("list_invites", new AtomicInteger()),
+                callback("get_invite_details", new AtomicInteger()));
+
+        assertThat(policy.apply(raw).getToolCallbacks())
+                .extracting(callback -> callback.getToolDefinition().name())
+                .containsExactly("read_messages");
+    }
+
+    @Test
+    void exactToolAllowlistCanOptIntoGuildScopedCredentialReturningRead() {
+        McpToolPolicy policy = policy(jdaWithChannel(), ALLOWED_GUILD,
+                "list_webhooks", "preview", "");
+
+        assertThat(policy.apply(provider("list_webhooks", new AtomicInteger())).getToolCallbacks())
+                .extracting(callback -> callback.getToolDefinition().name())
+                .containsExactly("list_webhooks");
     }
 
     @Test
@@ -1086,6 +1160,8 @@ class McpToolPolicyTest {
                     case "edit_text_channel" -> schema("guildId", "channelId");
                     case "send_webhook_message" -> schema("webhookUrl", "message");
                     case "get_invite_details" -> schema("inviteCode");
+                    case "list_webhooks" -> schema("channelId");
+                    case "list_invites" -> schema("guildId");
                     case "create_emoji" -> schema("image");
                     case "future_channel_tool" -> schema("targetChannelId");
                     case "list_channels" -> schema("guildId");

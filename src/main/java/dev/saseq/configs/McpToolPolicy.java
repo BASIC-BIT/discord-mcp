@@ -1,6 +1,7 @@
 package dev.saseq.configs;
 
 import dev.saseq.services.LocalFileGuard;
+import tools.jackson.core.StreamReadFeature;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
@@ -66,8 +67,12 @@ public final class McpToolPolicy {
             "send_private_message", "edit_private_message", "delete_private_message",
             "read_private_messages"
     );
+    private static final Set<String> EXPLICIT_OPT_IN_READ_TOOLS = Set.of(
+            "list_webhooks", "list_invites", "get_invite_details"
+    );
     private final JDA jda;
     private final ObjectMapper objectMapper;
+    private final ObjectMapper argumentObjectMapper;
     private final Set<String> allowedGuilds;
     private final Set<String> allowedTools;
     private final String defaultGuildId;
@@ -90,6 +95,9 @@ public final class McpToolPolicy {
             @Value("${DISCORD_MCP_DOWNLOAD_ROOT:}") String downloadRoot) {
         this.jda = jda;
         this.objectMapper = objectMapper;
+        this.argumentObjectMapper = objectMapper.rebuild()
+                .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
+                .build();
         this.allowedGuilds = parseCsv(allowedGuilds, "DISCORD_MCP_ALLOWED_GUILDS");
         this.allowedTools = parseCsv(allowedTools, "DISCORD_MCP_ALLOWED_TOOLS");
         this.defaultGuildId = trimToNull(defaultGuildId);
@@ -158,6 +166,9 @@ public final class McpToolPolicy {
         ToolCallback[] filtered = Arrays.stream(raw)
                 .filter(callback -> allowedTools.isEmpty()
                         || allowedTools.contains(callback.getToolDefinition().name()))
+                .filter(callback -> !policyActive || !allowedTools.isEmpty()
+                        || !EXPLICIT_OPT_IN_READ_TOOLS.contains(
+                                callback.getToolDefinition().name()))
                 .filter(callback -> allowedGuilds.isEmpty()
                         || !GLOBAL_TARGET_TOOLS.contains(callback.getToolDefinition().name()))
                 .map(PolicyToolCallback::new)
@@ -240,7 +251,9 @@ public final class McpToolPolicy {
                 guildIds = resolveGuildIds(parsed, declaredArguments, !allowedGuilds.isEmpty());
             } catch (SecurityException error) {
                 auditBestEffort(tool, "denied-invalid-target", invocationId, Set.of(), parsed,
-                        argumentsSaltedSha256, null);
+                        argumentsSaltedSha256, error.getClass().getSimpleName());
+                LOGGER.warn("Discord MCP policy rejected target resolution for tool {}: {}",
+                        tool, error.getMessage());
                 throw new SecurityException(TARGET_ACCESS_DENIED);
             }
             enforceGuilds(tool, invocationId, guildIds, parsed, argumentsSaltedSha256);
@@ -278,7 +291,7 @@ public final class McpToolPolicy {
         }
         JsonNode parsed;
         try {
-            parsed = objectMapper.readTree(arguments);
+            parsed = argumentObjectMapper.readTree(arguments);
         } catch (RuntimeException error) {
             throw new IllegalArgumentException("Tool arguments are not valid JSON", error);
         }
@@ -634,6 +647,10 @@ public final class McpToolPolicy {
 
     static Set<String> globalTargetToolNames() {
         return GLOBAL_TARGET_TOOLS;
+    }
+
+    static Set<String> explicitOptInReadToolNames() {
+        return EXPLICIT_OPT_IN_READ_TOOLS;
     }
 
     private static void requireSnowflake(String value, String name) {

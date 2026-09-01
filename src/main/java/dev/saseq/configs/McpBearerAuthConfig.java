@@ -116,12 +116,14 @@ public class McpBearerAuthConfig {
         try {
             realToken = tokenPath.toRealPath();
         } catch (IOException unusableToken) {
+            // readToken below fails startup for the same missing or unreadable credential.
             return;
         }
         LocalFileGuard.Root resolvedRoot;
         try {
             resolvedRoot = LocalFileGuard.resolveRoot(configuredRoot, variableName);
         } catch (IllegalArgumentException unusableRoot) {
+            // Tool-local root resolution fails closed before any caller-supplied file access.
             return;
         }
         if (realToken.startsWith(resolvedRoot.path())) {

@@ -230,7 +230,10 @@ schema are rejected rather than ignored. Audit-only deployments retain upstream 
   generated-schema checking, so caller-supplied argument keys that the selected tool does not
   declare are rejected. When a guild allowlist is active, global target tools that cannot prove a
   guild are rejected at startup and must be omitted: webhook URL/ID operations, invite-code
-  lookup/deletion, and private-message operations.
+  lookup/deletion, and private-message operations. Whenever deployment policy is active and this
+  variable is unset, credential-returning reads (`list_webhooks`, `list_invites`, and
+  `get_invite_details`) are omitted by default. Name a guild-scoped one explicitly only when its
+  caller is allowed to receive those credentials or invite material.
 - `DISCORD_MCP_WRITE_MODE`: `preview` returns `WRITE_PREVIEW` plus the proposed argument object
   for every mutation without calling Discord. Large payloads are bounded and hashed rather than
   echoed in full. `allow` executes writes. Unknown tool names are
@@ -314,9 +317,11 @@ rather than replaces, Discord role hierarchy, channel overrides, and least-privi
 Use separate runtime profiles for different guild and write scopes instead of widening one
 always-on process.
 
-The generic `docker-compose.yml` does not forward the bearer-token or audit-file paths because it
-cannot conditionally create the required secret bind mount and persistent audit volume. Add both
-in a deployment-specific Compose override, or use a launcher that creates those mounts explicitly.
+The generic `docker-compose.yml` binds its unauthenticated default endpoint to host loopback. It
+does not forward the bearer-token or audit-file paths because it cannot conditionally create the
+required secret bind mount and persistent audit volume. Add both in a deployment-specific Compose
+override, or use a launcher that creates those mounts explicitly. Deliberately publishing beyond
+loopback requires an authenticated deployment-specific override.
 The audit `started` record is fail-closed: if it cannot be appended, the tool is not called. A
 completion-record failure after Discord has already responded is returned as a warning without
 turning the completed action into an MCP failure that invites a duplicate retry.
