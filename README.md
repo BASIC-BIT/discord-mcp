@@ -281,7 +281,8 @@ schema are rejected rather than ignored. Audit-only deployments retain upstream 
 - Policy-active and audit-enabled deployments also require `logging.file.name` to remain outside
   `DISCORD_MCP_FILE_ROOT` and `DISCORD_MCP_DOWNLOAD_ROOT`. Operational diagnostics can contain tool
   names, Discord object IDs, and declared argument-key names, so MCP tools must not be able to read
-  that file.
+  that file. When the filesystem exposes `unix:nlink`, an existing operational log must also have a
+  single hard link so an in-root alias cannot bypass the path checks.
 - `DISCORD_MCP_AUDIT_FILE`: append-only JSONL tool audit. It records tool, outcome, write mode,
   a per-process salted arguments hash, and a per-call invocation ID that pairs `started` with its
   terminal record under concurrency. When deployment policy is active, it also records resolved

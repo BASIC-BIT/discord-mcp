@@ -225,6 +225,11 @@ public final class McpToolPolicy {
         } catch (InvalidPathException error) {
             throw startupError("logging.file.name is not a valid path");
         }
+        try {
+            SensitiveFileGuard.requireExclusiveRegularFile(logFile, true);
+        } catch (IOException error) {
+            throw startupError("logging.file.name " + error.getMessage());
+        }
         SensitiveFileGuard.requireOutsideRoot(logFile, fileRoot,
                 "logging.file.name", "DISCORD_MCP_FILE_ROOT");
         SensitiveFileGuard.requireOutsideRoot(logFile, downloadRoot,

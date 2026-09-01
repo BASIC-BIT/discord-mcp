@@ -1184,6 +1184,27 @@ class McpToolPolicyTest {
     }
 
     @Test
+    void policyOperationalLogMustNotHaveAnInRootHardLinkAlias() throws Exception {
+        Assumptions.assumeTrue(
+                tempDir.getFileSystem().supportedFileAttributeViews().contains("unix"),
+                "unix:nlink is unavailable on this filesystem");
+        Path uploads = Files.createDirectories(tempDir.resolve("uploads"));
+        Path operationalLog = tempDir.resolve("server.log");
+        Files.writeString(operationalLog, "operator evidence");
+        try {
+            Files.createLink(uploads.resolve("server-alias.log"), operationalLog);
+        } catch (UnsupportedOperationException | SecurityException | java.io.IOException error) {
+            Assumptions.abort("hard links are unavailable on this filesystem");
+        }
+
+        assertThatThrownBy(() -> new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
+                "", "send_message", "", "preview", "", "10485760",
+                uploads.toString(), "", operationalLog.toString()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("logging.file.name must not have additional hard links");
+    }
+
+    @Test
     void auditParentCreationFailureHasAnActionableStartupError() throws Exception {
         Path blockingFile = tempDir.resolve("not-a-directory");
         Files.writeString(blockingFile, "x");
