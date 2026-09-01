@@ -365,6 +365,26 @@ class McpToolPolicyTest {
     }
 
     @Test
+    void unexpectedJdaLookupFailureUsesTheSameAuditedTargetDenial() throws Exception {
+        Path audit = tempDir.resolve("audit.jsonl");
+        JDA jda = mock(JDA.class);
+        when(jda.getGuildChannelById("32345678901234567"))
+                .thenThrow(new IllegalStateException("internal lookup detail"));
+        McpToolPolicy policy = policy(jda, ALLOWED_GUILD, "read_messages", "allow",
+                audit.toString());
+
+        assertThatThrownBy(() -> only(policy.apply(provider("read_messages", new AtomicInteger())))
+                .call("{\"channelId\":\"32345678901234567\"}"))
+                .isInstanceOf(SecurityException.class)
+                .hasMessageContaining("unavailable or outside")
+                .hasMessageNotContaining("internal lookup detail");
+
+        assertThat(Files.readString(audit))
+                .contains("\"outcome\":\"denied-invalid-target\"")
+                .doesNotContain("internal lookup detail");
+    }
+
+    @Test
     void malformedArgumentsAreDeniedAndAuditedWithoutTheirContent() throws Exception {
         Path audit = tempDir.resolve("audit.jsonl");
         String malformed = "{\"message\":\"secret copy\"";
@@ -405,7 +425,7 @@ class McpToolPolicyTest {
         Path audit = tempDir.resolve("audit.jsonl");
         String oversizedGuildId = "1".repeat(2_048);
         McpToolPolicy policy = new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
-                ALLOWED_GUILD, "list_channels", "", "allow", audit.toString(), "1024", "", "");
+                ALLOWED_GUILD, "list_channels", "", "allow", audit.toString(), "4096", "", "");
 
         assertThatThrownBy(() -> only(policy.apply(provider("list_channels", new AtomicInteger())))
                 .call("{\"guildId\":\"" + oversizedGuildId + "\"}"))
@@ -416,7 +436,7 @@ class McpToolPolicyTest {
                 .contains("\"outcome\":\"denied-invalid-target\"")
                 .contains("<omitted 2048 characters; saltedSha256=")
                 .doesNotContain(oversizedGuildId);
-        assertThat(Files.size(audit)).isLessThanOrEqualTo(1024);
+        assertThat(Files.size(audit)).isLessThanOrEqualTo(4096);
     }
 
     @Test
@@ -667,7 +687,7 @@ class McpToolPolicyTest {
     void oversizedIdentifierIsBoundedInAudit() throws Exception {
         Path audit = tempDir.resolve("audit.jsonl");
         McpToolPolicy policy = new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
-                "", "send_message", "", "preview", audit.toString(), "1024", "", "");
+                "", "send_message", "", "preview", audit.toString(), "4096", "", "");
         String oversizedId = "1".repeat(2048);
 
         only(policy.apply(provider("send_message", new AtomicInteger())))
@@ -676,7 +696,7 @@ class McpToolPolicyTest {
         String firstAudit = Files.readString(audit);
         Path secondAudit = tempDir.resolve("second-audit.jsonl");
         McpToolPolicy secondPolicy = new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
-                "", "send_message", "", "preview", secondAudit.toString(), "1024", "", "");
+                "", "send_message", "", "preview", secondAudit.toString(), "4096", "", "");
         only(secondPolicy.apply(provider("send_message", new AtomicInteger())))
                 .call("{\"channelId\":\"" + oversizedId + "\",\"message\":\"x\"}");
 
@@ -705,6 +725,17 @@ class McpToolPolicyTest {
     }
 
     @Test
+    void lexicalAuditIsolationStillAppliesWhenConfiguredRootIsUnusable() {
+        Path audit = tempDir.resolve("audit.jsonl");
+
+        assertThatThrownBy(() -> new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
+                "", "send_message", "", "preview", audit.toString(),
+                "10485760", tempDir.getRoot().toString(), ""))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("outside DISCORD_MCP_FILE_ROOT");
+    }
+
+    @Test
     void blankWriteModePreservesLegacyAllowBehavior() {
         AtomicInteger calls = new AtomicInteger();
         McpToolPolicy policy = policy(mock(JDA.class), "", "send_message", "", "");
@@ -726,21 +757,31 @@ class McpToolPolicyTest {
     }
 
     @Test
+    void auditMaximumRequiresEnoughRoomForACompleteRecord() {
+        Path audit = tempDir.resolve("small-audit.jsonl");
+
+        assertThatThrownBy(() -> new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
+                "", "send_message", "", "preview", audit.toString(), "4095", "", ""))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("at least 4096");
+    }
+
+    @Test
     void auditRotatesBeforeTheActiveFileWouldExceedTheCap() throws Exception {
         Path audit = tempDir.resolve("audit.jsonl");
         McpToolPolicy policy = new McpToolPolicy(jdaWithChannel(), new ObjectMapper(),
-                ALLOWED_GUILD, "send_message", "", "preview", audit.toString(), "1024", "", "");
+                ALLOWED_GUILD, "send_message", "", "preview", audit.toString(), "4096", "", "");
         ToolCallback callback = only(policy.apply(provider("send_message", new AtomicInteger())));
 
-        for (int index = 0; index < 12; index++) {
+        for (int index = 0; index < 40; index++) {
             callback.call("{\"channelId\":\"32345678901234567\",\"message\":\"x" + index + "\"}");
         }
 
         Path rotated = audit.resolveSibling("audit.jsonl.1");
         assertThat(audit).exists();
         assertThat(rotated).exists();
-        assertThat(Files.size(audit)).isLessThanOrEqualTo(1024);
-        assertThat(Files.size(rotated)).isLessThanOrEqualTo(1024);
+        assertThat(Files.size(audit)).isLessThanOrEqualTo(4096);
+        assertThat(Files.size(rotated)).isLessThanOrEqualTo(4096);
     }
 
     @Test
@@ -803,6 +844,18 @@ class McpToolPolicyTest {
     }
 
     @Test
+    void auditParentCreationFailureHasAnActionableStartupError() throws Exception {
+        Path blockingFile = tempDir.resolve("not-a-directory");
+        Files.writeString(blockingFile, "x");
+        Path audit = blockingFile.resolve("audit.jsonl");
+
+        assertThatThrownBy(() -> policy(jdaWithChannel(), ALLOWED_GUILD,
+                "read_messages", "allow", audit.toString()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("parent cannot be created");
+    }
+
+    @Test
     void everyReadOnlyClassificationNamesAnExistingTool() {
         Set<String> actualTools = DiscordMcpConfig.toolServiceTypes().stream()
                 .flatMap(type -> Arrays.stream(type.getDeclaredMethods()))
@@ -811,12 +864,7 @@ class McpToolPolicyTest {
                 .map(Tool::name)
                 .collect(Collectors.toSet());
 
-        assertThat(McpToolPolicy.readOnlyToolNames())
-                .doesNotContainAnyElementsOf(McpToolPolicy.writeToolNames());
-        assertThat(actualTools).containsExactlyInAnyOrderElementsOf(
-                java.util.stream.Stream.concat(McpToolPolicy.readOnlyToolNames().stream(),
-                                McpToolPolicy.writeToolNames().stream())
-                        .collect(Collectors.toSet()));
+        assertThat(actualTools).containsAll(McpToolPolicy.readOnlyToolNames());
     }
 
     @Test

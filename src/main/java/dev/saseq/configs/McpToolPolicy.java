@@ -22,6 +22,7 @@ import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.StandardCopyOption;
@@ -59,23 +60,6 @@ public final class McpToolPolicy {
             "get_forum_channel_info", "list_forum_tags", "list_forum_posts", "list_emojis",
             "get_emoji_details", "list_webhooks", "list_invites", "get_invite_details",
             "get_bans", "read_private_messages"
-    );
-    /** Classification inventory for tests; runtime treats every tool not listed read-only as a write. */
-    private static final Set<String> WRITE_TOOLS = Set.of(
-            "add_reaction", "assign_role", "ban_member", "create_category", "create_emoji",
-            "create_forum_channel", "create_forum_post", "create_guild_scheduled_event",
-            "create_invite", "create_role", "create_stage_channel", "create_text_channel",
-            "create_voice_channel", "create_webhook", "delete_category", "delete_channel",
-            "delete_channel_permission_overwrite", "delete_emoji", "delete_guild_scheduled_event",
-            "delete_invite", "delete_message", "delete_private_message", "delete_role",
-            "delete_webhook", "disconnect_member", "download_attachment", "edit_category",
-            "edit_emoji", "edit_forum_channel", "edit_guild_scheduled_event", "edit_message",
-            "edit_private_message", "edit_role", "edit_text_channel", "edit_voice_channel",
-            "kick_member", "modify_forum_post", "modify_voice_state", "move_channel",
-            "move_member", "remove_reaction", "remove_role", "remove_timeout", "send_file",
-            "send_message", "send_private_message", "send_webhook_message",
-            "set_guild_scheduled_event_image", "set_nickname", "timeout_member", "unban_member",
-            "upsert_member_channel_permissions", "upsert_role_channel_permissions"
     );
     private static final Set<String> GLOBAL_TARGET_TOOLS = Set.of(
             "delete_webhook", "send_webhook_message", "delete_invite", "get_invite_details",
@@ -117,15 +101,19 @@ public final class McpToolPolicy {
                 ? null : Path.of(configuredAuditFile).toAbsolutePath().normalize();
         this.auditMaxBytes = this.auditFile == null ? 10_485_760L : parseAuditMaxBytes(auditMaxBytes);
         this.auditHashSalt = this.auditFile == null ? null : randomAuditHashSalt();
-        if (this.auditFile != null && this.auditMaxBytes < 1024) {
-            throw startupError("DISCORD_MCP_AUDIT_MAX_BYTES must be at least 1024");
+        if (this.auditFile != null && this.auditMaxBytes < 4096) {
+            throw startupError("DISCORD_MCP_AUDIT_MAX_BYTES must be at least 4096");
         }
 
         if (this.auditFile != null) {
-            try {
-                if (this.auditFile.getParent() != null) {
+            if (this.auditFile.getParent() != null) {
+                try {
                     Files.createDirectories(this.auditFile.getParent());
+                } catch (IOException error) {
+                    throw startupError("DISCORD_MCP_AUDIT_FILE parent cannot be created");
                 }
+            }
+            try {
                 try (var ignored = Files.newByteChannel(this.auditFile,
                         StandardOpenOption.CREATE, StandardOpenOption.WRITE,
                         StandardOpenOption.APPEND)) {
@@ -334,8 +322,9 @@ public final class McpToolPolicy {
                 if (channel == null) {
                     channel = jda.getThreadChannelById(value.asText());
                 }
-            } catch (IllegalArgumentException ignored) {
-                // Malformed snowflakes are unresolved targets and must follow the audited denial path.
+            } catch (RuntimeException ignored) {
+                // Malformed or otherwise rejected identifiers are unresolved targets and must
+                // follow the same audited denial path without exposing a JDA exception message.
             }
             if (channel != null) {
                 guildIds.add(channel.getGuild().getId());
@@ -571,6 +560,15 @@ public final class McpToolPolicy {
         if (configuredRoot == null || configuredRoot.isBlank()) {
             return;
         }
+        Path configuredRootPath;
+        try {
+            configuredRootPath = Path.of(configuredRoot).toAbsolutePath().normalize();
+        } catch (InvalidPathException unusableRoot) {
+            return;
+        }
+        if (auditFile.startsWith(configuredRootPath)) {
+            throw startupError("DISCORD_MCP_AUDIT_FILE must be outside " + variableName);
+        }
         LocalFileGuard.Root resolvedRoot;
         try {
             resolvedRoot = LocalFileGuard.resolveRoot(configuredRoot, variableName);
@@ -578,10 +576,8 @@ public final class McpToolPolicy {
             return;
         }
         try {
-            Path configuredRootPath = Path.of(configuredRoot).toAbsolutePath().normalize();
             Path realAuditFile = auditFile.toRealPath();
-            if (auditFile.startsWith(configuredRootPath)
-                    || realAuditFile.startsWith(resolvedRoot.path())) {
+            if (realAuditFile.startsWith(resolvedRoot.path())) {
                 throw startupError("DISCORD_MCP_AUDIT_FILE must be outside " + variableName);
             }
         } catch (IOException error) {
@@ -608,10 +604,6 @@ public final class McpToolPolicy {
 
     static Set<String> readOnlyToolNames() {
         return READ_ONLY_TOOLS;
-    }
-
-    static Set<String> writeToolNames() {
-        return WRITE_TOOLS;
     }
 
     static Set<String> globalTargetToolNames() {

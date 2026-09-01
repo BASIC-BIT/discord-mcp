@@ -261,7 +261,7 @@ schema are rejected rather than ignored. Audit-only deployments retain upstream 
   outcome means the MCP tool returned to its caller; it does not claim that an asynchronously
   queued Discord mutation later succeeded. Use readback for consequential writes. The active file rotates to one `.1`
   backup before the next append would exceed `DISCORD_MCP_AUDIT_MAX_BYTES` (10 MiB by default),
-  so the two files remain bounded. Set a value of at least 1024 bytes if a different cap is needed.
+  so the two files remain bounded. Set a value of at least 4096 bytes if a different cap is needed.
   This cap is a disk bound, not a retention guarantee. High call volume can rotate older evidence
   out of both files; forward audit records to a durable log sink when retention matters. Keep the
   audit file outside `DISCORD_MCP_FILE_ROOT` and `DISCORD_MCP_DOWNLOAD_ROOT` so an MCP tool cannot
