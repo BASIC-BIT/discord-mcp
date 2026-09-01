@@ -645,6 +645,7 @@ mvn -Dtest=DiscordLiveIntegrationTest test
 
 #### Server Information
 - [`get_server_info`](): Get detailed discord server information
+- [`get_bot_info`](): Get the authenticated Discord bot identity for a server as structured JSON
 
 #### User Management
 - [`get_user_id_by_name`](): Get a Discord user's ID by username in a guild for ping usage `<@id>`

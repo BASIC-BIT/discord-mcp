@@ -7,9 +7,12 @@ import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import tools.jackson.databind.ObjectMapper;
 
 @Service
 public class DiscordService {
+
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     private final JDA jda;
 
@@ -18,6 +21,29 @@ public class DiscordService {
 
     public DiscordService(JDA jda) {
         this.jda = jda;
+    }
+
+    /**
+     * Returns the authenticated bot identity so callers can bind policy to the actual token.
+     *
+     * @return machine-readable JSON containing the stable bot user ID and display name.
+     */
+    @Tool(name = "get_bot_info", description = "Get the authenticated Discord bot identity for a server as structured JSON")
+    public String getBotInfo(
+            @ToolParam(description = "Discord server ID", required = false) String guildId) {
+        guildId = resolveGuildId(guildId);
+        if (guildId == null || guildId.isEmpty()) {
+            throw new IllegalArgumentException("Discord server ID cannot be null");
+        }
+        Guild guild = jda.getGuildById(guildId);
+        if (guild == null) {
+            throw new IllegalArgumentException("Discord server not found by guildId");
+        }
+        var self = jda.getSelfUser();
+        return JSON.writeValueAsString(new BotSnapshot(self.getId(), self.getName(), guild.getId()));
+    }
+
+    private record BotSnapshot(String botUserId, String botName, String guildId) {
     }
 
     private String resolveGuildId(String guildId) {

@@ -228,7 +228,7 @@ class McpAccessPolicyTest {
     @Test
     void realToolSurfaceRequiresExplicitGuildScopeReview() {
         ToolCallbackProvider raw = MethodToolCallbackProvider.builder().toolObjects(
-                mock(DiscordService.class), mock(MessageService.class), mock(UserService.class),
+                new DiscordService(mock(JDA.class)), mock(MessageService.class), mock(UserService.class),
                 mock(ChannelService.class), mock(CategoryService.class), mock(WebhookService.class),
                 mock(ThreadService.class), mock(RoleService.class), mock(ModerationService.class),
                 mock(VoiceChannelService.class), mock(ScheduledEventService.class),
@@ -249,7 +249,7 @@ class McpAccessPolicyTest {
                         "disconnect_member", "download_attachment", "edit_category", "edit_emoji",
                         "edit_forum_channel", "edit_guild_scheduled_event", "edit_message",
                         "edit_role", "edit_text_channel", "edit_voice_channel", "find_category",
-                        "find_channel", "get_attachment", "get_bans", "get_channel_info",
+                        "find_channel", "get_attachment", "get_bans", "get_bot_info", "get_channel_info",
                         "get_emoji_details", "get_forum_channel_info",
                         "get_guild_scheduled_event_users", "get_member_by_id", "get_message",
                         "get_server_info", "get_user_id_by_name", "kick_member",
