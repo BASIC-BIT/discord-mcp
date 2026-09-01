@@ -250,6 +250,8 @@ schema are rejected rather than ignored. Audit-only deployments retain upstream 
   servlet path is required, keep health protected and update the deployment health check to match.
   This filter covers the main servlet context; if `management.server.port` creates a separate
   management context, secure or firewall that port independently.
+  Keep the bearer file outside `DISCORD_MCP_FILE_ROOT` and `DISCORD_MCP_DOWNLOAD_ROOT`;
+  startup rejects lexical and resolved containment so tools cannot read or overwrite it.
 - `DISCORD_MCP_AUDIT_FILE`: append-only JSONL tool audit. It records tool, outcome, write mode,
   resolved guild IDs, a per-process salted arguments hash, and a per-call invocation ID that pairs
   `started` with its terminal record under concurrency. When deployment policy is active, selected declared Discord

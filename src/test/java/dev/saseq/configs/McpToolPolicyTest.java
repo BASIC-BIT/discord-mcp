@@ -135,28 +135,30 @@ class McpToolPolicyTest {
     }
 
     @Test
-    void numericChannelIdIsNormalizedAndInspected() {
+    void numericChannelIdIsRejectedWhenPolicyIsActive() {
         AtomicInteger calls = new AtomicInteger();
         McpToolPolicy policy = policy(
                 jdaWithChannel(), ALLOWED_GUILD, "send_message", "allow", "");
 
-        assertThat(only(policy.apply(provider("send_message", calls)))
+        assertThatThrownBy(() -> only(policy.apply(provider("send_message", calls)))
                 .call("{\"channelId\":32345678901234567,\"message\":\"x\"}"))
-                .isEqualTo("called");
-        assertThat(calls).hasValue(1);
+                .isInstanceOf(SecurityException.class)
+                .hasMessageContaining("outside the allowed guild scope");
+        assertThat(calls).hasValue(0);
     }
 
     @Test
-    void numericGuildIdIsNormalizedAndInspected() {
+    void numericGuildIdIsRejectedWhenPolicyIsActive() {
         AtomicInteger calls = new AtomicInteger();
         McpToolPolicy policy = new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
                 ALLOWED_GUILD, "list_channels", ALLOWED_GUILD, "allow", "", "10485760",
                 "", "");
 
-        assertThat(only(policy.apply(provider("list_channels", calls)))
+        assertThatThrownBy(() -> only(policy.apply(provider("list_channels", calls)))
                 .call("{\"guildId\":12345678901234567}"))
-                .isEqualTo("called");
-        assertThat(calls).hasValue(1);
+                .isInstanceOf(SecurityException.class)
+                .hasMessageContaining("outside the allowed guild scope");
+        assertThat(calls).hasValue(0);
     }
 
     @Test
@@ -244,7 +246,34 @@ class McpToolPolicyTest {
     }
 
     @Test
-    void policyForwardsLargeArgumentsUnchangedWhenTargetNormalizationIsUnneeded() {
+    void auditOnlyDefersArgumentParsingToTheDelegate() {
+        AtomicReference<String> received = new AtomicReference<>();
+        ToolDefinition definition = ToolDefinition.builder().name("send_file")
+                .description("test").inputSchema(schema("channelId", "fileData")).build();
+        ToolCallback raw = new ToolCallback() {
+            @Override
+            public ToolDefinition getToolDefinition() {
+                return definition;
+            }
+
+            @Override
+            public String call(String arguments) {
+                received.set(arguments);
+                return "called";
+            }
+        };
+        Path audit = tempDir.resolve("audit-only-large.jsonl");
+        McpToolPolicy policy = policy(mock(JDA.class), "", "", "allow", audit.toString());
+        String arguments = "{not parsed by policy:" + "A".repeat(1_000_000);
+
+        assertThat(only(policy.apply(ToolCallbackProvider.from(raw))).call(arguments))
+                .isEqualTo("called");
+        assertThat(received.get()).isSameAs(arguments);
+        assertThat(audit).exists();
+    }
+
+    @Test
+    void policyForwardsLargeArgumentsUnchangedAfterTargetValidation() {
         AtomicReference<String> received = new AtomicReference<>();
         ToolDefinition definition = ToolDefinition.builder().name("send_file")
                 .description("test").inputSchema(schema("channelId", "fileData")).build();
@@ -332,6 +361,7 @@ class McpToolPolicyTest {
                 .build();
 
         assertThat(only(policy.apply(generated)).call(null)).isEqualTo("\"empty\"");
+        assertThat(only(policy.apply(generated)).call(" null ")).isEqualTo("\"empty\"");
     }
 
     @Test
@@ -784,6 +814,23 @@ class McpToolPolicyTest {
         assertThat(rotated).exists();
         assertThat(Files.size(audit)).isLessThanOrEqualTo(4096);
         assertThat(Files.size(rotated)).isLessThanOrEqualTo(4096);
+    }
+
+    @Test
+    void auditDiscardsPreExistingFilesThatExceedALoweredCap() throws Exception {
+        Path audit = tempDir.resolve("audit.jsonl");
+        Path rotated = audit.resolveSibling("audit.jsonl.1");
+        Files.writeString(audit, "A".repeat(5_000));
+        Files.writeString(rotated, "B".repeat(5_000));
+        McpToolPolicy policy = new McpToolPolicy(jdaWithChannel(), new ObjectMapper(),
+                ALLOWED_GUILD, "send_message", "", "preview", audit.toString(), "4096", "", "");
+
+        only(policy.apply(provider("send_message", new AtomicInteger())))
+                .call("{\"channelId\":\"32345678901234567\",\"message\":\"x\"}");
+
+        assertThat(audit).exists();
+        assertThat(Files.size(audit)).isLessThanOrEqualTo(4096);
+        assertThat(rotated).doesNotExist();
     }
 
     @Test

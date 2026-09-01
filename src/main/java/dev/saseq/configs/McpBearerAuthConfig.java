@@ -1,5 +1,6 @@
 package dev.saseq.configs;
 
+import dev.saseq.services.LocalFileGuard;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -29,7 +30,11 @@ public class McpBearerAuthConfig {
             @Value("${DISCORD_MCP_ACCESS_TOKEN_FILE:}") String tokenFile,
             @Value("${spring.ai.mcp.server.streamable-http.mcp-endpoint:/mcp}") String mcpEndpoint,
             @Value("${spring.ai.mcp.server.protocol:}") String protocol,
-            @Value("${spring.main.web-application-type:}") String webApplicationType) {
+            @Value("${spring.main.web-application-type:}") String webApplicationType,
+            @Value("${DISCORD_MCP_FILE_ROOT:}") String fileRoot,
+            @Value("${DISCORD_MCP_DOWNLOAD_ROOT:}") String downloadRoot) {
+        requireCredentialIsolation(tokenFile, fileRoot, "DISCORD_MCP_FILE_ROOT");
+        requireCredentialIsolation(tokenFile, downloadRoot, "DISCORD_MCP_DOWNLOAD_ROOT");
         String token = readToken(tokenFile);
         if (token != null && !"STREAMABLE".equalsIgnoreCase(protocol)) {
             throw startupError("Bearer authentication supports only the STREAMABLE HTTP protocol; "
@@ -46,6 +51,11 @@ public class McpBearerAuthConfig {
             }
         }
         return new BearerAuthSettings(token);
+    }
+
+    BearerAuthSettings mcpBearerAuthSettings(String tokenFile, String mcpEndpoint,
+                                             String protocol, String webApplicationType) {
+        return mcpBearerAuthSettings(tokenFile, mcpEndpoint, protocol, webApplicationType, "", "");
     }
 
     @Bean
@@ -85,6 +95,40 @@ public class McpBearerAuthConfig {
             return token;
         } catch (IOException | InvalidPathException error) {
             throw startupError("Could not read DISCORD_MCP_ACCESS_TOKEN_FILE", error);
+        }
+    }
+
+    private static void requireCredentialIsolation(String configuredTokenFile,
+                                                   String configuredRoot, String variableName) {
+        if (configuredTokenFile == null || configuredTokenFile.isBlank()
+                || configuredRoot == null || configuredRoot.isBlank()) {
+            return;
+        }
+        Path tokenPath;
+        Path rootPath;
+        try {
+            tokenPath = Path.of(configuredTokenFile).toAbsolutePath().normalize();
+            rootPath = Path.of(configuredRoot).toAbsolutePath().normalize();
+        } catch (InvalidPathException unusablePath) {
+            return;
+        }
+        if (tokenPath.startsWith(rootPath)) {
+            throw startupError("DISCORD_MCP_ACCESS_TOKEN_FILE must be outside " + variableName);
+        }
+        Path realToken;
+        try {
+            realToken = tokenPath.toRealPath();
+        } catch (IOException unusableToken) {
+            return;
+        }
+        LocalFileGuard.Root resolvedRoot;
+        try {
+            resolvedRoot = LocalFileGuard.resolveRoot(configuredRoot, variableName);
+        } catch (IllegalArgumentException unusableRoot) {
+            return;
+        }
+        if (realToken.startsWith(resolvedRoot.path())) {
+            throw startupError("DISCORD_MCP_ACCESS_TOKEN_FILE must be outside " + variableName);
         }
     }
 

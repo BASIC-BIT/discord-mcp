@@ -214,4 +214,23 @@ class McpBearerAuthConfigTest {
 
         assertThat(settings.token()).isEqualTo(TOKEN);
     }
+
+    @Test
+    void bearerCredentialMustRemainOutsideToolFileRoots() throws Exception {
+        Path uploads = Files.createDirectories(tempDir.resolve("uploads"));
+        Path tokenFile = uploads.resolve("access-token");
+        Files.writeString(tokenFile, TOKEN);
+
+        assertThatThrownBy(() -> new McpBearerAuthConfig().mcpBearerAuthSettings(
+                tokenFile.toString(), "/mcp", "STREAMABLE", "servlet",
+                uploads.toString(), ""))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("outside DISCORD_MCP_FILE_ROOT");
+
+        assertThatThrownBy(() -> new McpBearerAuthConfig().mcpBearerAuthSettings(
+                tokenFile.toString(), "/mcp", "STREAMABLE", "servlet",
+                "", uploads.toString()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("outside DISCORD_MCP_DOWNLOAD_ROOT");
+    }
 }

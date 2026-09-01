@@ -200,25 +200,32 @@ public final class McpToolPolicy {
         private String invoke(String arguments, ToolContext toolContext) {
             String tool = getToolDefinition().name();
             String invocationId = UUID.randomUUID().toString();
-            if (!policyActive && auditFile == null && arguments != null && !arguments.isBlank()) {
+            String argumentsForDelegate = isAbsentArgumentMap(arguments) ? "{}" : arguments;
+            if (!policyActive && auditFile == null) {
                 return toolContext == null
-                        ? delegate.call(arguments)
-                        : delegate.call(arguments, toolContext);
+                        ? delegate.call(argumentsForDelegate)
+                        : delegate.call(argumentsForDelegate, toolContext);
             }
-            // Hash the raw caller representation so the audit can correlate the original request,
-            // while policy-active delegates receive the normalized tree inspected below.
+            // Hash the raw caller representation so the audit can correlate the original request.
+            // Policy-active calls inspect the parsed tree but preserve the caller's representation
+            // after target types and guild scope pass.
             String argumentsForHash = arguments == null || arguments.isBlank() ? "{}" : arguments;
             String argumentsSaltedSha256 = auditFile == null
                     ? null : sha256(argumentsForHash, auditHashSalt);
-            JsonNode parsed;
-            try {
-                parsed = parseArguments(arguments);
-            } catch (IllegalArgumentException error) {
-                auditBestEffort(tool, "denied-invalid-arguments", invocationId, Set.of(), null,
-                        argumentsSaltedSha256, error.getClass().getSimpleName());
-                throw error;
-            }
+            // Audit-only deployments preserve upstream argument handling and avoid materializing
+            // supported large payloads a second time. They intentionally record no caller-supplied
+            // target IDs because no active policy schema has established that those fields belong
+            // to the tool.
+            JsonNode parsed = objectMapper.createObjectNode();
             if (policyActive) {
+                try {
+                    parsed = parseArguments(arguments);
+                } catch (IllegalArgumentException error) {
+                    auditBestEffort(tool, "denied-invalid-arguments", invocationId,
+                            Set.of(), null,
+                            argumentsSaltedSha256, error.getClass().getSimpleName());
+                    throw error;
+                }
                 try {
                     rejectUndeclaredArguments(tool, parsed, declaredArguments);
                 } catch (SecurityException error) {
@@ -228,8 +235,6 @@ public final class McpToolPolicy {
                     throw error;
                 }
             }
-            boolean normalizedTargetIdentifiers = !allowedGuilds.isEmpty()
-                    && normalizePolicyTargetIdentifiers(parsed);
             Set<String> guildIds;
             try {
                 guildIds = resolveGuildIds(parsed, declaredArguments, !allowedGuilds.isEmpty());
@@ -251,11 +256,9 @@ public final class McpToolPolicy {
             audit(tool, "started", invocationId, guildIds, parsed,
                     argumentsSaltedSha256, null);
             try {
-                String delegatedArguments = normalizedTargetIdentifiers
-                        ? parsed.toString() : argumentsForHash;
                 String result = toolContext == null
-                        ? delegate.call(delegatedArguments)
-                        : delegate.call(delegatedArguments, toolContext);
+                        ? delegate.call(argumentsForDelegate)
+                        : delegate.call(argumentsForDelegate, toolContext);
                 String completionWarning = auditBestEffort(
                         tool, "tool-returned", invocationId, guildIds, parsed,
                         argumentsSaltedSha256, null);
@@ -286,6 +289,10 @@ public final class McpToolPolicy {
             throw new IllegalArgumentException("Tool arguments must be a JSON object");
         }
         return parsed;
+    }
+
+    private static boolean isAbsentArgumentMap(String arguments) {
+        return arguments == null || arguments.isBlank() || "null".equals(arguments.strip());
     }
 
     private Set<String> resolveGuildIds(JsonNode arguments, Set<String> declaredArguments,
@@ -338,21 +345,6 @@ public final class McpToolPolicy {
             }
         }
         return guildIds;
-    }
-
-    private boolean normalizePolicyTargetIdentifiers(JsonNode arguments) {
-        Set<String> fieldsToNormalize = new LinkedHashSet<>();
-        for (var entry : arguments.properties()) {
-            String field = entry.getKey();
-            JsonNode value = entry.getValue();
-            if (("guildId".equals(field) || isGuildChannelArgument(field))
-                    && value != null && value.isIntegralNumber()) {
-                fieldsToNormalize.add(field);
-            }
-        }
-        var object = (ObjectNode) arguments;
-        fieldsToNormalize.forEach(field -> object.put(field, object.get(field).asText()));
-        return !fieldsToNormalize.isEmpty();
     }
 
     private void enforceGuilds(String tool, String invocationId, Set<String> guildIds,
@@ -442,10 +434,21 @@ public final class McpToolPolicy {
     }
 
     private void rotateAuditIfNeeded(int nextLineBytes) throws IOException {
-        if (!Files.exists(auditFile) || Files.size(auditFile) + nextLineBytes <= auditMaxBytes) {
+        Path rotated = auditFile.resolveSibling(auditFile.getFileName() + ".1");
+        if (Files.exists(rotated) && Files.size(rotated) > auditMaxBytes) {
+            Files.delete(rotated);
+        }
+        if (!Files.exists(auditFile)) {
             return;
         }
-        Path rotated = auditFile.resolveSibling(auditFile.getFileName() + ".1");
+        long activeBytes = Files.size(auditFile);
+        if (activeBytes > auditMaxBytes) {
+            Files.delete(auditFile);
+            return;
+        }
+        if (activeBytes + nextLineBytes <= auditMaxBytes) {
+            return;
+        }
         Files.move(auditFile, rotated, StandardCopyOption.REPLACE_EXISTING);
     }
 
