@@ -85,7 +85,8 @@ class McpBearerAuthConfigTest {
     @Test
     void unsetTokenDoesNotValidateBearerOnlyEndpointSettings() {
         var config = new McpBearerAuthConfig();
-        var settings = settings("", "relative-*", "", "");
+        var settings = config.mcpBearerAuthSettings(
+                "", "relative-*", "", "", "9090", "", "", "");
         var registration = config.mcpBearerAuthFilter(settings);
 
         assertThat(registration.getUrlPatterns()).containsExactly("/*");
@@ -224,6 +225,18 @@ class McpBearerAuthConfigTest {
     }
 
     @Test
+    void configuredBearerRejectsASeparateManagementPort() throws Exception {
+        Path tokenFile = tempDir.resolve("token");
+        Files.writeString(tokenFile, TOKEN);
+
+        assertThatThrownBy(() -> new McpBearerAuthConfig().mcpBearerAuthSettings(
+                tokenFile.toString(), "/mcp", "STREAMABLE", "servlet", "9090",
+                "", "", ""))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("management.server.port");
+    }
+
+    @Test
     void bearerCredentialMustRemainOutsideToolFileRoots() throws Exception {
         Path uploads = Files.createDirectories(tempDir.resolve("uploads"));
         Path tokenFile = uploads.resolve("access-token");
@@ -278,7 +291,7 @@ class McpBearerAuthConfigTest {
             String tokenFile, String mcpEndpoint, String protocol, String webApplicationType,
             String fileRoot, String downloadRoot, String auditFile) {
         return new McpBearerAuthConfig().mcpBearerAuthSettings(
-                tokenFile, mcpEndpoint, protocol, webApplicationType,
+                tokenFile, mcpEndpoint, protocol, webApplicationType, "",
                 fileRoot, downloadRoot, auditFile);
     }
 }

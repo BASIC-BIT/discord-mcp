@@ -225,6 +225,8 @@ schema are rejected rather than ignored. Audit-only deployments retain upstream 
   allowlist also removes webhook URL/ID operations, invite-code operations, and private-message
   operations from tool discovery because those global targets cannot prove guild scope, even when
   `DISCORD_MCP_ALLOWED_TOOLS` is unset.
+  Upgrade note: replace any copied `OPTIONAL_DEFAULT_SERVER_ID` value before enabling policy;
+  policy-active startup rejects a non-snowflake `DISCORD_GUILD_ID` instead of ignoring it.
 - `DISCORD_MCP_ALLOWED_TOOLS`: comma-separated exact tool names. Unknown names fail startup and
   tools not named here are not exported to MCP clients. Setting this variable also enables strict
   generated-schema checking, so caller-supplied argument keys that the selected tool does not
@@ -243,6 +245,9 @@ schema are rejected rather than ignored. Audit-only deployments retain upstream 
   is explicitly allowed to receive their credentials or invite material. `create_webhook` and
   `create_invite` are the write-side equivalents; allowing them lets their results return new
   credentials after Preview is changed to `allow`.
+  Policy-active parsing retains the raw request while validating a JSON tree before the delegate
+  binds it. A deployment that exports `send_file` at its 50 MiB maximum must budget heap for
+  multiple in-memory representations, or omit that tool when running with a smaller heap.
 - `DISCORD_EXPECTED_BOT_ID`: refuses startup when a valid token authenticates the wrong bot.
 - `DISCORD_MCP_ACCESS_TOKEN_FILE`: HTTP-only bearer credential, read from a mounted file. When
   set under the STREAMABLE protocol, the configured MCP endpoint returns `401` unless the request
@@ -254,16 +259,18 @@ schema are rejected rather than ignored. Audit-only deployments retain upstream 
   exact default `/actuator/health` path is public; custom management paths and health subpaths remain
   bearer-protected. Do not set `spring.mvc.servlet.path` with the bundled health check. If a custom
   servlet path is required, keep health protected and update the deployment health check to match.
-  This filter covers the main servlet context; if `management.server.port` creates a separate
-  management context, secure or firewall that port independently.
+  Bearer-enabled startup rejects any configured `management.server.port`, because a separate
+  management servlet context would be outside this filter.
   Keep the bearer file outside `DISCORD_MCP_FILE_ROOT` and `DISCORD_MCP_DOWNLOAD_ROOT`;
   startup rejects lexical and resolved containment so tools cannot read or overwrite it. The token
   must use printable ASCII without whitespace so it can be represented in an HTTP header.
 - `DISCORD_MCP_AUDIT_FILE`: append-only JSONL tool audit. It records tool, outcome, write mode,
-  resolved guild IDs, a per-process salted arguments hash, and a per-call invocation ID that pairs
-  `started` with its terminal record under concurrency. When deployment policy is active, selected declared Discord
-  object IDs are nested under `argumentIds`; audit-only deployments omit argument-provided IDs so
-  ignored undeclared keys cannot shape reserved audit fields or inflate records. It deliberately does
+  a per-process salted arguments hash, and a per-call invocation ID that pairs `started` with its
+  terminal record under concurrency. When deployment policy is active, it also records resolved
+  guild IDs and nests selected declared Discord object IDs under `argumentIds`. Audit-only
+  deployments record an empty `guildIds` array and omit argument-provided IDs because no active
+  policy schema has established those fields; ignored undeclared keys therefore cannot shape
+  reserved audit fields or inflate records. It deliberately does
   not record message bodies, invite credentials, or other complete arguments. The random salt
   prevents practical dictionary recovery of low-entropy inputs while preserving correlation within
   one process lifetime; hashes intentionally change after restart. A `tool-returned`
@@ -279,7 +286,8 @@ schema are rejected rather than ignored. Audit-only deployments retain upstream 
   read or write the audit trail. Startup rejects either configured path when its lexical or resolved
   location contains the audit file.
   The sink must be a regular file, not a device or FIFO, and neither it nor its `.1` rotation may
-  be the configured `logging.file.name`; startup rejects lexical and resolved aliases.
+  be the configured `logging.file.name`; startup rejects lexical and resolved aliases. On POSIX
+  filesystems, startup creates or tightens the active audit file to owner read/write (`0600`).
   `DISCORD_MCP_AUDIT_MAX_BYTES` is parsed only when `DISCORD_MCP_AUDIT_FILE` is configured, so an
   otherwise unused legacy value does not block startup.
 
@@ -320,7 +328,9 @@ rather than replaces, Discord role hierarchy, channel overrides, and least-privi
 Use separate runtime profiles for different guild and write scopes instead of widening one
 always-on process.
 
-The generic `docker-compose.yml` binds its unauthenticated default endpoint to host loopback. It
+**Upgrade note:** the generic `docker-compose.yml` now binds its unauthenticated default endpoint
+to host loopback. Existing clients on other hosts lose access until an authenticated,
+deployment-specific override deliberately republishes it. The generic Compose file
 does not forward the bearer-token or audit-file paths because it cannot conditionally create the
 required secret bind mount and persistent audit volume. Add both in a deployment-specific Compose
 override, or use a launcher that creates those mounts explicitly. Deliberately publishing beyond

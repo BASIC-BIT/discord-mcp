@@ -142,8 +142,8 @@ class McpToolPolicyTest {
 
         assertThatThrownBy(() -> only(policy.apply(provider("send_message", calls)))
                 .call("{\"channelId\":32345678901234567,\"message\":\"x\"}"))
-                .isInstanceOf(SecurityException.class)
-                .hasMessageContaining("outside the allowed guild scope");
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("channelId must be a JSON string");
         assertThat(calls).hasValue(0);
     }
 
@@ -156,8 +156,8 @@ class McpToolPolicyTest {
 
         assertThatThrownBy(() -> only(policy.apply(provider("list_channels", calls)))
                 .call("{\"guildId\":12345678901234567}"))
-                .isInstanceOf(SecurityException.class)
-                .hasMessageContaining("outside the allowed guild scope");
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("guildId must be a JSON string");
         assertThat(calls).hasValue(0);
     }
 
@@ -933,6 +933,28 @@ class McpToolPolicyTest {
                 "read_messages", "allow", audit.toString()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("regular file");
+    }
+
+    @Test
+    void invalidAuditPathNamesItsOwningSetting() {
+        assertThatThrownBy(() -> policy(jdaWithChannel(), ALLOWED_GUILD,
+                "read_messages", "allow", "invalid\u0000audit"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("DISCORD_MCP_AUDIT_FILE is not a valid path");
+    }
+
+    @Test
+    void auditFileUsesOwnerOnlyPermissionsOnPosixFilesystems() throws Exception {
+        Path audit = tempDir.resolve("private-audit.jsonl");
+
+        policy(jdaWithChannel(), ALLOWED_GUILD,
+                "read_messages", "allow", audit.toString());
+
+        if (audit.getFileSystem().supportedFileAttributeViews().contains("posix")) {
+            assertThat(Files.getPosixFilePermissions(audit)).containsExactlyInAnyOrder(
+                    java.nio.file.attribute.PosixFilePermission.OWNER_READ,
+                    java.nio.file.attribute.PosixFilePermission.OWNER_WRITE);
+        }
     }
 
     @Test

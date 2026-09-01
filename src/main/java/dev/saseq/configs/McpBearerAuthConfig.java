@@ -31,6 +31,7 @@ public class McpBearerAuthConfig {
             @Value("${spring.ai.mcp.server.streamable-http.mcp-endpoint:/mcp}") String mcpEndpoint,
             @Value("${spring.ai.mcp.server.protocol:}") String protocol,
             @Value("${spring.main.web-application-type:}") String webApplicationType,
+            @Value("${management.server.port:}") String managementServerPort,
             @Value("${DISCORD_MCP_FILE_ROOT:}") String fileRoot,
             @Value("${DISCORD_MCP_DOWNLOAD_ROOT:}") String downloadRoot,
             @Value("${DISCORD_MCP_AUDIT_FILE:}") String auditFile) {
@@ -45,6 +46,10 @@ public class McpBearerAuthConfig {
         if (token != null && !"servlet".equalsIgnoreCase(webApplicationType)) {
             throw startupError("Bearer authentication requires servlet web application mode; "
                     + "set SPRING_PROFILES_ACTIVE=http");
+        }
+        if (token != null && managementServerPort != null && !managementServerPort.isBlank()) {
+            throw startupError("Bearer authentication requires management.server.port to remain unset; "
+                    + "a separate management servlet context is outside the MCP bearer filter");
         }
         if (token != null) {
             String normalizedEndpoint = normalizeEndpoint(mcpEndpoint);

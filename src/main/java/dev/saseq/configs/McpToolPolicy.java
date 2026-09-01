@@ -28,6 +28,8 @@ import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.security.MessageDigest;
 import java.security.DigestOutputStream;
 import java.security.SecureRandom;
@@ -55,6 +57,8 @@ public final class McpToolPolicy {
             "Discord target is unavailable or outside the allowed guild scope";
     // A 50 MiB upload becomes 69,905,068 base64 characters. Preserve that advertised tool
     // contract under policy while keeping the parser bounded above the default 20M ceiling.
+    // Policy parsing and delegate binding can briefly retain multiple copies, so deployments that
+    // export send_file at this maximum need a heap sized for that peak.
     static final int MAX_POLICY_JSON_STRING_CHARACTERS = 70_000_000;
     private static final Set<String> READ_ONLY_TOOLS = Set.of(
             "get_server_info", "find_channel", "list_channels", "get_channel_info",
@@ -114,8 +118,12 @@ public final class McpToolPolicy {
         this.policyActive = !this.allowedGuilds.isEmpty() || !this.allowedTools.isEmpty()
                 || this.writeMode == WriteMode.PREVIEW;
         String configuredAuditFile = trimToNull(auditFile);
-        this.auditFile = configuredAuditFile == null
-                ? null : Path.of(configuredAuditFile).toAbsolutePath().normalize();
+        try {
+            this.auditFile = configuredAuditFile == null
+                    ? null : Path.of(configuredAuditFile).toAbsolutePath().normalize();
+        } catch (InvalidPathException error) {
+            throw startupError("DISCORD_MCP_AUDIT_FILE is not a valid path");
+        }
         this.auditMaxBytes = this.auditFile == null ? 10_485_760L : parseAuditMaxBytes(auditMaxBytes);
         this.auditHashSalt = this.auditFile == null ? null : randomAuditHashSalt();
         if (this.auditFile != null && this.auditMaxBytes < 4096) {
@@ -146,11 +154,7 @@ public final class McpToolPolicy {
                 }
             }
             try {
-                try (var ignored = Files.newByteChannel(this.auditFile,
-                        StandardOpenOption.CREATE, StandardOpenOption.WRITE,
-                        StandardOpenOption.APPEND)) {
-                    // Open-and-close probes the exact runtime append permission without altering data.
-                }
+                probeAuditFile(this.auditFile);
             } catch (IOException error) {
                 throw startupError("DISCORD_MCP_AUDIT_FILE is not appendable");
             }
@@ -162,6 +166,25 @@ public final class McpToolPolicy {
         }
     }
 
+    private static void probeAuditFile(Path auditFile) throws IOException {
+        Set<StandardOpenOption> options = Set.of(
+                StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.APPEND);
+        if (auditFile.getFileSystem().supportedFileAttributeViews().contains("posix")) {
+            Set<PosixFilePermission> ownerOnly = Set.of(
+                    PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE);
+            try (var ignored = Files.newByteChannel(
+                    auditFile, options, PosixFilePermissions.asFileAttribute(ownerOnly))) {
+                // Open-and-close probes append permission without altering existing data.
+            }
+            Files.setPosixFilePermissions(auditFile, ownerOnly);
+            return;
+        }
+        try (var ignored = Files.newByteChannel(auditFile, options)) {
+            // Non-POSIX filesystems use their native ACL and inheritance model.
+        }
+    }
+
+    // Spring invokes this as single-argument @Value method injection after construction.
     @Value("${logging.file.name:}")
     void requireOperationalLogIsolation(String configuredLogFile) {
         if (auditFile == null || configuredLogFile == null || configuredLogFile.isBlank()) {
@@ -205,6 +228,22 @@ public final class McpToolPolicy {
         if (!allowedGuilds.isEmpty() && !explicitlyAllowedGlobalTargets.isEmpty()) {
             throw startupError("DISCORD_MCP_ALLOWED_TOOLS contains tools that cannot prove guild "
                     + "scope: " + explicitlyAllowedGlobalTargets);
+        }
+        if (policyActive && allowedTools.isEmpty()) {
+            Set<String> hiddenCredentialReads = new LinkedHashSet<>(available);
+            hiddenCredentialReads.retainAll(EXPLICIT_OPT_IN_READ_TOOLS);
+            if (!hiddenCredentialReads.isEmpty()) {
+                LOGGER.info("Discord MCP policy omitted credential-returning reads because "
+                        + "DISCORD_MCP_ALLOWED_TOOLS is unset: {}", hiddenCredentialReads);
+            }
+        }
+        if (!allowedGuilds.isEmpty()) {
+            Set<String> hiddenGlobalTargets = new LinkedHashSet<>(available);
+            hiddenGlobalTargets.retainAll(GLOBAL_TARGET_TOOLS);
+            if (!hiddenGlobalTargets.isEmpty()) {
+                LOGGER.info("Discord MCP policy omitted tools that cannot prove guild scope because "
+                        + "DISCORD_MCP_ALLOWED_GUILDS is set: {}", hiddenGlobalTargets);
+            }
         }
         ToolCallback[] filtered = Arrays.stream(raw)
                 .filter(callback -> allowedTools.isEmpty()
@@ -292,6 +331,12 @@ public final class McpToolPolicy {
             Set<String> guildIds;
             try {
                 guildIds = resolveGuildIds(parsed, declaredArguments, !allowedGuilds.isEmpty());
+            } catch (IllegalArgumentException error) {
+                auditBestEffort(tool, "denied-invalid-target", invocationId, Set.of(), parsed,
+                        argumentsSaltedSha256, error.getClass().getSimpleName());
+                LOGGER.warn("Discord MCP policy rejected target argument type for tool {}: {}",
+                        tool, error.getMessage());
+                throw error;
             } catch (SecurityException error) {
                 auditBestEffort(tool, "denied-invalid-target", invocationId, Set.of(), parsed,
                         argumentsSaltedSha256, error.getClass().getSimpleName());
@@ -357,7 +402,7 @@ public final class McpToolPolicy {
         JsonNode guildValue = arguments.get("guildId");
         if (failOnUnresolvedChannel && guildValue != null && !guildValue.isNull()) {
             if (!guildValue.isTextual()) {
-                throw new SecurityException("Supplied guildId must be a string");
+                throw new IllegalArgumentException("Supplied guildId must be a JSON string");
             }
             if (!guildValue.asText().isBlank() && !isSnowflake(guildValue.asText())) {
                 throw new SecurityException("Supplied guildId must be a 17-20 digit Discord snowflake");
@@ -379,7 +424,7 @@ public final class McpToolPolicy {
             }
             if (!value.isTextual()) {
                 if (failOnUnresolvedChannel) {
-                    throw new SecurityException("Supplied " + field + " must be a JSON string");
+                    throw new IllegalArgumentException("Supplied " + field + " must be a JSON string");
                 }
                 continue;
             }
