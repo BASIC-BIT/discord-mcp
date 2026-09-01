@@ -11,6 +11,8 @@ import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.ai.tool.metadata.ToolMetadata;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -23,6 +25,7 @@ import java.nio.file.StandardOpenOption;
 import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.security.DigestOutputStream;
+import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
@@ -40,6 +43,7 @@ import java.util.stream.Collectors;
  */
 @Component
 public final class McpToolPolicy {
+    private static final Logger LOGGER = LoggerFactory.getLogger(McpToolPolicy.class);
     private static final String TARGET_ACCESS_DENIED =
             "Discord target is unavailable or outside the allowed guild scope";
     private static final Set<String> READ_ONLY_TOOLS = Set.of(
@@ -69,6 +73,11 @@ public final class McpToolPolicy {
             "set_guild_scheduled_event_image", "set_nickname", "timeout_member", "unban_member",
             "upsert_member_channel_permissions", "upsert_role_channel_permissions"
     );
+    private static final Set<String> GLOBAL_TARGET_TOOLS = Set.of(
+            "delete_webhook", "send_webhook_message", "delete_invite", "get_invite_details",
+            "send_private_message", "edit_private_message", "delete_private_message",
+            "read_private_messages"
+    );
     private final JDA jda;
     private final ObjectMapper objectMapper;
     private final Set<String> allowedGuilds;
@@ -78,6 +87,7 @@ public final class McpToolPolicy {
     private final boolean policyActive;
     private final Path auditFile;
     private final long auditMaxBytes;
+    private final byte[] auditHashSalt;
 
     public McpToolPolicy(
             JDA jda,
@@ -100,15 +110,23 @@ public final class McpToolPolicy {
         this.auditFile = configuredAuditFile == null
                 ? null : Path.of(configuredAuditFile).toAbsolutePath().normalize();
         this.auditMaxBytes = this.auditFile == null ? 10_485_760L : parseAuditMaxBytes(auditMaxBytes);
+        this.auditHashSalt = this.auditFile == null ? null : randomAuditHashSalt();
         if (this.auditFile != null && this.auditMaxBytes < 1024) {
             throw startupError("DISCORD_MCP_AUDIT_MAX_BYTES must be at least 1024");
         }
 
-        if (this.auditFile != null && this.auditFile.getParent() != null) {
+        if (this.auditFile != null) {
             try {
-                Files.createDirectories(this.auditFile.getParent());
+                if (this.auditFile.getParent() != null) {
+                    Files.createDirectories(this.auditFile.getParent());
+                }
+                try (var ignored = Files.newByteChannel(this.auditFile,
+                        StandardOpenOption.CREATE, StandardOpenOption.WRITE,
+                        StandardOpenOption.APPEND)) {
+                    // Open-and-close probes the exact runtime append permission without altering data.
+                }
             } catch (IOException error) {
-                throw startupError("Could not create DISCORD_MCP_AUDIT_FILE parent directory");
+                throw startupError("DISCORD_MCP_AUDIT_FILE is not appendable");
             }
         }
 
@@ -131,9 +149,17 @@ public final class McpToolPolicy {
         if (!unknown.isEmpty()) {
             throw startupError("DISCORD_MCP_ALLOWED_TOOLS contains unknown tools: " + unknown);
         }
+        Set<String> explicitlyAllowedGlobalTargets = new LinkedHashSet<>(allowedTools);
+        explicitlyAllowedGlobalTargets.retainAll(GLOBAL_TARGET_TOOLS);
+        if (!allowedGuilds.isEmpty() && !explicitlyAllowedGlobalTargets.isEmpty()) {
+            throw startupError("DISCORD_MCP_ALLOWED_TOOLS contains tools that cannot prove guild "
+                    + "scope: " + explicitlyAllowedGlobalTargets);
+        }
         ToolCallback[] filtered = Arrays.stream(raw)
                 .filter(callback -> allowedTools.isEmpty()
                         || allowedTools.contains(callback.getToolDefinition().name()))
+                .filter(callback -> allowedGuilds.isEmpty()
+                        || !GLOBAL_TARGET_TOOLS.contains(callback.getToolDefinition().name()))
                 .map(PolicyToolCallback::new)
                 .toArray(ToolCallback[]::new);
         return ToolCallbackProvider.from(filtered);
@@ -182,13 +208,14 @@ public final class McpToolPolicy {
             // Hash the raw caller representation so the audit can correlate the original request,
             // while policy-active delegates receive the normalized tree inspected below.
             String argumentsForHash = arguments == null || arguments.isBlank() ? "{}" : arguments;
-            String argumentsSha256 = sha256(argumentsForHash);
+            String argumentsSaltedSha256 = auditFile == null
+                    ? null : sha256(argumentsForHash, auditHashSalt);
             JsonNode parsed;
             try {
                 parsed = parseArguments(arguments);
             } catch (IllegalArgumentException error) {
                 auditBestEffort(tool, "denied-invalid-arguments", invocationId, Set.of(), null,
-                        argumentsSha256, error.getClass().getSimpleName());
+                        argumentsSaltedSha256, error.getClass().getSimpleName());
                 throw error;
             }
             if (policyActive) {
@@ -196,7 +223,7 @@ public final class McpToolPolicy {
                     rejectUndeclaredArguments(tool, parsed, declaredArguments);
                 } catch (SecurityException error) {
                     auditBestEffort(tool, "denied-undeclared-argument", invocationId,
-                            Set.of(), null, argumentsSha256,
+                            Set.of(), null, argumentsSaltedSha256,
                             error.getClass().getSimpleName());
                     throw error;
                 }
@@ -208,19 +235,21 @@ public final class McpToolPolicy {
                 guildIds = resolveGuildIds(parsed, declaredArguments, !allowedGuilds.isEmpty());
             } catch (SecurityException error) {
                 auditBestEffort(tool, "denied-invalid-target", invocationId, Set.of(), parsed,
-                        argumentsSha256, null);
+                        argumentsSaltedSha256, null);
                 throw new SecurityException(TARGET_ACCESS_DENIED);
             }
-            enforceGuilds(tool, invocationId, guildIds, parsed, argumentsSha256);
+            enforceGuilds(tool, invocationId, guildIds, parsed, argumentsSaltedSha256);
 
             if (writeMode == WriteMode.PREVIEW && !READ_ONLY_TOOLS.contains(tool)) {
-                audit(tool, "preview", invocationId, guildIds, parsed, argumentsSha256, null);
+                audit(tool, "preview", invocationId, guildIds, parsed,
+                        argumentsSaltedSha256, null);
                 return "WRITE_PREVIEW: This deployment runs in preview mode; " + tool
                         + " was not called, and retrying here will produce the same result. Arguments: "
                         + previewArguments(argumentsForHash, parsed);
             }
 
-            audit(tool, "started", invocationId, guildIds, parsed, argumentsSha256, null);
+            audit(tool, "started", invocationId, guildIds, parsed,
+                    argumentsSaltedSha256, null);
             try {
                 String delegatedArguments = normalizedTargetIdentifiers
                         ? parsed.toString() : argumentsForHash;
@@ -229,12 +258,12 @@ public final class McpToolPolicy {
                         : delegate.call(delegatedArguments, toolContext);
                 String completionWarning = auditBestEffort(
                         tool, "tool-returned", invocationId, guildIds, parsed,
-                        argumentsSha256, null);
+                        argumentsSaltedSha256, null);
                 return completionWarning == null
                         ? result : result + System.lineSeparator() + completionWarning;
             } catch (RuntimeException error) {
-                auditBestEffort(tool, "failed", invocationId, guildIds, parsed, argumentsSha256,
-                        error.getClass().getSimpleName());
+                auditBestEffort(tool, "failed", invocationId, guildIds, parsed,
+                        argumentsSaltedSha256, error.getClass().getSimpleName());
                 throw error;
             }
         }
@@ -326,20 +355,20 @@ public final class McpToolPolicy {
     }
 
     private void enforceGuilds(String tool, String invocationId, Set<String> guildIds,
-                               JsonNode arguments, String argumentsSha256) {
+                               JsonNode arguments, String argumentsSaltedSha256) {
         if (allowedGuilds.isEmpty()) {
             return;
         }
         if (guildIds.isEmpty()) {
             auditBestEffort(tool, "denied-unresolved-guild", invocationId, guildIds, arguments,
-                    argumentsSha256, null);
+                    argumentsSaltedSha256, null);
             throw new SecurityException(TARGET_ACCESS_DENIED);
         }
         Set<String> denied = new LinkedHashSet<>(guildIds);
         denied.removeAll(allowedGuilds);
         if (!denied.isEmpty()) {
             auditBestEffort(tool, "denied-guild", invocationId, guildIds, arguments,
-                    argumentsSha256, null);
+                    argumentsSaltedSha256, null);
             throw new SecurityException(TARGET_ACCESS_DENIED);
         }
     }
@@ -348,7 +377,7 @@ public final class McpToolPolicy {
     // record and size-based rotation atomic without retaining a file handle across rotations.
     private synchronized void audit(String tool, String outcome, String invocationId,
                                     Set<String> guildIds, JsonNode arguments,
-                                    String argumentsSha256, String errorType) {
+                                    String argumentsSaltedSha256, String errorType) {
         if (auditFile == null) {
             return;
         }
@@ -374,8 +403,8 @@ public final class McpToolPolicy {
                     event.set("argumentIds", argumentIds);
                 }
             }
-            if (argumentsSha256 != null) {
-                event.put("argumentsSha256", argumentsSha256);
+            if (argumentsSaltedSha256 != null) {
+                event.put("argumentsSaltedSha256", argumentsSaltedSha256);
             }
             if (errorType != null) {
                 event.put("errorType", errorType);
@@ -395,17 +424,18 @@ public final class McpToolPolicy {
 
     private String auditBestEffort(String tool, String outcome, String invocationId,
                                    Set<String> guildIds, JsonNode arguments,
-                                   String argumentsSha256, String errorType) {
+                                   String argumentsSaltedSha256, String errorType) {
         if (auditFile == null && outcome.startsWith("denied-")) {
-            System.err.println("Discord MCP policy denied tool " + tool + " (" + outcome + ").");
+            LOGGER.warn("Discord MCP policy denied tool {} ({}).", tool, outcome);
             return null;
         }
         try {
-            audit(tool, outcome, invocationId, guildIds, arguments, argumentsSha256, errorType);
+            audit(tool, outcome, invocationId, guildIds, arguments,
+                    argumentsSaltedSha256, errorType);
             return null;
         } catch (RuntimeException auditError) {
             String warning = "WARNING: The tool outcome is preserved, but its audit completion record failed.";
-            System.err.println(warning + " " + auditError.getMessage());
+            LOGGER.warn("{} {}", warning, auditError.getMessage());
             return warning;
         }
     }
@@ -427,7 +457,7 @@ public final class McpToolPolicy {
 
     static boolean isGuildChannelArgument(String field) {
         String normalized = field.toLowerCase(Locale.ROOT);
-        boolean idShaped = normalized.endsWith("id") || normalized.endsWith("ids");
+        boolean idShaped = normalized.endsWith("id");
         return idShaped && (normalized.contains("channel")
                 || normalized.contains("category") || normalized.contains("forum")
                 || normalized.contains("thread") || normalized.contains("post"));
@@ -533,6 +563,10 @@ public final class McpToolPolicy {
         return WRITE_TOOLS;
     }
 
+    static Set<String> globalTargetToolNames() {
+        return GLOBAL_TARGET_TOOLS;
+    }
+
     private static void requireSnowflake(String value, String name) {
         if (!isSnowflake(value)) {
             throw startupError(name + " entries must be 17-20 digit Discord snowflakes");
@@ -544,8 +578,15 @@ public final class McpToolPolicy {
     }
 
     private static String sha256(String value) {
+        return sha256(value, null);
+    }
+
+    private static String sha256(String value, byte[] prefix) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            if (prefix != null) {
+                digest.update(prefix);
+            }
             try (Writer writer = new OutputStreamWriter(
                     new DigestOutputStream(OutputStream.nullOutputStream(), digest),
                     StandardCharsets.UTF_8)) {
@@ -555,6 +596,12 @@ public final class McpToolPolicy {
         } catch (java.security.NoSuchAlgorithmException | IOException impossible) {
             throw new IllegalStateException(impossible);
         }
+    }
+
+    private static byte[] randomAuditHashSalt() {
+        byte[] salt = new byte[32];
+        new SecureRandom().nextBytes(salt);
+        return salt;
     }
 
     private enum WriteMode {

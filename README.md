@@ -101,6 +101,8 @@ docker run -d -i \
 > mount**, because the operator puts files there and the app only reads them — a named volume
 > cannot be written from the host without `docker cp`, which makes "put the file there"
 > impossible to act on, and `:ro` enforces at the mount what the docs describe.
+> Mounting the downloads volume below `/var/lib/discord-mcp` is intentional. Docker applies the
+> more-specific child mount at `/var/lib/discord-mcp/downloads` over its parent path.
 
 Default MCP endpoint URL (HTTP profile): `http://localhost:8085/mcp`
 
@@ -247,11 +249,13 @@ schema are rejected rather than ignored. Audit-only deployments retain upstream 
   servlet context; if `management.server.port` creates a separate management context, secure or
   firewall that port independently.
 - `DISCORD_MCP_AUDIT_FILE`: append-only JSONL tool audit. It records tool, outcome, write mode,
-  resolved guild IDs, an arguments hash, and a per-call invocation ID that pairs `started` with its
-  terminal record under concurrency. When deployment policy is active, selected declared Discord
+  resolved guild IDs, a per-process salted arguments hash, and a per-call invocation ID that pairs
+  `started` with its terminal record under concurrency. When deployment policy is active, selected declared Discord
   object IDs are nested under `argumentIds`; audit-only deployments omit argument-provided IDs so
   ignored undeclared keys cannot shape reserved audit fields or inflate records. It deliberately does
-  not record message bodies, invite credentials, or other complete arguments. A `tool-returned`
+  not record message bodies, invite credentials, or other complete arguments. The random salt
+  prevents practical dictionary recovery of low-entropy inputs while preserving correlation within
+  one process lifetime; hashes intentionally change after restart. A `tool-returned`
   outcome means the MCP tool returned to its caller; it does not claim that an asynchronously
   queued Discord mutation later succeeded. Use readback for consequential writes. The active file rotates to one `.1`
   backup before the next append would exceed `DISCORD_MCP_AUDIT_MAX_BYTES` (10 MiB by default),

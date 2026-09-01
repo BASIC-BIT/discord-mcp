@@ -99,7 +99,7 @@ public class McpBearerAuthConfig {
         private final byte[] expected;
 
         BearerFilter(String token) {
-            this.expected = token == null ? null : token.getBytes(StandardCharsets.UTF_8);
+            this.expected = token == null ? null : sha256(token);
         }
 
         @Override
@@ -113,9 +113,7 @@ public class McpBearerAuthConfig {
             int separator = authorization == null ? -1 : authorization.indexOf(' ');
             boolean bearerScheme = separator > 0
                     && authorization.substring(0, separator).equalsIgnoreCase("Bearer");
-            byte[] actual = bearerScheme
-                    ? authorization.substring(separator + 1).getBytes(StandardCharsets.UTF_8)
-                    : new byte[0];
+            byte[] actual = sha256(bearerScheme ? authorization.substring(separator + 1) : "");
             if (!MessageDigest.isEqual(expected, actual)) {
                 response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
                 response.setHeader("WWW-Authenticate", "Bearer");
@@ -130,6 +128,15 @@ public class McpBearerAuthConfig {
                     && "/actuator/health".equals(request.getServletPath())
                     && (request.getPathInfo() == null || request.getPathInfo().isEmpty())
                     && expectedRawUri.equals(request.getRequestURI());
+        }
+
+        private static byte[] sha256(String value) {
+            try {
+                return MessageDigest.getInstance("SHA-256")
+                        .digest(value.getBytes(StandardCharsets.UTF_8));
+            } catch (java.security.NoSuchAlgorithmException impossible) {
+                throw new IllegalStateException(impossible);
+            }
         }
     }
 }

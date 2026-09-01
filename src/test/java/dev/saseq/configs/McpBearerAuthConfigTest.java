@@ -32,6 +32,20 @@ class McpBearerAuthConfigTest {
     }
 
     @Test
+    void wrongLengthBearerTokenIsRejected() throws Exception {
+        var filter = new McpBearerAuthConfig.BearerFilter(TOKEN);
+        var request = new MockHttpServletRequest("POST", "/mcp");
+        request.addHeader("Authorization", "Bearer short");
+        var response = new MockHttpServletResponse();
+        var chain = new MockFilterChain();
+
+        filter.doFilter(request, response, chain);
+
+        assertThat(response.getStatus()).isEqualTo(401);
+        assertThat(chain.getRequest()).isNull();
+    }
+
+    @Test
     void exactBearerTokenPasses() throws Exception {
         var filter = new McpBearerAuthConfig.BearerFilter(TOKEN);
         var request = new MockHttpServletRequest("POST", "/mcp");

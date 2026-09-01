@@ -100,25 +100,22 @@ class McpToolPolicyTest {
     }
 
     @Test
-    void defaultGuildDoesNotAuthorizeToolWithoutGuildTarget() {
+    void defaultGuildDoesNotMakeAnExplicitGlobalTargetToolSafe() {
         McpToolPolicy policy = new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
                 ALLOWED_GUILD, "send_webhook_message", ALLOWED_GUILD, "allow", "", "10485760");
 
-        assertThatThrownBy(() -> only(policy.apply(provider("send_webhook_message", new AtomicInteger())))
-                .call("{\"webhookUrl\":\"https://discord.com/api/webhooks/1/x\"}"))
-                .isInstanceOf(SecurityException.class)
-                .hasMessageContaining("unavailable or outside");
+        assertThatThrownBy(() -> policy.apply(provider("send_webhook_message", new AtomicInteger())))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("cannot prove guild scope");
     }
 
     @Test
-    void undeclaredGuildIdCannotBeUsedAsAWebhookDecoy() {
+    void explicitGlobalTargetToolFailsBeforeArgumentsCanClaimAGuild() {
         McpToolPolicy policy = policy(mock(JDA.class), ALLOWED_GUILD, "send_webhook_message", "allow", "");
 
-        assertThatThrownBy(() -> only(policy.apply(provider("send_webhook_message", new AtomicInteger())))
-                .call("{\"webhookUrl\":\"https://discord.com/api/webhooks/1/x\","
-                        + "\"message\":\"x\",\"guildId\":\"" + ALLOWED_GUILD + "\"}"))
-                .isInstanceOf(SecurityException.class)
-                .hasMessageContaining("undeclared arguments");
+        assertThatThrownBy(() -> policy.apply(provider("send_webhook_message", new AtomicInteger())))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("cannot prove guild scope");
     }
 
     @Test
@@ -375,7 +372,7 @@ class McpToolPolicyTest {
 
         assertThat(Files.readString(audit))
                 .contains("\"outcome\":\"denied-invalid-arguments\"")
-                .contains("\"argumentsSha256\"")
+                .contains("\"argumentsSaltedSha256\"")
                 .contains("\"errorType\":\"IllegalArgumentException\"")
                 .doesNotContain("secret copy");
     }
@@ -393,7 +390,7 @@ class McpToolPolicyTest {
 
         assertThat(Files.readString(audit))
                 .contains("\"outcome\":\"denied-invalid-arguments\"")
-                .contains("\"argumentsSha256\"")
+                .contains("\"argumentsSaltedSha256\"")
                 .doesNotContain("not-an-object");
     }
 
@@ -477,17 +474,21 @@ class McpToolPolicyTest {
     @Test
     void auditRecordsIdentifiersAndHashButNotMessageBody() throws Exception {
         Path audit = tempDir.resolve("audit.jsonl");
-        McpToolPolicy policy = policy(jdaWithChannel(), ALLOWED_GUILD, "send_message", "preview",
+        McpToolPolicy policy = policy(jdaWithChannel(), ALLOWED_GUILD, "send_message", "allow",
                 audit.toString());
 
         only(policy.apply(provider("send_message", new AtomicInteger())))
                 .call("{\"channelId\":\"32345678901234567\",\"message\":\"secret copy\"}");
 
-        String line = Files.readString(audit);
-        assertThat(line).contains("\"tool\":\"send_message\"")
+        var lines = Files.readAllLines(audit);
+        var mapper = new ObjectMapper();
+        String startedHash = mapper.readTree(lines.get(0)).get("argumentsSaltedSha256").asText();
+        String terminalHash = mapper.readTree(lines.get(1)).get("argumentsSaltedSha256").asText();
+        assertThat(String.join("\n", lines)).contains("\"tool\":\"send_message\"")
                 .contains("\"channelId\":\"32345678901234567\"")
-                .contains("argumentsSha256")
+                .contains("argumentsSaltedSha256")
                 .doesNotContain("secret copy");
+        assertThat(startedHash).hasSize(64).isEqualTo(terminalHash);
     }
 
     @Test
@@ -499,10 +500,23 @@ class McpToolPolicyTest {
         only(policy.apply(provider("get_invite_details", new AtomicInteger())))
                 .call("{\"inviteCode\":\"https://discord.gg/still-secret\"}");
 
+        String arguments = "{\"inviteCode\":\"https://discord.gg/still-secret\"}";
+        var lines = Files.readAllLines(audit);
+        String firstHash = new ObjectMapper().readTree(lines.get(0))
+                .get("argumentsSaltedSha256").asText();
+        Path secondAudit = tempDir.resolve("second-audit.jsonl");
+        McpToolPolicy secondPolicy = policy(mock(JDA.class), "", "get_invite_details", "allow",
+                secondAudit.toString());
+        only(secondPolicy.apply(provider("get_invite_details", new AtomicInteger())))
+                .call(arguments);
+        String secondHash = new ObjectMapper().readTree(Files.readAllLines(secondAudit).get(0))
+                .get("argumentsSaltedSha256").asText();
+
         assertThat(Files.readString(audit))
-                .contains("argumentsSha256")
+                .contains("argumentsSaltedSha256")
                 .doesNotContain("still-secret")
                 .doesNotContain("inviteCode");
+        assertThat(firstHash).hasSize(64).isNotEqualTo(secondHash);
     }
 
     @Test
@@ -510,6 +524,7 @@ class McpToolPolicyTest {
         Path audit = tempDir.resolve("audit.jsonl");
         McpToolPolicy policy = policy(jdaWithChannel(DENIED_GUILD), ALLOWED_GUILD,
                 "read_messages", "allow", audit.toString());
+        Files.delete(audit);
         Files.createDirectory(audit);
 
         assertThatThrownBy(() -> only(policy.apply(provider("read_messages", new AtomicInteger())))
@@ -521,18 +536,18 @@ class McpToolPolicyTest {
     @Test
     void undeclaredArgumentDenialIsAuditedWithoutSuppliedValues() throws Exception {
         Path audit = tempDir.resolve("audit.jsonl");
-        McpToolPolicy policy = new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
-                ALLOWED_GUILD, "send_webhook_message", "", "allow", audit.toString(), "10485760");
+        McpToolPolicy policy = new McpToolPolicy(jdaWithChannel(), new ObjectMapper(),
+                ALLOWED_GUILD, "send_message", "", "allow", audit.toString(), "10485760");
 
-        assertThatThrownBy(() -> only(policy.apply(provider("send_webhook_message", new AtomicInteger())))
-                .call("{\"webhookUrl\":\"https://discord.com/api/webhooks/1/secret\","
-                        + "\"guildId\":\"" + ALLOWED_GUILD + "\"}"))
+        assertThatThrownBy(() -> only(policy.apply(provider("send_message", new AtomicInteger())))
+                .call("{\"channelId\":\"32345678901234567\",\"message\":\"secret\","
+                        + "\"webhookUrl\":\"https://discord.com/api/webhooks/1/secret\"}"))
                 .isInstanceOf(SecurityException.class)
                 .hasMessageContaining("undeclared arguments");
 
         assertThat(Files.readString(audit))
                 .contains("\"outcome\":\"denied-undeclared-argument\"")
-                .contains("\"argumentsSha256\":")
+                .contains("\"argumentsSaltedSha256\":")
                 .doesNotContain("webhookUrl")
                 .doesNotContain("\"guildId\":")
                 .doesNotContain(ALLOWED_GUILD)
@@ -707,16 +722,28 @@ class McpToolPolicyTest {
     @Test
     void readOnlyCallFailsClosedWhenStartAuditFails() throws Exception {
         Path audit = tempDir.resolve("audit.jsonl");
-        Files.createDirectory(audit);
         AtomicInteger calls = new AtomicInteger();
         McpToolPolicy policy = policy(jdaWithChannel(), ALLOWED_GUILD, "read_messages", "allow",
                 audit.toString());
+        Files.delete(audit);
+        Files.createDirectory(audit);
 
         assertThatThrownBy(() -> only(policy.apply(provider("read_messages", calls)))
                 .call("{\"channelId\":\"32345678901234567\"}"))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("Could not append");
         assertThat(calls).hasValue(0);
+    }
+
+    @Test
+    void auditPathMustBeAppendableAtStartup() throws Exception {
+        Path audit = tempDir.resolve("audit.jsonl");
+        Files.createDirectory(audit);
+
+        assertThatThrownBy(() -> policy(jdaWithChannel(), ALLOWED_GUILD,
+                "read_messages", "allow", audit.toString()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("not appendable");
     }
 
     @Test
@@ -788,15 +815,15 @@ class McpToolPolicyTest {
         McpToolPolicy policy = policy(jda, ALLOWED_GUILD, "", "preview", "");
 
         assertThat(policy.apply(upstream).getToolCallbacks())
-                .hasSameSizeAs(upstream.getToolCallbacks());
+                .hasSize(upstream.getToolCallbacks().length
+                        - McpToolPolicy.globalTargetToolNames().size())
+                .extracting(callback -> callback.getToolDefinition().name())
+                .doesNotContainAnyElementsOf(McpToolPolicy.globalTargetToolNames());
     }
 
     @Test
     void globalTargetToolsCannotAcquireGuildDefaultAuthorization() {
-        Set<String> globalTargetTools = Set.of(
-                "delete_webhook", "send_webhook_message", "delete_invite", "get_invite_details",
-                "send_private_message", "edit_private_message", "delete_private_message",
-                "read_private_messages");
+        Set<String> globalTargetTools = McpToolPolicy.globalTargetToolNames();
         Map<String, Set<String>> parametersByTool = DiscordMcpConfig.toolServiceTypes().stream()
                 .flatMap(type -> Arrays.stream(type.getDeclaredMethods()))
                 .filter(method -> method.getAnnotation(Tool.class) != null)
@@ -810,6 +837,28 @@ class McpToolPolicyTest {
         globalTargetTools.forEach(tool -> assertThat(parametersByTool.get(tool))
                 .as(tool + " must remain globally unresolvable under a guild allowlist")
                 .doesNotContain("guildId"));
+    }
+
+    @Test
+    void guildAllowlistHidesImplicitGlobalTargetTools() {
+        McpToolPolicy policy = policy(jdaWithChannel(), ALLOWED_GUILD, "", "allow", "");
+        ToolCallbackProvider raw = ToolCallbackProvider.from(
+                callback("read_messages", new AtomicInteger()),
+                callback("get_invite_details", new AtomicInteger()));
+
+        assertThat(policy.apply(raw).getToolCallbacks())
+                .extracting(callback -> callback.getToolDefinition().name())
+                .containsExactly("read_messages");
+    }
+
+    @Test
+    void guildAllowlistRejectsExplicitGlobalTargetTools() {
+        McpToolPolicy policy = policy(jdaWithChannel(), ALLOWED_GUILD,
+                "get_invite_details", "allow", "");
+
+        assertThatThrownBy(() -> policy.apply(provider("get_invite_details", new AtomicInteger())))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("cannot prove guild scope");
     }
 
     private static McpToolPolicy policy(JDA jda, String guilds, String tools, String mode, String audit) {
