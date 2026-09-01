@@ -241,7 +241,7 @@ class McpBearerAuthConfigTest {
 
         assertThatThrownBy(() -> new McpBearerAuthConfig().mcpBearerAuthSettings(
                 audit.toString(), "/mcp", "STREAMABLE", "servlet",
-                "", "", audit.toString()))
+                "", "", "  " + audit + "  "))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("must differ from DISCORD_MCP_AUDIT_FILE");
 

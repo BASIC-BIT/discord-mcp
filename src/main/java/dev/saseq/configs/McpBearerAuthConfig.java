@@ -149,7 +149,7 @@ public class McpBearerAuthConfig {
         }
         try {
             Path tokenPath = Path.of(configuredTokenFile).toAbsolutePath().normalize();
-            Path auditPath = Path.of(configuredAuditFile).toAbsolutePath().normalize();
+            Path auditPath = Path.of(configuredAuditFile.strip()).toAbsolutePath().normalize();
             Path auditName = auditPath.getFileName();
             if (auditName == null) {
                 return;
