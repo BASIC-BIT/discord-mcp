@@ -160,6 +160,11 @@ public final class McpToolPolicy {
                 }
             }
             try {
+                requireUsableAuditRotationTarget(this.auditFile);
+            } catch (IOException error) {
+                throw startupError("DISCORD_MCP_AUDIT_FILE rotation target must be a non-symlink regular file");
+            }
+            try {
                 probeAuditFile(this.auditFile, true);
             } catch (IOException error) {
                 throw startupError("DISCORD_MCP_AUDIT_FILE is not appendable");
@@ -210,6 +215,17 @@ public final class McpToolPolicy {
                 StandardOpenOption.WRITE, StandardOpenOption.APPEND, LinkOption.NOFOLLOW_LINKS);
         try (var ignored = Files.newByteChannel(auditFile, appendOptions)) {
             // Open-and-close probes append permission without altering existing data.
+        }
+    }
+
+    private static void requireUsableAuditRotationTarget(Path auditFile) throws IOException {
+        Path rotated = auditFile.resolveSibling(auditFile.getFileName() + ".1");
+        if (!Files.exists(rotated, LinkOption.NOFOLLOW_LINKS)) {
+            return;
+        }
+        if (Files.isSymbolicLink(rotated)
+                || !Files.isRegularFile(rotated, LinkOption.NOFOLLOW_LINKS)) {
+            throw new IOException("audit rotation target is not a replaceable regular file");
         }
     }
 
@@ -583,6 +599,7 @@ public final class McpToolPolicy {
 
     private void rotateAuditIfNeeded(int nextLineBytes) throws IOException {
         Path rotated = auditFile.resolveSibling(auditFile.getFileName() + ".1");
+        requireUsableAuditRotationTarget(auditFile);
         if (Files.exists(rotated)) {
             long rotatedBytes = Files.size(rotated);
             if (rotatedBytes > auditMaxBytes) {

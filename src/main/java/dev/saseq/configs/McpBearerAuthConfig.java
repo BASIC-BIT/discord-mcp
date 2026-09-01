@@ -17,6 +17,7 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 
@@ -38,6 +39,7 @@ public class McpBearerAuthConfig {
         requireCredentialIsolation(tokenFile, fileRoot, "DISCORD_MCP_FILE_ROOT");
         requireCredentialIsolation(tokenFile, downloadRoot, "DISCORD_MCP_DOWNLOAD_ROOT");
         requireCredentialAuditIsolation(tokenFile, auditFile);
+        requireSingleLinkCredential(tokenFile);
         String token = readToken(tokenFile);
         if (token != null && !"STREAMABLE".equalsIgnoreCase(protocol)) {
             throw startupError("Bearer authentication supports only the STREAMABLE HTTP protocol; "
@@ -161,6 +163,30 @@ public class McpBearerAuthConfig {
             }
         } catch (InvalidPathException unusablePath) {
             // The dedicated readers report an invalid setting with its owning variable name.
+        }
+    }
+
+    private static void requireSingleLinkCredential(String configuredTokenFile) {
+        if (configuredTokenFile == null || configuredTokenFile.isBlank()) {
+            return;
+        }
+        Path tokenPath;
+        try {
+            tokenPath = Path.of(configuredTokenFile).toRealPath();
+        } catch (IOException | InvalidPathException unusableToken) {
+            // readToken reports the owning setting and fails startup below.
+            return;
+        }
+        if (!tokenPath.getFileSystem().supportedFileAttributeViews().contains("unix")) {
+            return;
+        }
+        try {
+            Object value = Files.getAttribute(tokenPath, "unix:nlink", LinkOption.NOFOLLOW_LINKS);
+            if (!(value instanceof Number linkCount) || linkCount.longValue() != 1L) {
+                throw startupError("DISCORD_MCP_ACCESS_TOKEN_FILE must not have additional hard links");
+            }
+        } catch (IOException error) {
+            throw startupError("Could not verify DISCORD_MCP_ACCESS_TOKEN_FILE hard-link count", error);
         }
     }
 

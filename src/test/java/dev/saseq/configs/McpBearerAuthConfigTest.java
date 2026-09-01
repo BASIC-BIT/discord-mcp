@@ -1,6 +1,7 @@
 package dev.saseq.configs;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Assumptions;
 import org.springframework.mock.web.MockFilterChain;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
@@ -253,6 +254,27 @@ class McpBearerAuthConfigTest {
                 "", uploads.toString()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("outside DISCORD_MCP_DOWNLOAD_ROOT");
+    }
+
+    @Test
+    void bearerCredentialMustNotHaveAdditionalHardLinksWhenLinkCountsAreAvailable() throws Exception {
+        Assumptions.assumeTrue(
+                tempDir.getFileSystem().supportedFileAttributeViews().contains("unix"),
+                "unix:nlink is unavailable on this filesystem");
+        Path uploads = Files.createDirectories(tempDir.resolve("uploads"));
+        Path tokenFile = tempDir.resolve("access-token");
+        Files.writeString(tokenFile, TOKEN);
+        try {
+            Files.createLink(uploads.resolve("token-alias"), tokenFile);
+        } catch (UnsupportedOperationException | SecurityException | java.io.IOException error) {
+            Assumptions.abort("hard links are unavailable on this filesystem");
+        }
+
+        assertThatThrownBy(() -> settings(
+                tokenFile.toString(), "/mcp", "STREAMABLE", "servlet",
+                uploads.toString(), ""))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("additional hard links");
     }
 
     @Test

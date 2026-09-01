@@ -977,6 +977,18 @@ class McpToolPolicyTest {
     }
 
     @Test
+    void auditRotationPathMustBeARegularFileAtStartup() throws Exception {
+        Path audit = tempDir.resolve("audit.jsonl");
+        Files.createDirectory(tempDir.resolve("audit.jsonl.1"));
+
+        assertThatThrownBy(() -> policy(jdaWithChannel(), ALLOWED_GUILD,
+                "read_messages", "allow", audit.toString()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("rotation target")
+                .hasMessageContaining("regular file");
+    }
+
+    @Test
     void auditPathMustNotBeASymbolicLink() throws Exception {
         Path target = tempDir.resolve("audit-target.jsonl");
         Path audit = tempDir.resolve("audit-link.jsonl");

@@ -268,7 +268,10 @@ schema are rejected rather than ignored. Audit-only deployments retain upstream 
   management servlet context would be outside this filter.
   Keep the bearer file outside `DISCORD_MCP_FILE_ROOT` and `DISCORD_MCP_DOWNLOAD_ROOT`;
   startup rejects lexical and resolved containment so tools cannot read or overwrite it. The token
-  must use printable ASCII without whitespace so it can be represented in an HTTP header.
+  must use printable ASCII without whitespace so it can be represented in an HTTP header. On
+  filesystems that expose `unix:nlink`, startup also rejects bearer files with additional hard
+  links so an in-root alias cannot bypass path containment. Deployment launchers should enforce
+  the same invariant natively when the runtime filesystem does not expose that attribute.
 - `DISCORD_MCP_AUDIT_FILE`: append-only JSONL tool audit. It records tool, outcome, write mode,
   a per-process salted arguments hash, and a per-call invocation ID that pairs `started` with its
   terminal record under concurrency. When deployment policy is active, it also records resolved
@@ -290,8 +293,9 @@ schema are rejected rather than ignored. Audit-only deployments retain upstream 
   audit file outside `DISCORD_MCP_FILE_ROOT` and `DISCORD_MCP_DOWNLOAD_ROOT` so an MCP tool cannot
   read or write the audit trail. Startup rejects either configured path when its lexical or resolved
   location contains the audit file.
-  The sink must be a regular file, not a symbolic link, device, or FIFO, and neither it nor its `.1`
-  rotation may be the configured `logging.file.name`; startup rejects lexical and resolved aliases. On POSIX
+  The sink and any existing `.1` rotation target must be regular files, not symbolic links,
+  directories, devices, or FIFOs, and neither may be the configured `logging.file.name`; startup
+  rejects lexical and resolved aliases. On POSIX
   filesystems, startup creates or tightens the active audit file to owner read/write (`0600`) and
   creates each post-rotation replacement with those permissions. Permission changes made by an
   operator after startup, such as group read for a log collector, remain intact on later appends.
