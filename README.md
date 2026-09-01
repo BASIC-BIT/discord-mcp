@@ -228,6 +228,9 @@ schema are rejected rather than ignored. Audit-only deployments retain upstream 
   allowlist also removes webhook URL/ID operations, invite-code operations, and private-message
   operations from tool discovery because those global targets cannot prove guild scope, even when
   `DISCORD_MCP_ALLOWED_TOOLS` is unset.
+  Every other exported tool must declare `guildId` or a reviewed guild-channel target in its
+  generated schema; otherwise allowlisted startup fails instead of advertising a tool that can
+  never resolve its guild.
   Upgrade note: replace any copied `OPTIONAL_DEFAULT_SERVER_ID` value before enabling policy;
   policy-active startup rejects a non-snowflake `DISCORD_GUILD_ID` instead of ignoring it.
 - `DISCORD_MCP_ALLOWED_TOOLS`: comma-separated exact tool names. Unknown names fail startup and

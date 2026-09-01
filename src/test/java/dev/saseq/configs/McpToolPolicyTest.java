@@ -1439,6 +1439,31 @@ class McpToolPolicyTest {
                 .hasMessageContaining("cannot prove guild scope");
     }
 
+    @Test
+    void guildAllowlistRejectsExportedToolsWithoutAGuildResolvableTargetAtStartup() {
+        ToolDefinition definition = ToolDefinition.builder().name("future_message_tool")
+                .description("test").inputSchema(schema("messageId")).build();
+        ToolCallback raw = new ToolCallback() {
+            @Override
+            public ToolDefinition getToolDefinition() {
+                return definition;
+            }
+
+            @Override
+            public String call(String arguments) {
+                throw new AssertionError("startup must reject this tool before it can be called");
+            }
+        };
+        McpToolPolicy policy = policy(mock(JDA.class), ALLOWED_GUILD,
+                "future_message_tool", "allow", "");
+
+        assertThatThrownBy(() -> policy.apply(ToolCallbackProvider.from(raw)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("future_message_tool")
+                .hasMessageContaining("declares no guild-resolvable target")
+                .hasMessageContaining("DISCORD_MCP_ALLOWED_GUILDS");
+    }
+
     private static McpToolPolicy policy(JDA jda, String guilds, String tools, String mode, String audit) {
         return policy(jda, guilds, tools, mode, audit, "");
     }

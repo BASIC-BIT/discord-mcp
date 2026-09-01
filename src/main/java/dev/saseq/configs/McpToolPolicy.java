@@ -309,6 +309,14 @@ public final class McpToolPolicy {
             // profiles keep upstream argument handling and cannot be broken by schema drift.
             this.declaredArguments = policyActive
                     ? schemaProperties(delegate.getToolDefinition()) : Set.of();
+            if (!allowedGuilds.isEmpty()
+                    && !this.declaredArguments.contains("guildId")
+                    && this.declaredArguments.stream()
+                            .noneMatch(McpToolPolicy::isGuildChannelArgument)) {
+                throw startupError("Tool " + delegate.getToolDefinition().name()
+                        + " declares no guild-resolvable target and cannot be exported under "
+                        + "DISCORD_MCP_ALLOWED_GUILDS");
+            }
         }
 
         @Override
