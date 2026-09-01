@@ -342,41 +342,49 @@ public final class McpToolPolicy {
                 guildIds = resolveGuildIds(parsed, declaredArguments, policyActive,
                         !allowedGuilds.isEmpty());
             } catch (IllegalArgumentException error) {
-                auditBestEffort(tool, "denied-invalid-target", invocationId, Set.of(), parsed,
+                auditBestEffort(tool, "denied-invalid-target", invocationId, Set.of(),
+                        auditArgumentIds(parsed),
                         argumentsSaltedSha256, error.getClass().getSimpleName());
                 LOGGER.warn("Discord MCP policy rejected target argument type for tool {}: {}",
                         tool, error.getMessage());
                 throw error;
             } catch (SecurityException error) {
-                auditBestEffort(tool, "denied-invalid-target", invocationId, Set.of(), parsed,
+                auditBestEffort(tool, "denied-invalid-target", invocationId, Set.of(),
+                        auditArgumentIds(parsed),
                         argumentsSaltedSha256, error.getClass().getSimpleName());
                 LOGGER.warn("Discord MCP policy rejected target resolution for tool {}: {}",
                         tool, error.getMessage());
                 throw new SecurityException(TARGET_ACCESS_DENIED);
             }
-            enforceGuilds(tool, invocationId, guildIds, parsed, argumentsSaltedSha256);
+            ObjectNode capturedArgumentIds = auditArgumentIds(parsed);
+            enforceGuilds(tool, invocationId, guildIds, capturedArgumentIds,
+                    argumentsSaltedSha256);
 
             if (writeMode == WriteMode.PREVIEW && !READ_ONLY_TOOLS.contains(tool)) {
-                audit(tool, "preview", invocationId, guildIds, parsed,
+                audit(tool, "preview", invocationId, guildIds, capturedArgumentIds,
                         argumentsSaltedSha256, null);
                 return "WRITE_PREVIEW: This deployment runs in preview mode; " + tool
                         + " was not called, and retrying here will produce the same result. Arguments: "
                         + previewArguments(argumentsForHash, parsed);
             }
 
-            audit(tool, "started", invocationId, guildIds, parsed,
+            // Authorization and preview are the only consumers of the full parsed tree. Retain
+            // only bounded IDs across the delegate call so large fileData/message payloads do not
+            // double peak heap for the duration of a network operation.
+            parsed = null;
+            audit(tool, "started", invocationId, guildIds, capturedArgumentIds,
                     argumentsSaltedSha256, null);
             try {
                 String result = toolContext == null
                         ? delegate.call(argumentsForDelegate)
                         : delegate.call(argumentsForDelegate, toolContext);
                 String completionWarning = auditBestEffort(
-                        tool, "tool-returned", invocationId, guildIds, parsed,
+                        tool, "tool-returned", invocationId, guildIds, capturedArgumentIds,
                         argumentsSaltedSha256, null);
                 return completionWarning == null
                         ? result : result + System.lineSeparator() + completionWarning;
             } catch (RuntimeException error) {
-                auditBestEffort(tool, "failed", invocationId, guildIds, parsed,
+                auditBestEffort(tool, "failed", invocationId, guildIds, capturedArgumentIds,
                         argumentsSaltedSha256, error.getClass().getSimpleName());
                 throw error;
             }
@@ -461,28 +469,42 @@ public final class McpToolPolicy {
     }
 
     private void enforceGuilds(String tool, String invocationId, Set<String> guildIds,
-                               JsonNode arguments, String argumentsSaltedSha256) {
+                               ObjectNode argumentIds, String argumentsSaltedSha256) {
         if (allowedGuilds.isEmpty()) {
             return;
         }
         if (guildIds.isEmpty()) {
-            auditBestEffort(tool, "denied-unresolved-guild", invocationId, guildIds, arguments,
+            auditBestEffort(tool, "denied-unresolved-guild", invocationId, guildIds, argumentIds,
                     argumentsSaltedSha256, null);
             throw new SecurityException(TARGET_ACCESS_DENIED);
         }
         Set<String> denied = new LinkedHashSet<>(guildIds);
         denied.removeAll(allowedGuilds);
         if (!denied.isEmpty()) {
-            auditBestEffort(tool, "denied-guild", invocationId, guildIds, arguments,
+            auditBestEffort(tool, "denied-guild", invocationId, guildIds, argumentIds,
                     argumentsSaltedSha256, null);
             throw new SecurityException(TARGET_ACCESS_DENIED);
         }
     }
 
+    private ObjectNode auditArgumentIds(JsonNode arguments) {
+        var argumentIds = objectMapper.createObjectNode();
+        if (arguments == null || !policyActive) {
+            return argumentIds;
+        }
+        arguments.properties().forEach(entry -> {
+            if (entry.getKey().matches("(?i).*id$")
+                    && entry.getValue().isValueNode() && !entry.getValue().isNull()) {
+                argumentIds.put(entry.getKey(), boundedAuditIdentifier(entry.getValue().asText()));
+            }
+        });
+        return argumentIds;
+    }
+
     // Expected operator traffic is low. Serializing the two append operations keeps each JSONL
     // record and size-based rotation atomic without retaining a file handle across rotations.
     private synchronized void audit(String tool, String outcome, String invocationId,
-                                    Set<String> guildIds, JsonNode arguments,
+                                    Set<String> guildIds, ObjectNode argumentIds,
                                     String argumentsSaltedSha256, String errorType) {
         if (auditFile == null) {
             return;
@@ -496,18 +518,8 @@ public final class McpToolPolicy {
             event.put("writeMode", writeMode.name().toLowerCase(Locale.ROOT));
             var guildArray = event.putArray("guildIds");
             guildIds.forEach(id -> guildArray.add(boundedAuditIdentifier(id)));
-            if (arguments != null && policyActive) {
-                var argumentIds = objectMapper.createObjectNode();
-                arguments.properties().forEach(entry -> {
-                    if (entry.getKey().matches("(?i).*id$")
-                            && entry.getValue().isValueNode() && !entry.getValue().isNull()) {
-                        argumentIds.put(entry.getKey(),
-                                boundedAuditIdentifier(entry.getValue().asText()));
-                    }
-                });
-                if (!argumentIds.isEmpty()) {
-                    event.set("argumentIds", argumentIds);
-                }
+            if (argumentIds != null && !argumentIds.isEmpty()) {
+                event.set("argumentIds", argumentIds);
             }
             if (argumentsSaltedSha256 != null) {
                 event.put("argumentsSaltedSha256", argumentsSaltedSha256);
@@ -532,14 +544,14 @@ public final class McpToolPolicy {
     }
 
     private String auditBestEffort(String tool, String outcome, String invocationId,
-                                   Set<String> guildIds, JsonNode arguments,
+                                   Set<String> guildIds, ObjectNode argumentIds,
                                    String argumentsSaltedSha256, String errorType) {
         if (auditFile == null && outcome.startsWith("denied-")) {
             LOGGER.warn("Discord MCP policy denied tool {} ({}).", tool, outcome);
             return null;
         }
         try {
-            audit(tool, outcome, invocationId, guildIds, arguments,
+            audit(tool, outcome, invocationId, guildIds, argumentIds,
                     argumentsSaltedSha256, errorType);
             return null;
         } catch (RuntimeException auditError) {

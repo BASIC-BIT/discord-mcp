@@ -1043,6 +1043,21 @@ class McpToolPolicyTest {
     }
 
     @Test
+    void conventionallyNamedReadToolsStayClassifiedAsReadOnly() {
+        Set<String> conventionallyReadOnly = DiscordMcpConfig.toolServiceTypes().stream()
+                .flatMap(type -> Arrays.stream(type.getDeclaredMethods()))
+                .map(method -> method.getAnnotation(Tool.class))
+                .filter(annotation -> annotation != null)
+                .map(Tool::name)
+                .filter(name -> name.startsWith("find_") || name.startsWith("get_")
+                        || name.startsWith("list_") || name.startsWith("read_")
+                        || name.startsWith("search_"))
+                .collect(Collectors.toSet());
+
+        assertThat(McpToolPolicy.readOnlyToolNames()).containsAll(conventionallyReadOnly);
+    }
+
+    @Test
     void everyToolParameterHasAReviewedGuildTargetClassification() {
         Set<String> reviewedChannelParameters = Set.of("categoryId", "channelId", "postId");
         Set<String> reviewedNonChannelParameters = Set.of(

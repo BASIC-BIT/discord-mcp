@@ -246,8 +246,10 @@ schema are rejected rather than ignored. Audit-only deployments retain upstream 
   `create_invite` are the write-side equivalents; allowing them lets their results return new
   credentials after Preview is changed to `allow`.
   Policy-active parsing retains the raw request while validating a JSON tree before the delegate
-  binds it. A deployment that exports `send_file` at its 50 MiB maximum must budget heap for
-  multiple in-memory representations, or omit that tool when running with a smaller heap.
+  binds it. Policy authorization releases the parsed payload tree before the delegate performs its
+  network call, retaining only bounded audit identifiers. A deployment that exports `send_file` at
+  its 50 MiB maximum must still budget heap for the raw request, delegate binding, and base64 decode,
+  or omit that tool when running with a smaller heap.
 - `DISCORD_EXPECTED_BOT_ID`: refuses startup when a valid token authenticates the wrong bot.
 - `DISCORD_MCP_ACCESS_TOKEN_FILE`: HTTP-only bearer credential, read from a mounted file. When
   set under the STREAMABLE protocol, the configured MCP endpoint returns `401` unless the request
