@@ -11,6 +11,10 @@ services:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-http}
       DISCORD_TOKEN: ${DISCORD_TOKEN}
       DISCORD_GUILD_ID: ${DISCORD_GUILD_ID:-}
+      DISCORD_MCP_ALLOWED_GUILDS: ${DISCORD_MCP_ALLOWED_GUILDS:-}
+      DISCORD_MCP_ALLOWED_TOOLS: ${DISCORD_MCP_ALLOWED_TOOLS:-}
+      DISCORD_EXPECTED_BOT_ID: ${DISCORD_EXPECTED_BOT_ID:-}
+      DISCORD_MCP_ENABLE_MESSAGE_CONTENT: ${DISCORD_MCP_ENABLE_MESSAGE_CONTENT:-false}
       # Unset by default, which leaves download_attachment refusing. Set it to the
       # container path below to enable downloads; the named volume is what keeps them
       # when the container is recreated.

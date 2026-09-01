@@ -67,16 +67,26 @@ public class DiscordMcpConfig {
 
     @Bean
     public JDA jda(@Value("${DISCORD_TOKEN:}") String token,
-                   @Value("${DISCORD_EXPECTED_BOT_ID:}") String expectedBotId)
+                   @Value("${DISCORD_EXPECTED_BOT_ID:}") String expectedBotId,
+                   @Value("${DISCORD_MCP_ENABLE_MESSAGE_CONTENT:false}")
+                   boolean enableMessageContent)
             throws InterruptedException {
         if (token == null || token.isEmpty()) {
             System.err.println("ERROR: The environment variable DISCORD_TOKEN is not set. Please set it to run the application properly.");
             System.exit(1);
         }
+        String normalizedExpectedBotId;
+        try {
+            normalizedExpectedBotId = normalizeExpectedBotId(expectedBotId);
+        } catch (IllegalArgumentException error) {
+            System.err.println("ERROR: " + error.getMessage());
+            System.exit(1);
+            throw error;
+        }
         JDA jda;
         try {
             jda = JDABuilder.createDefault(token)
-                    .enableIntents(requiredGatewayIntents())
+                    .enableIntents(requiredGatewayIntents(enableMessageContent))
                     .build()
                     .awaitReady();
         } catch (RuntimeException e) {
@@ -88,7 +98,7 @@ public class DiscordMcpConfig {
             System.exit(1);
             throw e; // unreachable (System.exit does not return), but required to satisfy the compiler
         }
-        if (!botIdMatches(expectedBotId, jda.getSelfUser().getId())) {
+        if (!botIdMatches(normalizedExpectedBotId, jda.getSelfUser().getId())) {
             jda.shutdownNow();
             System.err.println("ERROR: DISCORD_EXPECTED_BOT_ID does not match the authenticated bot.");
             System.exit(1);
@@ -116,14 +126,19 @@ public class DiscordMcpConfig {
         } else if (lower.contains("intent") || lower.contains("4014")) {
             System.err.println("  Likely cause: a privileged gateway intent is not enabled for this bot.");
             System.err.println("  Fix: in the Discord Developer Portal (Bot -> Privileged Gateway Intents), enable");
-            System.err.println("       'Server Members Intent' (GUILD_MEMBERS).");
+            System.err.println("       every privileged intent this deployment requests: Server Members Intent,");
+            System.err.println("       plus Message Content Intent when DISCORD_MCP_ENABLE_MESSAGE_CONTENT=true.");
         }
         System.err.println("  Details: " + details);
     }
 
     static boolean botIdMatches(String expectedBotId, String actualBotId) {
+        return expectedBotId == null || actualBotId.equals(expectedBotId);
+    }
+
+    static String normalizeExpectedBotId(String expectedBotId) {
         if (expectedBotId == null || expectedBotId.isBlank()) {
-            return true;
+            return null;
         }
         String normalized = expectedBotId.trim();
         if (!normalized.matches("\\d{17,20}")
@@ -131,14 +146,17 @@ public class DiscordMcpConfig {
             throw new IllegalArgumentException(
                     "DISCORD_EXPECTED_BOT_ID must be a nonzero 17-20 digit Discord snowflake");
         }
-        return actualBotId.equals(normalized);
+        return normalized;
     }
 
-    static Set<GatewayIntent> requiredGatewayIntents() {
-        return Set.of(
+    static Set<GatewayIntent> requiredGatewayIntents(boolean enableMessageContent) {
+        Set<GatewayIntent> intents = new java.util.HashSet<>(Set.of(
                 GatewayIntent.GUILD_MEMBERS,
                 GatewayIntent.GUILD_VOICE_STATES,
-                GatewayIntent.MESSAGE_CONTENT,
-                GatewayIntent.SCHEDULED_EVENTS);
+                GatewayIntent.SCHEDULED_EVENTS));
+        if (enableMessageContent) {
+            intents.add(GatewayIntent.MESSAGE_CONTENT);
+        }
+        return Set.copyOf(intents);
     }
 }

@@ -64,6 +64,10 @@ docker run -d -i \
   -e SPRING_PROFILES_ACTIVE \
   -e DISCORD_TOKEN \
   -e DISCORD_GUILD_ID \
+  -e DISCORD_MCP_ALLOWED_GUILDS \
+  -e DISCORD_MCP_ALLOWED_TOOLS \
+  -e DISCORD_EXPECTED_BOT_ID \
+  -e DISCORD_MCP_ENABLE_MESSAGE_CONTENT \
   -e DISCORD_MCP_DOWNLOAD_ROOT \
   -v discord-mcp-downloads:/var/lib/discord-mcp/downloads \
   saseq/discord-mcp:latest
@@ -210,9 +214,10 @@ that share one bot across multiple Discord servers can add narrow, application-e
   tools not named here are not exported to MCP clients.
 - `DISCORD_EXPECTED_BOT_ID`: refuses startup when a valid token authenticates a different bot.
 
-The bot configuration enables the privileged `GUILD_MEMBERS` and `MESSAGE_CONTENT` gateway
-intents because member lookup and exact message readback depend on them. Enable both in the
-Discord Developer Portal before starting the server.
+The bot configuration always enables privileged `GUILD_MEMBERS` because member lookup depends on
+it. Exact message content is opt-in for upgrade compatibility: set
+`DISCORD_MCP_ENABLE_MESSAGE_CONTENT=true` and enable Message Content Intent in the Discord
+Developer Portal before using content-dependent tools such as `read_messages` or `get_message`.
 
 These are capability limits, not an approval workflow. Human confirmation, previews, per-server
 write policy, source-of-truth handling, and post-write readback belong in the calling client or a
@@ -222,7 +227,11 @@ separate policy facade. Discord permissions remain the final platform boundary.
 export DISCORD_MCP_ALLOWED_GUILDS=123456789012345678,234567890123456789
 export DISCORD_MCP_ALLOWED_TOOLS=get_server_info,list_channels,read_messages,send_message,edit_message
 export DISCORD_EXPECTED_BOT_ID=345678901234567890
+export DISCORD_MCP_ENABLE_MESSAGE_CONTENT=true
 ```
+
+Docker Compose and the `docker run` example above pass these settings through. Defining them only
+in a host shell or `.env` file is not sufficient unless the container invocation propagates them.
 
 ### `DISCORD_MCP_FILE_ROOT`
 
