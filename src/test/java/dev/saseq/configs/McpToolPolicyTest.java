@@ -273,7 +273,10 @@ class McpToolPolicyTest {
     }
 
     @Test
-    void policyForwardsLargeArgumentsUnchangedAfterTargetValidation() {
+    void policyForwardsArgumentsAboveJacksonsDefaultStringLimitUnchanged() {
+        int maximumAdvertisedBase64Characters = ((50 * 1024 * 1024 + 2) / 3) * 4;
+        assertThat(McpToolPolicy.MAX_POLICY_JSON_STRING_CHARACTERS)
+                .isGreaterThanOrEqualTo(maximumAdvertisedBase64Characters);
         AtomicReference<String> received = new AtomicReference<>();
         ToolDefinition definition = ToolDefinition.builder().name("send_file")
                 .description("test").inputSchema(schema("channelId", "fileData")).build();
@@ -291,7 +294,7 @@ class McpToolPolicyTest {
         };
         McpToolPolicy policy = policy(jdaWithChannel(), ALLOWED_GUILD, "send_file", "allow", "");
         String arguments = "{\"channelId\":\"32345678901234567\",\"fileData\":\""
-                + "A".repeat(1_000_000) + "\"}";
+                + "A".repeat(20_000_004) + "\"}";
 
         assertThat(only(policy.apply(ToolCallbackProvider.from(raw))).call(arguments))
                 .isEqualTo("called");
@@ -922,14 +925,35 @@ class McpToolPolicyTest {
     }
 
     @Test
-    void auditPathMustBeAppendableAtStartup() throws Exception {
+    void auditPathMustBeARegularFileAtStartup() throws Exception {
         Path audit = tempDir.resolve("audit.jsonl");
         Files.createDirectory(audit);
 
         assertThatThrownBy(() -> policy(jdaWithChannel(), ALLOWED_GUILD,
                 "read_messages", "allow", audit.toString()))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("not appendable");
+                .hasMessageContaining("regular file");
+    }
+
+    @Test
+    void auditAndRotationFilesMustDifferFromTheOperationalLog() throws Exception {
+        Path audit = tempDir.resolve("audit.jsonl");
+        McpToolPolicy policy = policy(jdaWithChannel(), ALLOWED_GUILD,
+                "read_messages", "allow", audit.toString());
+
+        assertThatThrownBy(() -> policy.requireOperationalLogIsolation(audit.toString()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must differ from logging.file.name");
+
+        Path secondAudit = tempDir.resolve("second-audit.jsonl");
+        McpToolPolicy secondPolicy = policy(jdaWithChannel(), ALLOWED_GUILD,
+                "read_messages", "allow", secondAudit.toString());
+        Path rotated = secondAudit.resolveSibling(secondAudit.getFileName() + ".1");
+        Files.writeString(rotated, "existing audit evidence");
+
+        assertThatThrownBy(() -> secondPolicy.requireOperationalLogIsolation(rotated.toString()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must differ from logging.file.name");
     }
 
     @Test

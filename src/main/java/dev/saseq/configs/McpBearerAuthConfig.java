@@ -89,6 +89,10 @@ public class McpBearerAuthConfig {
                 throw startupError(
                         "DISCORD_MCP_ACCESS_TOKEN_FILE must contain exactly one token of at least 32 characters");
             }
+            if (token.codePoints().anyMatch(codePoint -> codePoint < 0x21 || codePoint > 0x7e)) {
+                throw startupError(
+                        "DISCORD_MCP_ACCESS_TOKEN_FILE must use printable ASCII characters valid in an HTTP header");
+            }
             return token;
         } catch (IOException | InvalidPathException error) {
             throw startupError("Could not read DISCORD_MCP_ACCESS_TOKEN_FILE", error);

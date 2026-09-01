@@ -1,6 +1,7 @@
 package dev.saseq.configs;
 
 import dev.saseq.services.LocalFileGuard;
+import tools.jackson.core.StreamReadConstraints;
 import tools.jackson.core.StreamReadFeature;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -52,6 +53,9 @@ public final class McpToolPolicy {
     private static final Logger LOGGER = LoggerFactory.getLogger(McpToolPolicy.class);
     private static final String TARGET_ACCESS_DENIED =
             "Discord target is unavailable or outside the allowed guild scope";
+    // A 50 MiB upload becomes 69,905,068 base64 characters. Preserve that advertised tool
+    // contract under policy while keeping the parser bounded above the default 20M ceiling.
+    static final int MAX_POLICY_JSON_STRING_CHARACTERS = 70_000_000;
     private static final Set<String> READ_ONLY_TOOLS = Set.of(
             "get_server_info", "find_channel", "list_channels", "get_channel_info",
             "find_category", "list_channels_in_category", "list_channel_permission_overwrites",
@@ -95,7 +99,12 @@ public final class McpToolPolicy {
             @Value("${DISCORD_MCP_DOWNLOAD_ROOT:}") String downloadRoot) {
         this.jda = jda;
         this.objectMapper = objectMapper;
-        this.argumentObjectMapper = objectMapper.rebuild()
+        var argumentFactory = objectMapper.tokenStreamFactory().rebuild()
+                .streamReadConstraints(StreamReadConstraints.builder()
+                        .maxStringLength(MAX_POLICY_JSON_STRING_CHARACTERS)
+                        .build())
+                .build();
+        this.argumentObjectMapper = new ObjectMapper(argumentFactory).rebuild()
                 .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
                 .build();
         this.allowedGuilds = parseCsv(allowedGuilds, "DISCORD_MCP_ALLOWED_GUILDS");
@@ -126,6 +135,9 @@ public final class McpToolPolicy {
             // The resolved check below still catches aliases and symlinks once the file exists.
             requireLexicalAuditIsolation(fileRoot, "DISCORD_MCP_FILE_ROOT");
             requireLexicalAuditIsolation(downloadRoot, "DISCORD_MCP_DOWNLOAD_ROOT");
+            if (Files.exists(this.auditFile) && !Files.isRegularFile(this.auditFile)) {
+                throw startupError("DISCORD_MCP_AUDIT_FILE must be a regular file");
+            }
             if (this.auditFile.getParent() != null) {
                 try {
                     Files.createDirectories(this.auditFile.getParent());
@@ -142,8 +154,39 @@ public final class McpToolPolicy {
             } catch (IOException error) {
                 throw startupError("DISCORD_MCP_AUDIT_FILE is not appendable");
             }
+            if (!Files.isRegularFile(this.auditFile)) {
+                throw startupError("DISCORD_MCP_AUDIT_FILE must be a regular file");
+            }
             requireResolvedAuditIsolation(fileRoot, "DISCORD_MCP_FILE_ROOT");
             requireResolvedAuditIsolation(downloadRoot, "DISCORD_MCP_DOWNLOAD_ROOT");
+        }
+    }
+
+    @Value("${logging.file.name:}")
+    void requireOperationalLogIsolation(String configuredLogFile) {
+        if (auditFile == null || configuredLogFile == null || configuredLogFile.isBlank()) {
+            return;
+        }
+        Path logFile;
+        try {
+            logFile = Path.of(configuredLogFile).toAbsolutePath().normalize();
+        } catch (InvalidPathException error) {
+            throw startupError("logging.file.name is not a valid path");
+        }
+        for (Path auditCandidate : List.of(
+                auditFile, auditFile.resolveSibling(auditFile.getFileName() + ".1"))) {
+            if (auditCandidate.equals(logFile)) {
+                throw startupError("DISCORD_MCP_AUDIT_FILE and its rotation file must differ from logging.file.name");
+            }
+            if (Files.exists(auditCandidate) && Files.exists(logFile)) {
+                try {
+                    if (Files.isSameFile(auditCandidate, logFile)) {
+                        throw startupError("DISCORD_MCP_AUDIT_FILE and its rotation file must differ from logging.file.name");
+                    }
+                } catch (IOException error) {
+                    throw startupError("Could not verify audit and operational log path isolation");
+                }
+            }
         }
     }
 

@@ -115,6 +115,19 @@ class McpBearerAuthConfigTest {
     }
 
     @Test
+    void headerInvalidBearerCharactersFailAtStartup() throws Exception {
+        for (String invalidCharacter : new String[]{"\u0000", "\u007f", "é"}) {
+            Path tokenFile = tempDir.resolve("invalid-" + (int) invalidCharacter.charAt(0));
+            Files.writeString(tokenFile, TOKEN + invalidCharacter);
+
+            assertThatThrownBy(() -> settings(
+                    tokenFile.toString(), "/mcp", "STREAMABLE", "servlet"))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("printable ASCII");
+        }
+    }
+
+    @Test
     void healthRemainsPublicWhileOtherFuturePathsDefaultToProtected() throws Exception {
         var filter = new McpBearerAuthConfig.BearerFilter(TOKEN);
         var healthRequest = new MockHttpServletRequest("GET", "/actuator/health");
