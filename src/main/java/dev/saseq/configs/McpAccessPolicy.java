@@ -9,6 +9,7 @@ import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.ai.tool.metadata.ToolMetadata;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import tools.jackson.core.StreamReadConstraints;
 import tools.jackson.core.StreamReadFeature;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -29,6 +30,9 @@ import java.util.stream.Collectors;
  */
 @Component
 public final class McpAccessPolicy {
+    // A 50 MiB upload becomes 69,905,068 base64 characters. Keep guild scoping compatible with
+    // that documented tool contract while retaining a hard parser bound.
+    static final int MAX_ARGUMENT_STRING_CHARACTERS = 70_000_000;
     private static final String TARGET_ACCESS_DENIED =
             "Discord target is unavailable or outside the allowed guild scope";
 
@@ -47,9 +51,7 @@ public final class McpAccessPolicy {
             @Value("${DISCORD_GUILD_ID:}") String defaultGuildId) {
         this.jda = jda;
         this.objectMapper = objectMapper;
-        this.argumentObjectMapper = objectMapper.rebuild()
-                .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
-                .build();
+        this.argumentObjectMapper = createArgumentObjectMapper(objectMapper);
         this.allowedGuilds = parseCsv(allowedGuilds, "DISCORD_MCP_ALLOWED_GUILDS");
         this.allowedTools = parseCsv(allowedTools, "DISCORD_MCP_ALLOWED_TOOLS");
         this.defaultGuildId = trimToNull(defaultGuildId);
@@ -61,6 +63,17 @@ public final class McpAccessPolicy {
                 throw startupError("DISCORD_GUILD_ID must be in DISCORD_MCP_ALLOWED_GUILDS");
             }
         }
+    }
+
+    static ObjectMapper createArgumentObjectMapper(ObjectMapper objectMapper) {
+        var argumentFactory = objectMapper.tokenStreamFactory().rebuild()
+                .streamReadConstraints(StreamReadConstraints.builder()
+                        .maxStringLength(MAX_ARGUMENT_STRING_CHARACTERS)
+                        .build())
+                .build();
+        return new ObjectMapper(argumentFactory).rebuild()
+                .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
+                .build();
     }
 
     ToolCallbackProvider apply(ToolCallbackProvider rawProvider) {

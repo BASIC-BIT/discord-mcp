@@ -55,6 +55,13 @@ class McpAccessPolicyTest {
     }
 
     @Test
+    void policyParserPreservesTheDocumentedFiftyMebibyteUploadCeiling() {
+        ObjectMapper mapper = McpAccessPolicy.createArgumentObjectMapper(new ObjectMapper());
+        assertThat(mapper.tokenStreamFactory().streamReadConstraints().getMaxStringLength())
+                .isEqualTo(McpAccessPolicy.MAX_ARGUMENT_STRING_CHARACTERS);
+    }
+
+    @Test
     void exactToolAllowlistFiltersAndRejectsUnknownNames() {
         McpAccessPolicy policy = policy(mock(JDA.class), "", "read_messages", "");
         ToolCallbackProvider filtered = policy.apply(ToolCallbackProvider.from(
