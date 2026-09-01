@@ -1,6 +1,6 @@
 package dev.saseq.configs;
 
-import dev.saseq.services.LocalFileGuard;
+import dev.saseq.services.SensitiveFileGuard;
 import tools.jackson.core.StreamReadFeature;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -98,7 +98,8 @@ public final class McpToolPolicy {
             @Value("${DISCORD_MCP_AUDIT_FILE:}") String auditFile,
             @Value("${DISCORD_MCP_AUDIT_MAX_BYTES:10485760}") String auditMaxBytes,
             @Value("${DISCORD_MCP_FILE_ROOT:}") String fileRoot,
-            @Value("${DISCORD_MCP_DOWNLOAD_ROOT:}") String downloadRoot) {
+            @Value("${DISCORD_MCP_DOWNLOAD_ROOT:}") String downloadRoot,
+            @Value("${logging.file.name:}") String operationalLogFile) {
         this.jda = jda;
         this.objectMapper = objectMapper;
         this.argumentObjectMapper = objectMapper.rebuild()
@@ -125,6 +126,9 @@ public final class McpToolPolicy {
 
         this.allowedGuilds.forEach(id -> requireSnowflake(id, "DISCORD_MCP_ALLOWED_GUILDS"));
         if (this.defaultGuildId != null && policyActive) {
+            if (!this.defaultGuildId.equals(defaultGuildId)) {
+                throw startupError("DISCORD_GUILD_ID must not have leading or trailing whitespace");
+            }
             requireSnowflake(this.defaultGuildId, "DISCORD_GUILD_ID");
             if (!this.allowedGuilds.isEmpty() && !this.allowedGuilds.contains(this.defaultGuildId)) {
                 throw startupError("DISCORD_GUILD_ID must be in DISCORD_MCP_ALLOWED_GUILDS");
@@ -132,12 +136,13 @@ public final class McpToolPolicy {
         }
 
         if (this.auditFile != null) {
-            // Refuse the ordinary containment case before creating the parent or probe file.
-            // The resolved check below still catches aliases and symlinks once the file exists.
-            requireLexicalAuditIsolation(fileRoot, "DISCORD_MCP_FILE_ROOT");
-            requireLexicalAuditIsolation(downloadRoot, "DISCORD_MCP_DOWNLOAD_ROOT");
+            SensitiveFileGuard.requireOutsideRoot(this.auditFile, fileRoot,
+                    "DISCORD_MCP_AUDIT_FILE", "DISCORD_MCP_FILE_ROOT");
+            SensitiveFileGuard.requireOutsideRoot(this.auditFile, downloadRoot,
+                    "DISCORD_MCP_AUDIT_FILE", "DISCORD_MCP_DOWNLOAD_ROOT");
+            requireOperationalLogIsolation(operationalLogFile);
             try {
-                requireSingleLinkRegularFile(this.auditFile, true);
+                SensitiveFileGuard.requireExclusiveRegularFile(this.auditFile, true);
             } catch (IOException error) {
                 throw startupError("DISCORD_MCP_AUDIT_FILE " + error.getMessage());
             }
@@ -155,12 +160,10 @@ public final class McpToolPolicy {
             }
             try {
                 probeAuditFile(this.auditFile, true);
-                requireSingleLinkRegularFile(this.auditFile, false);
+                SensitiveFileGuard.requireExclusiveRegularFile(this.auditFile, false);
             } catch (IOException error) {
                 throw startupError("DISCORD_MCP_AUDIT_FILE is not appendable");
             }
-            requireResolvedAuditIsolation(fileRoot, "DISCORD_MCP_FILE_ROOT");
-            requireResolvedAuditIsolation(downloadRoot, "DISCORD_MCP_DOWNLOAD_ROOT");
         }
     }
 
@@ -204,31 +207,10 @@ public final class McpToolPolicy {
 
     private static void requireUsableAuditRotationTarget(Path auditFile) throws IOException {
         Path rotated = auditFile.resolveSibling(auditFile.getFileName() + ".1");
-        requireSingleLinkRegularFile(rotated, true);
+        SensitiveFileGuard.requireExclusiveRegularFile(rotated, true);
     }
 
-    private static void requireSingleLinkRegularFile(Path file, boolean allowMissing) throws IOException {
-        if (!Files.exists(file, LinkOption.NOFOLLOW_LINKS)) {
-            if (allowMissing) {
-                return;
-            }
-            throw new IOException("required audit file is missing");
-        }
-        if (Files.isSymbolicLink(file)
-                || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) {
-            throw new IOException("must not be a symbolic link and must be a regular file");
-        }
-        if (file.getFileSystem().supportedFileAttributeViews().contains("unix")) {
-            Object value = Files.getAttribute(file, "unix:nlink", LinkOption.NOFOLLOW_LINKS);
-            if (!(value instanceof Number linkCount) || linkCount.longValue() != 1L) {
-                throw new IOException("must not have additional hard links");
-            }
-        }
-    }
-
-    // Spring invokes this as single-argument @Value method injection after construction.
-    @Value("${logging.file.name:}")
-    void requireOperationalLogIsolation(String configuredLogFile) {
+    private void requireOperationalLogIsolation(String configuredLogFile) {
         if (auditFile == null || configuredLogFile == null || configuredLogFile.isBlank()) {
             return;
         }
@@ -571,7 +553,7 @@ public final class McpToolPolicy {
             // created with owner-only POSIX permissions and an externally removed sink fails
             // closed under the same rules as startup.
             probeAuditFile(auditFile, false);
-            requireSingleLinkRegularFile(auditFile, false);
+            SensitiveFileGuard.requireExclusiveRegularFile(auditFile, false);
             try (OutputStream out = Files.newOutputStream(auditFile,
                     StandardOpenOption.WRITE, StandardOpenOption.APPEND,
                     LinkOption.NOFOLLOW_LINKS)) {
@@ -611,7 +593,7 @@ public final class McpToolPolicy {
                 Files.delete(rotated);
             }
         }
-        requireSingleLinkRegularFile(auditFile, true);
+        SensitiveFileGuard.requireExclusiveRegularFile(auditFile, true);
         if (!Files.exists(auditFile, LinkOption.NOFOLLOW_LINKS)) {
             return;
         }
@@ -749,41 +731,6 @@ public final class McpToolPolicy {
                 .toString();
         return value.codePointCount(0, value.length()) > maximumCharacters
                 ? sanitized + "..." : sanitized;
-    }
-
-    private void requireLexicalAuditIsolation(String configuredRoot, String variableName) {
-        if (configuredRoot == null || configuredRoot.isBlank()) {
-            return;
-        }
-        Path configuredRootPath;
-        try {
-            configuredRootPath = Path.of(configuredRoot).toAbsolutePath().normalize();
-        } catch (InvalidPathException unusableRoot) {
-            return;
-        }
-        if (auditFile.startsWith(configuredRootPath)) {
-            throw startupError("DISCORD_MCP_AUDIT_FILE must be outside " + variableName);
-        }
-    }
-
-    private void requireResolvedAuditIsolation(String configuredRoot, String variableName) {
-        if (configuredRoot == null || configuredRoot.isBlank()) {
-            return;
-        }
-        LocalFileGuard.Root resolvedRoot;
-        try {
-            resolvedRoot = LocalFileGuard.resolveRoot(configuredRoot, variableName);
-        } catch (IllegalArgumentException unusableRoot) {
-            return;
-        }
-        try {
-            Path realAuditFile = auditFile.toRealPath();
-            if (realAuditFile.startsWith(resolvedRoot.path())) {
-                throw startupError("DISCORD_MCP_AUDIT_FILE must be outside " + variableName);
-            }
-        } catch (IOException error) {
-            throw startupError("DISCORD_MCP_AUDIT_FILE cannot be resolved after its append check");
-        }
     }
 
     private static long parseAuditMaxBytes(String value) {

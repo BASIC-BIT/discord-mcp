@@ -1,6 +1,6 @@
 package dev.saseq.configs;
 
-import dev.saseq.services.LocalFileGuard;
+import dev.saseq.services.SensitiveFileGuard;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -17,7 +17,6 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
-import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 
@@ -129,33 +128,13 @@ public class McpBearerAuthConfig {
             return;
         }
         Path tokenPath;
-        Path rootPath;
         try {
             tokenPath = Path.of(configuredTokenFile).toAbsolutePath().normalize();
-            rootPath = Path.of(configuredRoot).toAbsolutePath().normalize();
         } catch (InvalidPathException unusablePath) {
             return;
         }
-        if (tokenPath.startsWith(rootPath)) {
-            throw startupError("DISCORD_MCP_ACCESS_TOKEN_FILE must be outside " + variableName);
-        }
-        Path realToken;
-        try {
-            realToken = tokenPath.toRealPath();
-        } catch (IOException unusableToken) {
-            // readToken below fails startup for the same missing or unreadable credential.
-            return;
-        }
-        LocalFileGuard.Root resolvedRoot;
-        try {
-            resolvedRoot = LocalFileGuard.resolveRoot(configuredRoot, variableName);
-        } catch (IllegalArgumentException unusableRoot) {
-            // Tool-local root resolution fails closed before any caller-supplied file access.
-            return;
-        }
-        if (realToken.startsWith(resolvedRoot.path())) {
-            throw startupError("DISCORD_MCP_ACCESS_TOKEN_FILE must be outside " + variableName);
-        }
+        SensitiveFileGuard.requireOutsideRoot(tokenPath, configuredRoot,
+                "DISCORD_MCP_ACCESS_TOKEN_FILE", variableName);
     }
 
     private static void requireCredentialAuditIsolation(String configuredTokenFile,
@@ -205,24 +184,15 @@ public class McpBearerAuthConfig {
         }
         Path tokenPath;
         try {
-            tokenPath = Path.of(configuredTokenFile).toRealPath();
-        } catch (IOException | InvalidPathException unusableToken) {
+            tokenPath = Path.of(configuredTokenFile).toAbsolutePath().normalize();
+        } catch (InvalidPathException unusableToken) {
             // readToken reports the owning setting and fails startup below.
             return;
         }
-        if (!Files.isRegularFile(tokenPath, LinkOption.NOFOLLOW_LINKS)) {
-            throw startupError("DISCORD_MCP_ACCESS_TOKEN_FILE must resolve to a regular file");
-        }
-        if (!tokenPath.getFileSystem().supportedFileAttributeViews().contains("unix")) {
-            return;
-        }
         try {
-            Object value = Files.getAttribute(tokenPath, "unix:nlink", LinkOption.NOFOLLOW_LINKS);
-            if (!(value instanceof Number linkCount) || linkCount.longValue() != 1L) {
-                throw startupError("DISCORD_MCP_ACCESS_TOKEN_FILE must not have additional hard links");
-            }
+            SensitiveFileGuard.requireExclusiveRegularFile(tokenPath, true);
         } catch (IOException error) {
-            throw startupError("Could not verify DISCORD_MCP_ACCESS_TOKEN_FILE hard-link count", error);
+            throw startupError("DISCORD_MCP_ACCESS_TOKEN_FILE " + error.getMessage(), error);
         }
     }
 

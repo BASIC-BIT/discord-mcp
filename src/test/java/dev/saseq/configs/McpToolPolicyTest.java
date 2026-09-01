@@ -105,7 +105,7 @@ class McpToolPolicyTest {
     void defaultGuildDoesNotMakeAnExplicitGlobalTargetToolSafe() {
         McpToolPolicy policy = new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
                 ALLOWED_GUILD, "send_webhook_message", ALLOWED_GUILD, "allow", "", "10485760",
-                "", "");
+                "", "", "");
 
         assertThatThrownBy(() -> policy.apply(provider("send_webhook_message", new AtomicInteger())))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -153,7 +153,7 @@ class McpToolPolicyTest {
         AtomicInteger calls = new AtomicInteger();
         McpToolPolicy policy = new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
                 ALLOWED_GUILD, "list_channels", ALLOWED_GUILD, "allow", "", "10485760",
-                "", "");
+                "", "", "");
 
         assertThatThrownBy(() -> only(policy.apply(provider("list_channels", calls)))
                 .call("{\"guildId\":12345678901234567}"))
@@ -338,7 +338,7 @@ class McpToolPolicyTest {
     @Test
     void invalidLegacyDefaultGuildDoesNotBlockStartupWithoutPolicy() {
         McpToolPolicy policy = new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
-                "", "", "OPTIONAL_DEFAULT_SERVER_ID", "allow", "", "not-an-integer", "", "");
+                "", "", "OPTIONAL_DEFAULT_SERVER_ID", "allow", "", "not-an-integer", "", "", "");
 
         assertThat(only(policy.apply(provider("list_channels", new AtomicInteger())))
                 .call("{\"guildId\":\"123\"}"))
@@ -349,9 +349,18 @@ class McpToolPolicyTest {
     void invalidDefaultGuildFailsStartupWhenPolicyIsActive() {
         assertThatThrownBy(() -> new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
                 "", "list_channels", "OPTIONAL_DEFAULT_SERVER_ID", "allow", "", "10485760",
-                "", ""))
+                "", "", ""))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("DISCORD_GUILD_ID");
+    }
+
+    @Test
+    void whitespacePaddedDefaultGuildFailsStartupWhenPolicyIsActive() {
+        assertThatThrownBy(() -> new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
+                ALLOWED_GUILD, "list_channels", " " + ALLOWED_GUILD + " ", "allow", "",
+                "10485760", "", "", ""))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("leading or trailing whitespace");
     }
 
     @Test
@@ -360,7 +369,7 @@ class McpToolPolicyTest {
 
         assertThatThrownBy(() -> new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
                 "not-a-snowflake", "", "", "allow", audit.toString(), "10485760",
-                "", ""))
+                "", "", ""))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("DISCORD_MCP_ALLOWED_GUILDS");
         assertThat(audit.getParent()).doesNotExist();
@@ -382,7 +391,7 @@ class McpToolPolicyTest {
     void declaredGuildParameterCanUseAllowedDefault() {
         McpToolPolicy policy = new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
                 ALLOWED_GUILD, "list_channels", ALLOWED_GUILD, "allow", "", "10485760",
-                "", "");
+                "", "", "");
 
         assertThat(only(policy.apply(provider("list_channels", new AtomicInteger()))).call("{}"))
                 .isEqualTo("called");
@@ -393,7 +402,7 @@ class McpToolPolicyTest {
         AtomicInteger calls = new AtomicInteger();
         McpToolPolicy policy = new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
                 ALLOWED_GUILD, "list_channels", ALLOWED_GUILD, "allow", "", "10485760",
-                "", "");
+                "", "", "");
         ToolCallback callback = only(policy.apply(provider("list_channels", calls)));
 
         assertThat(callback.call(null)).isEqualTo("called");
@@ -518,7 +527,7 @@ class McpToolPolicyTest {
         Path audit = tempDir.resolve("audit.jsonl");
         String oversizedGuildId = "1".repeat(2_048);
         McpToolPolicy policy = new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
-                ALLOWED_GUILD, "list_channels", "", "allow", audit.toString(), "4096", "", "");
+                ALLOWED_GUILD, "list_channels", "", "allow", audit.toString(), "4096", "", "", "");
 
         assertThatThrownBy(() -> only(policy.apply(provider("list_channels", new AtomicInteger())))
                 .call("{\"guildId\":\"" + oversizedGuildId + "\"}"))
@@ -657,7 +666,7 @@ class McpToolPolicyTest {
         Path audit = tempDir.resolve("audit.jsonl");
         McpToolPolicy policy = new McpToolPolicy(jdaWithChannel(), new ObjectMapper(),
                 ALLOWED_GUILD, "send_message", "", "allow", audit.toString(), "10485760",
-                "", "");
+                "", "", "");
 
         assertThatThrownBy(() -> only(policy.apply(provider("send_message", new AtomicInteger())))
                 .call("{\"channelId\":\"32345678901234567\",\"message\":\"secret\","
@@ -794,7 +803,7 @@ class McpToolPolicyTest {
     void oversizedIdentifierIsBoundedInAudit() throws Exception {
         Path audit = tempDir.resolve("audit.jsonl");
         McpToolPolicy policy = new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
-                "", "send_message", "", "preview", audit.toString(), "4096", "", "");
+                "", "send_message", "", "preview", audit.toString(), "4096", "", "", "");
         String oversizedId = "1".repeat(2048);
 
         only(policy.apply(provider("send_message", new AtomicInteger())))
@@ -803,7 +812,7 @@ class McpToolPolicyTest {
         String firstAudit = Files.readString(audit);
         Path secondAudit = tempDir.resolve("second-audit.jsonl");
         McpToolPolicy secondPolicy = new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
-                "", "send_message", "", "preview", secondAudit.toString(), "4096", "", "");
+                "", "send_message", "", "preview", secondAudit.toString(), "4096", "", "", "");
         only(secondPolicy.apply(provider("send_message", new AtomicInteger())))
                 .call("{\"channelId\":\"" + oversizedId + "\",\"message\":\"x\"}");
 
@@ -821,16 +830,35 @@ class McpToolPolicyTest {
 
         assertThatThrownBy(() -> new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
                 "", "send_message", "", "preview", uploads.resolve("audit.jsonl").toString(),
-                "10485760", uploads.toString(), ""))
+                "10485760", uploads.toString(), "", ""))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("outside DISCORD_MCP_FILE_ROOT");
         assertThat(uploads.resolve("audit.jsonl")).doesNotExist();
         assertThatThrownBy(() -> new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
                 "", "send_message", "", "preview", downloads.resolve("audit.jsonl").toString(),
-                "10485760", "", downloads.toString()))
+                "10485760", "", downloads.toString(), ""))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("outside DISCORD_MCP_DOWNLOAD_ROOT");
         assertThat(downloads.resolve("audit.jsonl")).doesNotExist();
+    }
+
+    @Test
+    void resolvedAuditIsolationRunsBeforeCreatingTheAuditFile() throws Exception {
+        Path realRoot = Files.createDirectories(tempDir.resolve("real-uploads"));
+        Path aliasRoot = tempDir.resolve("uploads-alias");
+        try {
+            Files.createSymbolicLink(aliasRoot, realRoot);
+        } catch (UnsupportedOperationException | SecurityException | java.io.IOException error) {
+            Assumptions.abort("directory symbolic links are unavailable on this filesystem");
+        }
+        Path audit = aliasRoot.resolve("new-parent").resolve("audit.jsonl");
+
+        assertThatThrownBy(() -> new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
+                "", "send_message", "", "preview", audit.toString(), "10485760",
+                realRoot.toString(), "", ""))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("outside DISCORD_MCP_FILE_ROOT");
+        assertThat(realRoot.resolve("new-parent")).doesNotExist();
     }
 
     @Test
@@ -839,7 +867,7 @@ class McpToolPolicyTest {
 
         assertThatThrownBy(() -> new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
                 "", "send_message", "", "preview", audit.toString(),
-                "10485760", tempDir.getRoot().toString(), ""))
+                "10485760", tempDir.getRoot().toString(), "", ""))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("outside DISCORD_MCP_FILE_ROOT");
     }
@@ -858,7 +886,7 @@ class McpToolPolicyTest {
     void blankAuditMaximumUsesTheDefault() throws Exception {
         Path audit = tempDir.resolve("blank-max-audit.jsonl");
         McpToolPolicy policy = new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
-                "", "send_message", "", "preview", audit.toString(), "", "", "");
+                "", "send_message", "", "preview", audit.toString(), "", "", "", "");
 
         only(policy.apply(provider("send_message", new AtomicInteger()))).call("{}");
 
@@ -870,7 +898,7 @@ class McpToolPolicyTest {
         Path audit = tempDir.resolve("small-audit.jsonl");
 
         assertThatThrownBy(() -> new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
-                "", "send_message", "", "preview", audit.toString(), "4095", "", ""))
+                "", "send_message", "", "preview", audit.toString(), "4095", "", "", ""))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("at least 4096");
     }
@@ -879,7 +907,7 @@ class McpToolPolicyTest {
     void auditRotatesBeforeTheActiveFileWouldExceedTheCap() throws Exception {
         Path audit = tempDir.resolve("audit.jsonl");
         McpToolPolicy policy = new McpToolPolicy(jdaWithChannel(), new ObjectMapper(),
-                ALLOWED_GUILD, "send_message", "", "preview", audit.toString(), "4096", "", "");
+                ALLOWED_GUILD, "send_message", "", "preview", audit.toString(), "4096", "", "", "");
         ToolCallback callback = only(policy.apply(provider("send_message", new AtomicInteger())));
 
         for (int index = 0; index < 40; index++) {
@@ -905,7 +933,7 @@ class McpToolPolicyTest {
         Files.writeString(audit, "A".repeat(5_000));
         Files.writeString(rotated, "B".repeat(5_000));
         McpToolPolicy policy = new McpToolPolicy(jdaWithChannel(), new ObjectMapper(),
-                ALLOWED_GUILD, "send_message", "", "preview", audit.toString(), "4096", "", "");
+                ALLOWED_GUILD, "send_message", "", "preview", audit.toString(), "4096", "", "", "");
 
         only(policy.apply(provider("send_message", new AtomicInteger())))
                 .call("{\"channelId\":\"32345678901234567\",\"message\":\"x\"}");
@@ -1002,7 +1030,7 @@ class McpToolPolicyTest {
 
         assertThatThrownBy(() -> new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
                 "", "send_message", "", "preview", audit.toString(),
-                "10485760", uploads.toString(), ""))
+                "10485760", uploads.toString(), "", ""))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("additional hard links");
     }
@@ -1094,22 +1122,19 @@ class McpToolPolicyTest {
     @Test
     void auditAndRotationFilesMustDifferFromTheOperationalLog() throws Exception {
         Path audit = tempDir.resolve("audit.jsonl");
-        McpToolPolicy policy = policy(jdaWithChannel(), ALLOWED_GUILD,
-                "read_messages", "allow", audit.toString());
-
-        assertThatThrownBy(() -> policy.requireOperationalLogIsolation(audit.toString()))
+        assertThatThrownBy(() -> policy(jdaWithChannel(), ALLOWED_GUILD,
+                "read_messages", "allow", audit.toString(), audit.toString()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("must differ from logging.file.name");
+        assertThat(audit).doesNotExist();
 
         Path secondAudit = tempDir.resolve("second-audit.jsonl");
-        McpToolPolicy secondPolicy = policy(jdaWithChannel(), ALLOWED_GUILD,
-                "read_messages", "allow", secondAudit.toString());
         Path rotated = secondAudit.resolveSibling(secondAudit.getFileName() + ".1");
-        Files.writeString(rotated, "existing audit evidence");
-
-        assertThatThrownBy(() -> secondPolicy.requireOperationalLogIsolation(rotated.toString()))
+        assertThatThrownBy(() -> policy(jdaWithChannel(), ALLOWED_GUILD,
+                "read_messages", "allow", secondAudit.toString(), rotated.toString()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("must differ from logging.file.name");
+        assertThat(secondAudit).doesNotExist();
     }
 
     @Test
@@ -1137,18 +1162,39 @@ class McpToolPolicyTest {
     }
 
     @Test
-    void conventionallyNamedReadToolsStayClassifiedAsReadOnly() {
-        Set<String> conventionallyReadOnly = DiscordMcpConfig.toolServiceTypes().stream()
+    void exportedToolInventoryRequiresAnExplicitReviewWhenItChanges() {
+        Set<String> actualTools = DiscordMcpConfig.toolServiceTypes().stream()
                 .flatMap(type -> Arrays.stream(type.getDeclaredMethods()))
                 .map(method -> method.getAnnotation(Tool.class))
                 .filter(annotation -> annotation != null)
                 .map(Tool::name)
-                .filter(name -> name.startsWith("find_") || name.startsWith("get_")
-                        || name.startsWith("list_") || name.startsWith("read_")
-                        || name.startsWith("search_"))
                 .collect(Collectors.toSet());
+        Set<String> reviewedTools = Set.of(
+                "add_reaction", "assign_role", "ban_member", "create_category", "create_emoji",
+                "create_forum_channel", "create_forum_post", "create_guild_scheduled_event",
+                "create_invite", "create_role", "create_stage_channel", "create_text_channel",
+                "create_voice_channel", "create_webhook", "delete_category", "delete_channel",
+                "delete_channel_permission_overwrite", "delete_emoji",
+                "delete_guild_scheduled_event", "delete_invite", "delete_message",
+                "delete_private_message", "delete_role", "delete_webhook", "disconnect_member",
+                "download_attachment", "edit_category", "edit_emoji", "edit_forum_channel",
+                "edit_guild_scheduled_event", "edit_message", "edit_private_message", "edit_role",
+                "edit_text_channel", "edit_voice_channel", "find_category", "find_channel",
+                "get_attachment", "get_bans", "get_channel_info", "get_emoji_details",
+                "get_forum_channel_info", "get_guild_scheduled_event_users", "get_invite_details",
+                "get_member_by_id", "get_server_info", "get_user_id_by_name", "kick_member",
+                "list_active_threads", "list_channel_permission_overwrites", "list_channels",
+                "list_channels_in_category", "list_emojis", "list_forum_channels",
+                "list_forum_posts", "list_forum_tags", "list_guild_scheduled_events",
+                "list_invites", "list_roles", "list_webhooks", "modify_forum_post",
+                "modify_voice_state", "move_channel", "move_member", "read_messages",
+                "read_private_messages", "remove_reaction", "remove_role", "remove_timeout",
+                "search_members", "send_file", "send_message", "send_private_message",
+                "send_webhook_message", "set_guild_scheduled_event_image", "set_nickname",
+                "timeout_member", "unban_member", "upsert_member_channel_permissions",
+                "upsert_role_channel_permissions");
 
-        assertThat(McpToolPolicy.readOnlyToolNames()).containsAll(conventionallyReadOnly);
+        assertThat(actualTools).containsExactlyInAnyOrderElementsOf(reviewedTools);
     }
 
     @Test
@@ -1327,8 +1373,13 @@ class McpToolPolicyTest {
     }
 
     private static McpToolPolicy policy(JDA jda, String guilds, String tools, String mode, String audit) {
+        return policy(jda, guilds, tools, mode, audit, "");
+    }
+
+    private static McpToolPolicy policy(JDA jda, String guilds, String tools, String mode,
+                                        String audit, String operationalLog) {
         return new McpToolPolicy(jda, new ObjectMapper(), guilds, tools, "", mode, audit,
-                "10485760", "", "");
+                "10485760", "", "", operationalLog);
     }
 
     private static Object instantiateToolService(Class<?> type, JDA jda) {
