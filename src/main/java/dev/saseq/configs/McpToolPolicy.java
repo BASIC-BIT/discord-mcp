@@ -106,6 +106,10 @@ public final class McpToolPolicy {
         }
 
         if (this.auditFile != null) {
+            // Refuse the ordinary containment case before creating the parent or probe file.
+            // The resolved check below still catches aliases and symlinks once the file exists.
+            requireLexicalAuditIsolation(fileRoot, "DISCORD_MCP_FILE_ROOT");
+            requireLexicalAuditIsolation(downloadRoot, "DISCORD_MCP_DOWNLOAD_ROOT");
             if (this.auditFile.getParent() != null) {
                 try {
                     Files.createDirectories(this.auditFile.getParent());
@@ -122,8 +126,8 @@ public final class McpToolPolicy {
             } catch (IOException error) {
                 throw startupError("DISCORD_MCP_AUDIT_FILE is not appendable");
             }
-            requireAuditIsolation(fileRoot, "DISCORD_MCP_FILE_ROOT");
-            requireAuditIsolation(downloadRoot, "DISCORD_MCP_DOWNLOAD_ROOT");
+            requireResolvedAuditIsolation(fileRoot, "DISCORD_MCP_FILE_ROOT");
+            requireResolvedAuditIsolation(downloadRoot, "DISCORD_MCP_DOWNLOAD_ROOT");
         }
 
         this.allowedGuilds.forEach(id -> requireSnowflake(id, "DISCORD_MCP_ALLOWED_GUILDS"));
@@ -556,7 +560,7 @@ public final class McpToolPolicy {
                 ? sanitized + "..." : sanitized;
     }
 
-    private void requireAuditIsolation(String configuredRoot, String variableName) {
+    private void requireLexicalAuditIsolation(String configuredRoot, String variableName) {
         if (configuredRoot == null || configuredRoot.isBlank()) {
             return;
         }
@@ -568,6 +572,12 @@ public final class McpToolPolicy {
         }
         if (auditFile.startsWith(configuredRootPath)) {
             throw startupError("DISCORD_MCP_AUDIT_FILE must be outside " + variableName);
+        }
+    }
+
+    private void requireResolvedAuditIsolation(String configuredRoot, String variableName) {
+        if (configuredRoot == null || configuredRoot.isBlank()) {
+            return;
         }
         LocalFileGuard.Root resolvedRoot;
         try {

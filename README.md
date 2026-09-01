@@ -275,15 +275,18 @@ Example hardened HTTP profile:
 ```bash
 export DISCORD_MCP_ALLOWED_GUILDS=123456789012345678,234567890123456789
 export DISCORD_MCP_ALLOWED_TOOLS=get_server_info,list_channels,read_messages,send_message,edit_message
-export DISCORD_MCP_WRITE_MODE=preview
+export DISCORD_MCP_WRITE_MODE=preview # Change to allow only after reviewing previews.
 export DISCORD_EXPECTED_BOT_ID=345678901234567890
 export DISCORD_MCP_ACCESS_TOKEN_FILE=/run/secrets/discord-mcp-access-token
 export DISCORD_MCP_AUDIT_FILE=/var/lib/discord-mcp/audit.jsonl
 export DISCORD_MCP_AUDIT_MAX_BYTES=10485760
 ```
 
-For plain `docker run`, create the gitignored repo-local file `./discord-mcp-access-token` as an
-operator-readable file, then add these arguments to the command above. The bind mount is required;
+For plain `docker run`, create the gitignored repo-local file `./discord-mcp-access-token`, then add
+these arguments to the command above. The image runs as its unprivileged `app` user, so verify that
+user can read the mounted file. An operator-owned mode `0600` file normally cannot be read through
+this bind mount. Prefer a secret-store mount, or use narrowly scoped ownership or ACLs for the
+container UID/GID. Do not solve this with a world-readable host file. The bind mount is required;
 forwarding only the container pathname makes startup fail because the credential is not present in
 the container.
 

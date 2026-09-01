@@ -717,11 +717,13 @@ class McpToolPolicyTest {
                 "10485760", uploads.toString(), ""))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("outside DISCORD_MCP_FILE_ROOT");
+        assertThat(uploads.resolve("audit.jsonl")).doesNotExist();
         assertThatThrownBy(() -> new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
                 "", "send_message", "", "preview", downloads.resolve("audit.jsonl").toString(),
                 "10485760", "", downloads.toString()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("outside DISCORD_MCP_DOWNLOAD_ROOT");
+        assertThat(downloads.resolve("audit.jsonl")).doesNotExist();
     }
 
     @Test

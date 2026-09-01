@@ -18,6 +18,7 @@ services:
       # Bearer-token and audit-file settings are not forwarded by this generic Compose file.
       # Each requires its own secret bind mount or persistent volume. Use a deployment-specific
       # override after reading "Multi-server deployment policy" in the README.
+
       # Unset by default, which leaves download_attachment refusing. Set it to the
       # container path below to enable downloads; the named volume is what keeps them
       # when the container is recreated.
