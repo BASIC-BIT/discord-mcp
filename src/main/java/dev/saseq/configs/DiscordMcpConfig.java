@@ -28,13 +28,6 @@ import java.util.Set;
 
 @Configuration
 public class DiscordMcpConfig {
-    private static final Set<Class<?>> TOOL_SERVICE_TYPES = Set.of(
-            DiscordService.class, MessageService.class, UserService.class,
-            ChannelService.class, CategoryService.class, WebhookService.class,
-            ThreadService.class, RoleService.class, ModerationService.class,
-            VoiceChannelService.class, ScheduledEventService.class, InviteService.class,
-            ChannelPermissionService.class, EmojiService.class, ForumService.class);
-
     @Bean
     public ToolCallbackProvider discordTools(DiscordService discordService,
                                              MessageService messageService,
@@ -51,8 +44,8 @@ public class DiscordMcpConfig {
                                              ChannelPermissionService channelPermissionService,
                                              EmojiService emojiService,
                                              ForumService forumService,
-                                             McpToolPolicy toolPolicy) {
-        Object[] toolObjects = {
+                                             McpAccessPolicy accessPolicy) {
+        ToolCallbackProvider rawProvider = MethodToolCallbackProvider.builder().toolObjects(
                 discordService,
                 messageService,
                 userService,
@@ -68,15 +61,8 @@ public class DiscordMcpConfig {
                 channelPermissionService,
                 emojiService,
                 forumService
-        };
-        ToolCallbackProvider rawProvider = MethodToolCallbackProvider.builder()
-                .toolObjects(toolObjects)
-                .build();
-        return toolPolicy.apply(rawProvider);
-    }
-
-    static Set<Class<?>> toolServiceTypes() {
-        return TOOL_SERVICE_TYPES;
+        ).build();
+        return accessPolicy.apply(rawProvider);
     }
 
     @Bean
@@ -103,11 +89,8 @@ public class DiscordMcpConfig {
             throw e; // unreachable (System.exit does not return), but required to satisfy the compiler
         }
         if (!botIdMatches(expectedBotId, jda.getSelfUser().getId())) {
-            String actualBotId = jda.getSelfUser().getId();
             jda.shutdownNow();
             System.err.println("ERROR: DISCORD_EXPECTED_BOT_ID does not match the authenticated bot.");
-            System.err.println("  Expected: " + expectedBotId.trim());
-            System.err.println("  Actual:   " + actualBotId);
             System.exit(1);
             throw new IllegalStateException("DISCORD_EXPECTED_BOT_ID mismatch");
         }
@@ -139,13 +122,23 @@ public class DiscordMcpConfig {
     }
 
     static boolean botIdMatches(String expectedBotId, String actualBotId) {
-        return expectedBotId == null || expectedBotId.isBlank()
-                || actualBotId.equals(expectedBotId.trim());
+        if (expectedBotId == null || expectedBotId.isBlank()) {
+            return true;
+        }
+        String normalized = expectedBotId.trim();
+        if (!normalized.matches("\\d{17,20}")
+                || normalized.chars().allMatch(character -> character == '0')) {
+            throw new IllegalArgumentException(
+                    "DISCORD_EXPECTED_BOT_ID must be a nonzero 17-20 digit Discord snowflake");
+        }
+        return actualBotId.equals(normalized);
     }
 
     static Set<GatewayIntent> requiredGatewayIntents() {
         return Set.of(
-                GatewayIntent.GUILD_MEMBERS, GatewayIntent.GUILD_VOICE_STATES,
+                GatewayIntent.GUILD_MEMBERS,
+                GatewayIntent.GUILD_VOICE_STATES,
+                GatewayIntent.MESSAGE_CONTENT,
                 GatewayIntent.SCHEDULED_EVENTS);
     }
 }

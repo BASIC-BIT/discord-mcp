@@ -4,6 +4,7 @@ import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.MessageHistory;
 import net.dv8tion.jda.api.entities.User;
+import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
 import net.dv8tion.jda.api.requests.RestAction;
 import net.dv8tion.jda.api.requests.restaction.MessageCreateAction;
@@ -93,6 +94,37 @@ class MessageServiceTest {
         assertThat(result).isEqualTo("**Retrieved 2 messages:** \n"
                 + "- (ID: 111111111111111111) **[alice]** (Author ID: 123456789012345678) `2026-05-26T00:00Z`: ```hello```\n"
                 + "- (ID: 222222222222222222) **[bob]** (Author ID: 234567890123456789) `2026-05-26T00:00Z`: ```hi```");
+    }
+
+    @Test
+    void getMessageReturnsAnExactMachineReadableSnapshot() {
+        TextChannel channel = mock(TextChannel.class);
+        Guild guild = mock(Guild.class);
+        Message message = mock(Message.class);
+        User author = mock(User.class);
+        @SuppressWarnings("unchecked")
+        RestAction<Message> retrieve = mock(RestAction.class);
+
+        when(jda.getTextChannelById(CHANNEL_ID)).thenReturn(channel);
+        when(channel.getGuild()).thenReturn(guild);
+        when(guild.getId()).thenReturn("123456789012345678");
+        when(channel.retrieveMessageById(MESSAGE_ID)).thenReturn(retrieve);
+        when(retrieve.complete()).thenReturn(message);
+        when(message.getId()).thenReturn(MESSAGE_ID);
+        when(message.getAuthor()).thenReturn(author);
+        when(author.getId()).thenReturn("234567890123456789");
+        when(author.getName()).thenReturn("alice");
+        when(message.getContentRaw()).thenReturn("exact `copy`\nwith formatting");
+        when(message.getJumpUrl()).thenReturn("https://discord.com/channels/123/456/789");
+
+        assertThat(messageService.getMessage(CHANNEL_ID, MESSAGE_ID)).isEqualTo(
+                "{\"guildId\":\"123456789012345678\","
+                        + "\"channelId\":\"345678901234567890\","
+                        + "\"messageId\":\"456789012345678901\","
+                        + "\"authorId\":\"234567890123456789\","
+                        + "\"authorName\":\"alice\","
+                        + "\"content\":\"exact `copy`\\nwith formatting\","
+                        + "\"jumpUrl\":\"https://discord.com/channels/123/456/789\"}");
     }
 
     @Test

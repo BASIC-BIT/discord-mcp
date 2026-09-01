@@ -5,4 +5,3 @@ src/test
 # Operator-staged images for send_file and set_guild_scheduled_event_image, created by
 # the compose bind mount. Never build input, and up to 50 MB apiece.
 /uploads/
-/discord-mcp-access-token

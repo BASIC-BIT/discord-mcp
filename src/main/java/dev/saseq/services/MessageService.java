@@ -6,12 +6,14 @@ import net.dv8tion.jda.api.entities.channel.concrete.NewsChannel;
 import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
 import net.dv8tion.jda.api.entities.channel.concrete.ThreadChannel;
 import net.dv8tion.jda.api.entities.channel.middleman.MessageChannel;
+import net.dv8tion.jda.api.entities.channel.middleman.GuildChannel;
 import net.dv8tion.jda.api.entities.emoji.Emoji;
 import net.dv8tion.jda.api.utils.FileUpload;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import tools.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -26,6 +28,7 @@ import java.util.List;
 
 @Service
 public class MessageService {
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     private final JDA jda;
 
@@ -116,7 +119,7 @@ public class MessageService {
      * @param message   Optional text content to accompany the file.
      * @return A confirmation message with a link to the sent message.
      */
-    @Tool(name = "send_file", description = "Send a file (attachment) to a specific channel. Provide the file as a local filePath OR a direct fileUrl OR base64 fileData (with fileName). Optionally include a text message. filePath/fileUrl can reach 50MB on boosted guilds; base64 fileData is constrained by the MCP JSON transport to roughly 15MB. Unboosted guilds may impose a lower Discord limit.")
+    @Tool(name = "send_file", description = "Send a file (attachment) to a specific channel. Provide the file as a local filePath OR a direct fileUrl OR base64 fileData (with fileName). Optionally include a text message. Max 50MB — Discord accepts that only on boosted guilds; on an unboosted one it caps at 25MB and rejects larger uploads itself.")
     public String sendFile(@ToolParam(description = "Discord channel ID") String channelId,
                            @ToolParam(description = "Absolute path to a local file to upload", required = false) String filePath,
                            @ToolParam(description = "Direct URL to a file to upload (alternative to filePath)", required = false) String fileUrl,
@@ -351,6 +354,46 @@ public class MessageService {
         }
         Message editedMessage = messageById.editMessage(newMessage).complete();
         return "Message edited successfully. Message link: " + editedMessage.getJumpUrl();
+    }
+
+    /**
+     * Retrieves one message as a machine-readable snapshot.
+     *
+     * @param channelId The ID of the guild channel containing the message.
+     * @param messageId The ID of the message to retrieve.
+     * @return JSON containing stable target, author, content, and jump-link fields.
+     */
+    @Tool(name = "get_message", description = "Get one guild message as a structured JSON snapshot for exact readback and comparison")
+    public String getMessage(@ToolParam(description = "Discord channel ID") String channelId,
+                             @ToolParam(description = "Specific message ID") String messageId) {
+        if (channelId == null || channelId.isEmpty()) {
+            throw new IllegalArgumentException("channelId cannot be null");
+        }
+        if (messageId == null || messageId.isEmpty()) {
+            throw new IllegalArgumentException("messageId cannot be null");
+        }
+
+        MessageChannel channel = getMessageChannelById(channelId);
+        if (!(channel instanceof GuildChannel guildChannel)) {
+            throw new IllegalArgumentException("Channel not found by channelId");
+        }
+        Message message = channel.retrieveMessageById(messageId).complete();
+        if (message == null) {
+            throw new IllegalArgumentException("Message not found by messageId");
+        }
+        return JSON.writeValueAsString(new MessageSnapshot(
+                guildChannel.getGuild().getId(),
+                channelId,
+                message.getId(),
+                message.getAuthor().getId(),
+                message.getAuthor().getName(),
+                message.getContentRaw(),
+                message.getJumpUrl()));
+    }
+
+    private record MessageSnapshot(String guildId, String channelId, String messageId,
+                                   String authorId, String authorName, String content,
+                                   String jumpUrl) {
     }
 
     /**

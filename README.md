@@ -32,7 +32,7 @@ Discord by managing channels, sending messages, and retrieving server informatio
 #### 1) Set local env variables
 ```bash
 export DISCORD_TOKEN="YOUR_DISCORD_BOT_TOKEN"
-export DISCORD_GUILD_ID=""
+export DISCORD_GUILD_ID="OPTIONAL_DEFAULT_SERVER_ID"
 export SPRING_PROFILES_ACTIVE=http
 # Only if you want download_attachment. Must match the container path mounted below,
 # not a host path — see Security notes.
@@ -49,11 +49,6 @@ export DISCORD_MCP_DOWNLOAD_ROOT=/var/lib/discord-mcp/downloads
 
 > [!IMPORTANT]
 > Instructions for creating a Discord bot and retrieving its token can be found [here](https://discordjs.guide/legacy/preparations/app-setup).
-> On the bot's Developer Portal page, enable **Server Members Intent** under Privileged Gateway
-> Intents. The Developer Portal's **Message Content Intent** grant controls whether Discord returns
-> ordinary message bodies across its APIs. Enable that Portal grant when message-reading tools are
-> required. This server reads messages through Discord's REST API and deliberately does not request
-> the Message Content Gateway intent.
 
 > [!TIP]
 > The `DISCORD_GUILD_ID` env variable is optional.
@@ -65,21 +60,14 @@ export DISCORD_MCP_DOWNLOAD_ROOT=/var/lib/discord-mcp/downloads
 docker run -d -i \
   --name discord-mcp \
   --restart unless-stopped \
-  -p 127.0.0.1:8085:8085 \
+  -p 8085:8085 \
   -e SPRING_PROFILES_ACTIVE \
   -e DISCORD_TOKEN \
   -e DISCORD_GUILD_ID \
   -e DISCORD_MCP_DOWNLOAD_ROOT \
-  -e DISCORD_MCP_ALLOWED_GUILDS \
-  -e DISCORD_MCP_ALLOWED_TOOLS \
-  -e DISCORD_MCP_WRITE_MODE \
-  -e DISCORD_EXPECTED_BOT_ID \
   -v discord-mcp-downloads:/var/lib/discord-mcp/downloads \
   saseq/discord-mcp:latest
 ```
-
-The default binds MCP only to loopback. Keep it that way unless you deliberately add the
-bearer-token configuration below and place the endpoint behind an appropriate trusted boundary.
 
 > [!TIP]
 > `-e DISCORD_MCP_DOWNLOAD_ROOT` and the downloads `-v` are only needed for
@@ -127,7 +115,7 @@ cd discord-mcp
 cat > .env <<EOF
 SPRING_PROFILES_ACTIVE=http
 DISCORD_TOKEN=<YOUR_DISCORD_BOT_TOKEN>
-DISCORD_GUILD_ID=
+DISCORD_GUILD_ID=<OPTIONAL_DEFAULT_SERVER_ID>
 # Optional, enables download_attachment. Container path, matching the named volume.
 DISCORD_MCP_DOWNLOAD_ROOT=/var/lib/discord-mcp/downloads
 # Optional, enables local-path uploads. Uncomment to grant it — send_file's filePath and
@@ -195,7 +183,7 @@ Run the JAR as a long-running server:
 
 ```bash
 DISCORD_TOKEN=<YOUR_DISCORD_BOT_TOKEN> \
-DISCORD_GUILD_ID= \
+DISCORD_GUILD_ID=<OPTIONAL_DEFAULT_SERVER_ID> \
 SPRING_PROFILES_ACTIVE=http \
 java -jar /absolute/path/to/discord-mcp-1.0.0.jar
 ```
@@ -208,166 +196,33 @@ Default MCP endpoint URL (HTTP profile): `http://localhost:8085/mcp`
 
 ## 🔒 Security notes
 
-### Multi-server deployment policy
+### Optional deployment access guardrails
 
-All policy variables below are optional so existing deployments retain their current behavior.
-For an agent-facing bot installed in more than one server, configure them explicitly:
+The server exposes its original tool surface when the following variables are unset. Deployments
+that share one bot across multiple Discord servers can add narrow, application-enforced limits:
 
-When `DISCORD_MCP_ALLOWED_GUILDS`, `DISCORD_MCP_ALLOWED_TOOLS`, or preview
-`DISCORD_MCP_WRITE_MODE` activates deployment policy, argument keys absent from a tool's generated
-schema are rejected rather than ignored. Audit-only deployments retain upstream argument handling.
-
-- `DISCORD_MCP_ALLOWED_GUILDS`: comma-separated guild snowflakes. Every call must name an
-  allowed guild or contain a channel ID that resolves to one. When the wrapper cannot resolve a
-  guild, it refuses the call rather than guessing. If a tool declares `guildId`, an allowed
-  `DISCORD_GUILD_ID` remains its default when the argument is omitted. Tools without a `guildId`
-  parameter can never borrow that default. Every supplied channel-like target must resolve from
-  the JDA cache; uncached channels and archived threads, including auto-archived forum posts, are
-  refused even when a guild is explicit. This matches the existing service implementations, which
-  already depend on the same cache for those channel and thread lookups. Activating a guild
-  allowlist also removes webhook URL/ID operations, invite-code operations, and private-message
-  operations from tool discovery because those global targets cannot prove guild scope, even when
-  `DISCORD_MCP_ALLOWED_TOOLS` is unset.
-  Every other exported tool must declare `guildId` or a reviewed guild-channel target in its
-  generated schema; otherwise allowlisted startup fails instead of advertising a tool that can
-  never resolve its guild.
-  Upgrade note: replace any copied `OPTIONAL_DEFAULT_SERVER_ID` value before enabling policy;
-  policy-active startup rejects a non-snowflake `DISCORD_GUILD_ID` instead of ignoring it.
+- `DISCORD_MCP_ALLOWED_GUILDS`: comma-separated guild IDs. Exported tools must declare a `guildId`
+  or a channel-like target that the JDA cache resolves to an allowed guild. Calls fail closed when
+  a supplied target is uncached, malformed, or belongs to another guild. Tools with no
+  guild-resolvable target are omitted. If `DISCORD_MCP_ALLOWED_TOOLS` explicitly requests one,
+  startup fails instead of silently weakening the guild boundary.
 - `DISCORD_MCP_ALLOWED_TOOLS`: comma-separated exact tool names. Unknown names fail startup and
-  tools not named here are not exported to MCP clients. Setting this variable also enables strict
-  generated-schema checking, so caller-supplied argument keys that the selected tool does not
-  declare are rejected. Whenever deployment policy is active, supplied Discord guild and channel
-  identifiers must use the generated schema's JSON string form rather than JSON numbers. When a
-  guild allowlist is active, global target tools that cannot prove a
-  guild are rejected at startup and must be omitted: webhook URL/ID operations, invite-code
-  lookup/deletion, and private-message operations. Whenever deployment policy is active and this
-  variable is unset, credential-returning or credential-creating tools (`create_webhook`,
-  `list_webhooks`, `create_invite`, `list_invites`, `get_invite_details`, and
-  `read_private_messages`) are omitted by default. Name a guild-scoped one explicitly only when its
-  caller is allowed to receive those credentials, invite material, or private-message content.
-- `DISCORD_MCP_WRITE_MODE`: `preview` returns `WRITE_PREVIEW` plus the proposed argument object
-  for every mutation without calling Discord. Large payloads are bounded and hashed rather than
-  echoed in full. `allow` executes writes. Unknown tool names are
-  classified as writes, so new tools do not silently become read-only. Preview is a write gate,
-  not a data-isolation mode: allowed read tools still execute and can return sensitive data.
-  When policy is active without an exact tool allowlist, credential-returning or credential-creating
-  tools are hidden by default: `create_webhook`, `list_webhooks`, `create_invite`, `list_invites`,
-  `get_invite_details`, and `read_private_messages`. Add one by exact name only when the caller is
-  explicitly allowed to receive that material. Policy-active parsing retains the raw request while
-  validating a JSON tree before the delegate binds it, then releases the parsed tree before the
-  network call while retaining only bounded audit identifiers. The MCP JSON transport's default
-  string bound limits base64 `fileData` to roughly 15 MiB; use `filePath` or `fileUrl` for larger
-  attachments, subject to Discord's guild-specific upload limit.
-- `DISCORD_EXPECTED_BOT_ID`: refuses startup when a valid token authenticates the wrong bot.
-- `DISCORD_MCP_ACCESS_TOKEN_FILE`: HTTP-only bearer credential, read from a mounted file. When
-  set under the STREAMABLE protocol, the configured MCP endpoint returns `401` unless the request
-  has the exact `Authorization: Bearer ...` header. Startup fails unless the protocol is explicitly
-  configured as STREAMABLE while the bearer is enabled. Health checks remain available without the
-  bearer; every other current or future servlet path defaults to protected. Use a separate random
-  token of at least 32 characters, never the Discord bot token. Token files over 4096 bytes are
-  rejected. The file is read once at startup, so restart the process after rotating it. Only the
-  exact default `/actuator/health` path is public; custom management paths and health subpaths remain
-  bearer-protected. Do not set `spring.mvc.servlet.path` with the bundled health check. If a custom
-  servlet path is required, keep health protected and update the deployment health check to match.
-  Bearer-enabled startup rejects any configured `management.server.port`, because a separate
-  management servlet context would be outside this filter.
-  Keep the bearer file outside `DISCORD_MCP_FILE_ROOT` and `DISCORD_MCP_DOWNLOAD_ROOT`;
-  startup rejects lexical and resolved containment so tools cannot read or overwrite it. The token
-  must use printable ASCII without whitespace so it can be represented in an HTTP header. On
-  filesystems that expose `unix:nlink`, startup also rejects bearer files with additional hard
-  links so an in-root alias cannot bypass path containment. Deployment launchers should enforce
-  the same invariant natively when the runtime filesystem does not expose that attribute. The
-  resolved bearer target must be a regular file, so FIFOs, devices, and other special files fail
-  before the credential reader opens them. The bearer file must also differ from
-  `logging.file.name`. After startup validation, only its SHA-256 digest remains in the settings
-  bean and request filter; the plaintext token is not retained there or rendered by `toString()`.
-- Policy-active and audit-enabled deployments also require `logging.file.name` to remain outside
-  `DISCORD_MCP_FILE_ROOT` and `DISCORD_MCP_DOWNLOAD_ROOT`. Operational diagnostics can contain tool
-  names, Discord object IDs, and declared argument-key names, so MCP tools must not be able to read
-  that file. When the filesystem exposes `unix:nlink`, an existing operational log must also have a
-  single hard link so an in-root alias cannot bypass the path checks.
-- `DISCORD_MCP_AUDIT_FILE`: append-only JSONL tool audit. It records tool, outcome, write mode,
-  a per-process salted arguments hash, and a per-call invocation ID that pairs `started` with its
-  terminal record under concurrency. When deployment policy is active, it also records resolved
-  guild IDs and nests selected declared Discord object IDs under `argumentIds`. Audit-only
-  deployments record an empty `guildIds` array and omit argument-provided IDs because no active
-  policy schema has established those fields; ignored undeclared keys therefore cannot shape
-  reserved audit fields or inflate records. It deliberately does
-  not record message bodies, invite credentials, or other complete arguments. The random salt
-  prevents practical dictionary recovery of low-entropy inputs while preserving correlation within
-  one process lifetime; hashes intentionally change after restart. A `tool-returned`
-  outcome means the MCP tool returned to its caller; it does not claim that an asynchronously
-  queued Discord mutation later succeeded. Use readback for consequential writes. The active file rotates to one `.1`
-  backup before the next append would exceed `DISCORD_MCP_AUDIT_MAX_BYTES` (10 MiB by default),
-  so the two files remain bounded. Set a value of at least 4096 bytes if a different cap is needed.
-  This cap is a disk bound, not a retention guarantee. Lowering it discards any active or rotated
-  file already above the new cap and writes a warning to the operational log. High call volume can
-  rotate older evidence out of both files, and local appends are not synchronously flushed to stable
-  storage before a tool returns. Forward audit records to a durable log sink when retention or
-  crash durability matters. Keep the
-  audit file outside `DISCORD_MCP_FILE_ROOT` and `DISCORD_MCP_DOWNLOAD_ROOT` so an MCP tool cannot
-  read or write the audit trail. Startup rejects either configured path when its lexical or resolved
-  location contains the audit file. The start record is fail-closed: a full, missing, or unwritable
-  audit sink takes every tool offline rather than allowing unaudited calls. Audit appends and
-  rotation are synchronized for this server's expected low-volume operator traffic.
-  The sink and any existing `.1` rotation target must be regular files, not symbolic links,
-  directories, devices, or FIFOs. On filesystems that expose `unix:nlink`, both must also have a
-  single hard link so an in-root alias cannot expose the audit trail. Neither may be the configured
-  `logging.file.name`; startup rejects lexical and resolved aliases. On POSIX
-  filesystems, every startup creates or re-tightens the active audit file to owner read/write
-  (`0600`) and creates each post-rotation replacement with those permissions. Permission changes
-  made by an operator after startup, such as group read for a log collector, remain intact on later
-  appends only until the next process restart.
-  `DISCORD_MCP_AUDIT_MAX_BYTES` is parsed only when `DISCORD_MCP_AUDIT_FILE` is configured, so an
-  otherwise unused legacy value does not block startup.
+  tools not named here are not exported to MCP clients.
+- `DISCORD_EXPECTED_BOT_ID`: refuses startup when a valid token authenticates a different bot.
 
-Example hardened HTTP profile:
+The bot configuration enables the privileged `GUILD_MEMBERS` and `MESSAGE_CONTENT` gateway
+intents because member lookup and exact message readback depend on them. Enable both in the
+Discord Developer Portal before starting the server.
+
+These are capability limits, not an approval workflow. Human confirmation, previews, per-server
+write policy, source-of-truth handling, and post-write readback belong in the calling client or a
+separate policy facade. Discord permissions remain the final platform boundary.
 
 ```bash
 export DISCORD_MCP_ALLOWED_GUILDS=123456789012345678,234567890123456789
 export DISCORD_MCP_ALLOWED_TOOLS=get_server_info,list_channels,read_messages,send_message,edit_message
-export DISCORD_MCP_WRITE_MODE=preview # Change to allow only after reviewing previews.
 export DISCORD_EXPECTED_BOT_ID=345678901234567890
-export DISCORD_MCP_ACCESS_TOKEN_FILE=/run/secrets/discord-mcp-access-token
-export DISCORD_MCP_AUDIT_FILE=/var/lib/discord-mcp/audit.jsonl
-export DISCORD_MCP_AUDIT_MAX_BYTES=10485760
 ```
-
-For plain `docker run`, create the gitignored repo-local file `./discord-mcp-access-token`, then add
-these arguments to the command above. The image runs as its unprivileged `app` user, so verify that
-user can read the mounted file. An operator-owned mode `0600` file normally cannot be read through
-this bind mount. Prefer a secret-store mount, or use narrowly scoped ownership or ACLs for the
-container UID/GID. Do not solve this with a world-readable host file. The bind mount is required;
-forwarding only the container pathname makes startup fail because the credential is not present in
-the container.
-
-```bash
-  --mount type=bind,src="$PWD/discord-mcp-access-token",dst=/run/secrets/discord-mcp-access-token,readonly \
-  --mount type=volume,src=discord-mcp-audit,dst=/var/lib/discord-mcp \
-  -e DISCORD_MCP_ACCESS_TOKEN_FILE \
-  -e DISCORD_MCP_AUDIT_FILE \
-  -e DISCORD_MCP_AUDIT_MAX_BYTES \
-```
-
-The named audit parent at `/var/lib/discord-mcp` and the more-specific downloads child mount at
-`/var/lib/discord-mcp/downloads` are intentional. Docker applies the child mount over its parent,
-so downloads still use their dedicated volume while the audit remains in its separate volume.
-
-The allowlist is application-enforced and complements,
-rather than replaces, Discord role hierarchy, channel overrides, and least-privilege bot grants.
-Use separate runtime profiles for different guild and write scopes instead of widening one
-always-on process.
-
-**Upgrade note:** the generic `docker-compose.yml` now binds its unauthenticated default endpoint
-to host loopback. Existing clients on other hosts lose access until an authenticated,
-deployment-specific override deliberately republishes it. The generic Compose file
-does not forward the bearer-token or audit-file paths because it cannot conditionally create the
-required secret bind mount and persistent audit volume. Add both in a deployment-specific Compose
-override, or use a launcher that creates those mounts explicitly. Deliberately publishing beyond
-loopback requires an authenticated deployment-specific override.
-The audit `started` record is fail-closed: if it cannot be appended, the tool is not called. A
-completion-record failure after Discord has already responded is returned as a warning without
-turning the completed action into an MCP failure that invites a duplicate retry.
 
 ### `DISCORD_MCP_FILE_ROOT`
 
