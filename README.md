@@ -65,7 +65,7 @@ export DISCORD_MCP_DOWNLOAD_ROOT=/var/lib/discord-mcp/downloads
 docker run -d -i \
   --name discord-mcp \
   --restart unless-stopped \
-  -p 8085:8085 \
+  -p 127.0.0.1:8085:8085 \
   -e SPRING_PROFILES_ACTIVE \
   -e DISCORD_TOKEN \
   -e DISCORD_GUILD_ID \
@@ -77,6 +77,9 @@ docker run -d -i \
   -v discord-mcp-downloads:/var/lib/discord-mcp/downloads \
   saseq/discord-mcp:latest
 ```
+
+The default binds MCP only to loopback. Keep it that way unless you deliberately add the
+bearer-token configuration below and place the endpoint behind an appropriate trusted boundary.
 
 > [!TIP]
 > `-e DISCORD_MCP_DOWNLOAD_ROOT` and the downloads `-v` are only needed for
