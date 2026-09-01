@@ -32,9 +32,11 @@ public class McpBearerAuthConfig {
             @Value("${spring.ai.mcp.server.protocol:}") String protocol,
             @Value("${spring.main.web-application-type:}") String webApplicationType,
             @Value("${DISCORD_MCP_FILE_ROOT:}") String fileRoot,
-            @Value("${DISCORD_MCP_DOWNLOAD_ROOT:}") String downloadRoot) {
+            @Value("${DISCORD_MCP_DOWNLOAD_ROOT:}") String downloadRoot,
+            @Value("${DISCORD_MCP_AUDIT_FILE:}") String auditFile) {
         requireCredentialIsolation(tokenFile, fileRoot, "DISCORD_MCP_FILE_ROOT");
         requireCredentialIsolation(tokenFile, downloadRoot, "DISCORD_MCP_DOWNLOAD_ROOT");
+        requireCredentialAuditIsolation(tokenFile, auditFile);
         String token = readToken(tokenFile);
         if (token != null && !"STREAMABLE".equalsIgnoreCase(protocol)) {
             throw startupError("Bearer authentication supports only the STREAMABLE HTTP protocol; "
@@ -55,7 +57,14 @@ public class McpBearerAuthConfig {
 
     BearerAuthSettings mcpBearerAuthSettings(String tokenFile, String mcpEndpoint,
                                              String protocol, String webApplicationType) {
-        return mcpBearerAuthSettings(tokenFile, mcpEndpoint, protocol, webApplicationType, "", "");
+        return mcpBearerAuthSettings(tokenFile, mcpEndpoint, protocol, webApplicationType, "", "", "");
+    }
+
+    BearerAuthSettings mcpBearerAuthSettings(String tokenFile, String mcpEndpoint,
+                                             String protocol, String webApplicationType,
+                                             String fileRoot, String downloadRoot) {
+        return mcpBearerAuthSettings(tokenFile, mcpEndpoint, protocol, webApplicationType,
+                fileRoot, downloadRoot, "");
     }
 
     @Bean
@@ -129,6 +138,48 @@ public class McpBearerAuthConfig {
         }
         if (realToken.startsWith(resolvedRoot.path())) {
             throw startupError("DISCORD_MCP_ACCESS_TOKEN_FILE must be outside " + variableName);
+        }
+    }
+
+    private static void requireCredentialAuditIsolation(String configuredTokenFile,
+                                                        String configuredAuditFile) {
+        if (configuredTokenFile == null || configuredTokenFile.isBlank()
+                || configuredAuditFile == null || configuredAuditFile.isBlank()) {
+            return;
+        }
+        try {
+            Path tokenPath = Path.of(configuredTokenFile).toAbsolutePath().normalize();
+            Path auditPath = Path.of(configuredAuditFile).toAbsolutePath().normalize();
+            Path auditName = auditPath.getFileName();
+            if (auditName == null) {
+                return;
+            }
+            Path rotatedAuditPath = auditPath.resolveSibling(auditName + ".1");
+            if (sameConfiguredFile(tokenPath, auditPath)
+                    || sameConfiguredFile(tokenPath, rotatedAuditPath)) {
+                throw startupError("DISCORD_MCP_ACCESS_TOKEN_FILE must differ from "
+                        + "DISCORD_MCP_AUDIT_FILE and its rotation file");
+            }
+        } catch (InvalidPathException unusablePath) {
+            // The dedicated readers report an invalid setting with its owning variable name.
+        }
+    }
+
+    private static boolean sameConfiguredFile(Path left, Path right) {
+        if (left.equals(right)) {
+            return true;
+        }
+        try {
+            if (Files.exists(left) && Files.exists(right) && Files.isSameFile(left, right)) {
+                return true;
+            }
+            Path leftParent = left.getParent();
+            Path rightParent = right.getParent();
+            return leftParent != null && rightParent != null
+                    && leftParent.toRealPath().equals(rightParent.toRealPath())
+                    && left.getFileName().equals(right.getFileName());
+        } catch (IOException ignored) {
+            return false;
         }
     }
 

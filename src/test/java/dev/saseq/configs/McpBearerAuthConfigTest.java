@@ -233,4 +233,24 @@ class McpBearerAuthConfigTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("outside DISCORD_MCP_DOWNLOAD_ROOT");
     }
+
+    @Test
+    void bearerCredentialMustDifferFromAuditFiles() throws Exception {
+        Path audit = tempDir.resolve("audit.jsonl");
+        Files.writeString(audit, TOKEN);
+
+        assertThatThrownBy(() -> new McpBearerAuthConfig().mcpBearerAuthSettings(
+                audit.toString(), "/mcp", "STREAMABLE", "servlet",
+                "", "", audit.toString()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must differ from DISCORD_MCP_AUDIT_FILE");
+
+        Path rotatedAudit = tempDir.resolve("second-audit.jsonl.1");
+        Files.writeString(rotatedAudit, TOKEN);
+        assertThatThrownBy(() -> new McpBearerAuthConfig().mcpBearerAuthSettings(
+                rotatedAudit.toString(), "/mcp", "STREAMABLE", "servlet",
+                "", "", tempDir.resolve("second-audit.jsonl").toString()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must differ from DISCORD_MCP_AUDIT_FILE");
+    }
 }
