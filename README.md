@@ -236,9 +236,10 @@ schema are rejected rather than ignored. Audit-only deployments retain upstream 
   declare are rejected. When a guild allowlist is active, global target tools that cannot prove a
   guild are rejected at startup and must be omitted: webhook URL/ID operations, invite-code
   lookup/deletion, and private-message operations. Whenever deployment policy is active and this
-  variable is unset, credential-returning reads (`list_webhooks`, `list_invites`, and
-  `get_invite_details`) are omitted by default. Name a guild-scoped one explicitly only when its
-  caller is allowed to receive those credentials or invite material.
+  variable is unset, credential-returning or credential-creating tools (`create_webhook`,
+  `list_webhooks`, `create_invite`, `list_invites`, `get_invite_details`, and
+  `read_private_messages`) are omitted by default. Name a guild-scoped one explicitly only when its
+  caller is allowed to receive those credentials, invite material, or private-message content.
 - `DISCORD_MCP_WRITE_MODE`: `preview` returns `WRITE_PREVIEW` plus the proposed argument object
   for every mutation without calling Discord. Large payloads are bounded and hashed rather than
   echoed in full. `allow` executes writes. Unknown tool names are
@@ -291,8 +292,9 @@ schema are rejected rather than ignored. Audit-only deployments retain upstream 
   so the two files remain bounded. Set a value of at least 4096 bytes if a different cap is needed.
   This cap is a disk bound, not a retention guarantee. Lowering it discards any active or rotated
   file already above the new cap and writes a warning to the operational log. High call volume can
-  rotate older evidence out of both files; forward audit records to a durable log sink when
-  retention matters. Keep the
+  rotate older evidence out of both files, and local appends are not synchronously flushed to stable
+  storage before a tool returns. Forward audit records to a durable log sink when retention or
+  crash durability matters. Keep the
   audit file outside `DISCORD_MCP_FILE_ROOT` and `DISCORD_MCP_DOWNLOAD_ROOT` so an MCP tool cannot
   read or write the audit trail. Startup rejects either configured path when its lexical or resolved
   location contains the audit file.
@@ -300,9 +302,10 @@ schema are rejected rather than ignored. Audit-only deployments retain upstream 
   directories, devices, or FIFOs. On filesystems that expose `unix:nlink`, both must also have a
   single hard link so an in-root alias cannot expose the audit trail. Neither may be the configured
   `logging.file.name`; startup rejects lexical and resolved aliases. On POSIX
-  filesystems, startup creates or tightens the active audit file to owner read/write (`0600`) and
-  creates each post-rotation replacement with those permissions. Permission changes made by an
-  operator after startup, such as group read for a log collector, remain intact on later appends.
+  filesystems, every startup creates or re-tightens the active audit file to owner read/write
+  (`0600`) and creates each post-rotation replacement with those permissions. Permission changes
+  made by an operator after startup, such as group read for a log collector, remain intact on later
+  appends only until the next process restart.
   `DISCORD_MCP_AUDIT_MAX_BYTES` is parsed only when `DISCORD_MCP_AUDIT_FILE` is configured, so an
   otherwise unused legacy value does not block startup.
 

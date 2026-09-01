@@ -9,6 +9,9 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -22,7 +25,7 @@ class McpBearerAuthConfigTest {
 
     @Test
     void missingTokenIsRejected() throws Exception {
-        var filter = new McpBearerAuthConfig.BearerFilter(TOKEN);
+        var filter = filter(TOKEN);
         var request = new MockHttpServletRequest("POST", "/mcp");
         var response = new MockHttpServletResponse();
         var chain = new MockFilterChain();
@@ -35,7 +38,7 @@ class McpBearerAuthConfigTest {
 
     @Test
     void wrongLengthBearerTokenIsRejected() throws Exception {
-        var filter = new McpBearerAuthConfig.BearerFilter(TOKEN);
+        var filter = filter(TOKEN);
         var request = new MockHttpServletRequest("POST", "/mcp");
         request.addHeader("Authorization", "Bearer short");
         var response = new MockHttpServletResponse();
@@ -49,7 +52,7 @@ class McpBearerAuthConfigTest {
 
     @Test
     void exactBearerTokenPasses() throws Exception {
-        var filter = new McpBearerAuthConfig.BearerFilter(TOKEN);
+        var filter = filter(TOKEN);
         var request = new MockHttpServletRequest("POST", "/mcp");
         request.addHeader("Authorization", "Bearer " + TOKEN);
         var response = new MockHttpServletResponse();
@@ -62,7 +65,7 @@ class McpBearerAuthConfigTest {
 
     @Test
     void bearerSchemeIsCaseInsensitive() throws Exception {
-        var filter = new McpBearerAuthConfig.BearerFilter(TOKEN);
+        var filter = filter(TOKEN);
         var request = new MockHttpServletRequest("POST", "/mcp");
         request.addHeader("Authorization", "bearer " + TOKEN);
         var chain = new MockFilterChain();
@@ -74,7 +77,7 @@ class McpBearerAuthConfigTest {
 
     @Test
     void unsetTokenPreservesExistingDeploymentBehavior() throws Exception {
-        var filter = new McpBearerAuthConfig.BearerFilter((String) null);
+        var filter = filter(null);
         var request = new MockHttpServletRequest("POST", "/mcp");
         var response = new MockHttpServletResponse();
         var chain = new MockFilterChain();
@@ -132,7 +135,7 @@ class McpBearerAuthConfigTest {
 
     @Test
     void healthRemainsPublicWhileOtherFuturePathsDefaultToProtected() throws Exception {
-        var filter = new McpBearerAuthConfig.BearerFilter(TOKEN);
+        var filter = filter(TOKEN);
         var healthRequest = new MockHttpServletRequest("GET", "/actuator/health");
         healthRequest.setServletPath("/actuator/health");
         var healthChain = new MockFilterChain();
@@ -153,7 +156,7 @@ class McpBearerAuthConfigTest {
 
     @Test
     void healthTraversalAndSubpathsRemainProtected() throws Exception {
-        var filter = new McpBearerAuthConfig.BearerFilter(TOKEN);
+        var filter = filter(TOKEN);
         var traversalRequest = new MockHttpServletRequest("GET", "/actuator/health/../mcp");
         traversalRequest.setServletPath("/mcp");
         var traversalResponse = new MockHttpServletResponse();
@@ -351,5 +354,15 @@ class McpBearerAuthConfigTest {
         return new McpBearerAuthConfig().mcpBearerAuthSettings(
                 tokenFile, mcpEndpoint, protocol, webApplicationType, "",
                 fileRoot, downloadRoot, auditFile, "");
+    }
+
+    private static McpBearerAuthConfig.BearerFilter filter(String token) {
+        try {
+            byte[] digest = token == null ? null : MessageDigest.getInstance("SHA-256")
+                    .digest(token.getBytes(StandardCharsets.UTF_8));
+            return new McpBearerAuthConfig.BearerFilter(digest);
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException(impossible);
+        }
     }
 }

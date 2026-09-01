@@ -331,7 +331,8 @@ class McpToolPolicyTest {
 
         assertThatThrownBy(() -> only(policy.apply(ToolCallbackProvider.from(raw))).call(arguments))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("not valid JSON");
+                .hasMessageContaining("transport size limit")
+                .hasMessageContaining("filePath or fileUrl");
         assertThat(calls).hasValue(0);
     }
 
@@ -659,6 +660,33 @@ class McpToolPolicyTest {
                 .call("{\"channelId\":\"32345678901234567\"}"))
                 .isInstanceOf(SecurityException.class)
                 .hasMessageContaining("unavailable or outside");
+    }
+
+    @Test
+    void delegateErrorsStillProduceATerminalAuditRecord() throws Exception {
+        Path audit = tempDir.resolve("error-audit.jsonl");
+        ToolCallback raw = new ToolCallback() {
+            @Override
+            public ToolDefinition getToolDefinition() {
+                return ToolDefinition.builder().name("list_channels")
+                        .description("test").inputSchema(schema("guildId")).build();
+            }
+
+            @Override
+            public String call(String arguments) {
+                throw new AssertionError("simulated fatal delegate error");
+            }
+        };
+        McpToolPolicy policy = policy(mock(JDA.class), ALLOWED_GUILD,
+                "list_channels", "allow", audit.toString());
+
+        assertThatThrownBy(() -> only(policy.apply(ToolCallbackProvider.from(raw)))
+                .call("{\"guildId\":\"" + ALLOWED_GUILD + "\"}"))
+                .isInstanceOf(AssertionError.class);
+        assertThat(Files.readString(audit))
+                .contains("\"outcome\":\"started\"")
+                .contains("\"outcome\":\"failed\"")
+                .contains("\"errorType\":\"AssertionError\"");
     }
 
     @Test

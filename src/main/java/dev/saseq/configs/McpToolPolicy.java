@@ -2,6 +2,7 @@ package dev.saseq.configs;
 
 import dev.saseq.services.SensitiveFileGuard;
 import tools.jackson.core.StreamReadFeature;
+import tools.jackson.core.exc.StreamConstraintsException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
@@ -402,6 +403,10 @@ public final class McpToolPolicy {
                 auditBestEffort(tool, "failed", invocationId, guildIds, capturedArgumentIds,
                         argumentsSaltedSha256, error.getClass().getSimpleName());
                 throw error;
+            } catch (Error error) {
+                auditBestEffort(tool, "failed", invocationId, guildIds, capturedArgumentIds,
+                        argumentsSaltedSha256, error.getClass().getSimpleName());
+                throw error;
             }
         }
     }
@@ -413,6 +418,10 @@ public final class McpToolPolicy {
         JsonNode parsed;
         try {
             parsed = argumentObjectMapper.readTree(arguments);
+        } catch (StreamConstraintsException error) {
+            throw new IllegalArgumentException(
+                    "Tool arguments exceed the transport size limit; use filePath or fileUrl for large files",
+                    error);
         } catch (RuntimeException error) {
             throw new IllegalArgumentException("Tool arguments are not valid JSON", error);
         }

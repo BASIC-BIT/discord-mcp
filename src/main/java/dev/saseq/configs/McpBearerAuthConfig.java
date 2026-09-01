@@ -244,10 +244,6 @@ public class McpBearerAuthConfig {
     static final class BearerFilter extends OncePerRequestFilter {
         private final byte[] expected;
 
-        BearerFilter(String token) {
-            this.expected = token == null ? null : sha256(token);
-        }
-
         BearerFilter(byte[] expected) {
             this.expected = expected == null ? null : expected.clone();
         }
