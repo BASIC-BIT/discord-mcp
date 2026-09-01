@@ -143,6 +143,9 @@ public final class McpToolPolicy {
             // The resolved check below still catches aliases and symlinks once the file exists.
             requireLexicalAuditIsolation(fileRoot, "DISCORD_MCP_FILE_ROOT");
             requireLexicalAuditIsolation(downloadRoot, "DISCORD_MCP_DOWNLOAD_ROOT");
+            if (Files.isSymbolicLink(this.auditFile)) {
+                throw startupError("DISCORD_MCP_AUDIT_FILE must not be a symbolic link");
+            }
             if (Files.exists(this.auditFile) && !Files.isRegularFile(this.auditFile)) {
                 throw startupError("DISCORD_MCP_AUDIT_FILE must be a regular file");
             }
@@ -158,6 +161,9 @@ public final class McpToolPolicy {
             } catch (IOException error) {
                 throw startupError("DISCORD_MCP_AUDIT_FILE is not appendable");
             }
+            if (Files.isSymbolicLink(this.auditFile)) {
+                throw startupError("DISCORD_MCP_AUDIT_FILE must not be a symbolic link");
+            }
             if (!Files.isRegularFile(this.auditFile)) {
                 throw startupError("DISCORD_MCP_AUDIT_FILE must be a regular file");
             }
@@ -167,6 +173,9 @@ public final class McpToolPolicy {
     }
 
     private static void probeAuditFile(Path auditFile) throws IOException {
+        if (Files.isSymbolicLink(auditFile)) {
+            throw new IOException("symbolic-link audit sinks are not allowed");
+        }
         Set<StandardOpenOption> options = Set.of(
                 StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.APPEND);
         if (auditFile.getFileSystem().supportedFileAttributeViews().contains("posix")) {
@@ -330,7 +339,8 @@ public final class McpToolPolicy {
             }
             Set<String> guildIds;
             try {
-                guildIds = resolveGuildIds(parsed, declaredArguments, !allowedGuilds.isEmpty());
+                guildIds = resolveGuildIds(parsed, declaredArguments, policyActive,
+                        !allowedGuilds.isEmpty());
             } catch (IllegalArgumentException error) {
                 auditBestEffort(tool, "denied-invalid-target", invocationId, Set.of(), parsed,
                         argumentsSaltedSha256, error.getClass().getSimpleName());
@@ -397,14 +407,16 @@ public final class McpToolPolicy {
     }
 
     private Set<String> resolveGuildIds(JsonNode arguments, Set<String> declaredArguments,
+                                        boolean validateTargetTypes,
                                         boolean failOnUnresolvedChannel) {
         Set<String> guildIds = new LinkedHashSet<>();
         JsonNode guildValue = arguments.get("guildId");
-        if (failOnUnresolvedChannel && guildValue != null && !guildValue.isNull()) {
+        if (validateTargetTypes && guildValue != null && !guildValue.isNull()) {
             if (!guildValue.isTextual()) {
                 throw new IllegalArgumentException("Supplied guildId must be a JSON string");
             }
-            if (!guildValue.asText().isBlank() && !isSnowflake(guildValue.asText())) {
+            if (failOnUnresolvedChannel && !guildValue.asText().isBlank()
+                    && !isSnowflake(guildValue.asText())) {
                 throw new SecurityException("Supplied guildId must be a 17-20 digit Discord snowflake");
             }
         }
@@ -423,7 +435,7 @@ public final class McpToolPolicy {
                 continue;
             }
             if (!value.isTextual()) {
-                if (failOnUnresolvedChannel) {
+                if (validateTargetTypes) {
                     throw new IllegalArgumentException("Supplied " + field + " must be a JSON string");
                 }
                 continue;
@@ -509,8 +521,11 @@ public final class McpToolPolicy {
                 throw new IllegalStateException("Audit record exceeds DISCORD_MCP_AUDIT_MAX_BYTES");
             }
             rotateAuditIfNeeded(lineBytes);
-            Files.writeString(auditFile, line,
-                    StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+            // Rotation removes the active path. Re-probe before every append so a replacement is
+            // created with owner-only POSIX permissions and an externally removed sink fails
+            // closed under the same rules as startup.
+            probeAuditFile(auditFile);
+            Files.writeString(auditFile, line, StandardCharsets.UTF_8, StandardOpenOption.APPEND);
         } catch (IOException error) {
             throw new IllegalStateException("Could not append DISCORD_MCP_AUDIT_FILE", error);
         }

@@ -3,6 +3,7 @@ package dev.saseq.configs;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.channel.middleman.GuildChannel;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.ai.tool.ToolCallback;
@@ -158,6 +159,20 @@ class McpToolPolicyTest {
                 .call("{\"guildId\":12345678901234567}"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("guildId must be a JSON string");
+        assertThat(calls).hasValue(0);
+    }
+
+    @Test
+    void numericChannelIdIsRejectedForPolicyAuditWithoutAGuildAllowlist() {
+        Path audit = tempDir.resolve("policy-audit.jsonl");
+        AtomicInteger calls = new AtomicInteger();
+        McpToolPolicy policy = policy(
+                mock(JDA.class), "", "send_message", "allow", audit.toString());
+
+        assertThatThrownBy(() -> only(policy.apply(provider("send_message", calls)))
+                .call("{\"channelId\":32345678901234567,\"message\":\"x\"}"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("channelId must be a JSON string");
         assertThat(calls).hasValue(0);
     }
 
@@ -857,6 +872,11 @@ class McpToolPolicyTest {
         assertThat(rotated).exists();
         assertThat(Files.size(audit)).isLessThanOrEqualTo(4096);
         assertThat(Files.size(rotated)).isLessThanOrEqualTo(4096);
+        if (audit.getFileSystem().supportedFileAttributeViews().contains("posix")) {
+            assertThat(Files.getPosixFilePermissions(audit)).containsExactlyInAnyOrder(
+                    java.nio.file.attribute.PosixFilePermission.OWNER_READ,
+                    java.nio.file.attribute.PosixFilePermission.OWNER_WRITE);
+        }
     }
 
     @Test
@@ -933,6 +953,26 @@ class McpToolPolicyTest {
                 "read_messages", "allow", audit.toString()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("regular file");
+    }
+
+    @Test
+    void auditPathMustNotBeASymbolicLink() throws Exception {
+        Path target = tempDir.resolve("audit-target.jsonl");
+        Path audit = tempDir.resolve("audit-link.jsonl");
+        Files.writeString(target, "existing evidence");
+        boolean symlinkCreated = true;
+        try {
+            Files.createSymbolicLink(audit, target);
+        } catch (UnsupportedOperationException | SecurityException | java.io.IOException error) {
+            symlinkCreated = false;
+        }
+        Assumptions.assumeTrue(symlinkCreated, "symbolic links are unavailable on this filesystem");
+
+        assertThatThrownBy(() -> policy(jdaWithChannel(), ALLOWED_GUILD,
+                "read_messages", "allow", audit.toString()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must not be a symbolic link");
+        assertThat(Files.readString(target)).isEqualTo("existing evidence");
     }
 
     @Test

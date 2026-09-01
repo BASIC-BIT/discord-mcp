@@ -285,9 +285,10 @@ schema are rejected rather than ignored. Audit-only deployments retain upstream 
   audit file outside `DISCORD_MCP_FILE_ROOT` and `DISCORD_MCP_DOWNLOAD_ROOT` so an MCP tool cannot
   read or write the audit trail. Startup rejects either configured path when its lexical or resolved
   location contains the audit file.
-  The sink must be a regular file, not a device or FIFO, and neither it nor its `.1` rotation may
-  be the configured `logging.file.name`; startup rejects lexical and resolved aliases. On POSIX
-  filesystems, startup creates or tightens the active audit file to owner read/write (`0600`).
+  The sink must be a regular file, not a symbolic link, device, or FIFO, and neither it nor its `.1`
+  rotation may be the configured `logging.file.name`; startup rejects lexical and resolved aliases. On POSIX
+  filesystems, startup creates or tightens the active audit file to owner read/write (`0600`) and
+  preserves those permissions when rotation creates a new active file.
   `DISCORD_MCP_AUDIT_MAX_BYTES` is parsed only when `DISCORD_MCP_AUDIT_FILE` is configured, so an
   otherwise unused legacy value does not block startup.
 
