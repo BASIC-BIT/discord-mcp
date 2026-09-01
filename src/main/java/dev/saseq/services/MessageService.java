@@ -116,7 +116,7 @@ public class MessageService {
      * @param message   Optional text content to accompany the file.
      * @return A confirmation message with a link to the sent message.
      */
-    @Tool(name = "send_file", description = "Send a file (attachment) to a specific channel. Provide the file as a local filePath OR a direct fileUrl OR base64 fileData (with fileName). Optionally include a text message. Max 50MB — Discord accepts that only on boosted guilds; on an unboosted one it caps at 25MB and rejects larger uploads itself.")
+    @Tool(name = "send_file", description = "Send a file (attachment) to a specific channel. Provide the file as a local filePath OR a direct fileUrl OR base64 fileData (with fileName). Optionally include a text message. filePath/fileUrl can reach 50MB on boosted guilds; base64 fileData is constrained by the MCP JSON transport to roughly 15MB. Unboosted guilds may impose a lower Discord limit.")
     public String sendFile(@ToolParam(description = "Discord channel ID") String channelId,
                            @ToolParam(description = "Absolute path to a local file to upload", required = false) String filePath,
                            @ToolParam(description = "Direct URL to a file to upload (alternative to filePath)", required = false) String fileUrl,

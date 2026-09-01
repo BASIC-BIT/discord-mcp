@@ -35,10 +35,12 @@ public class McpBearerAuthConfig {
             @Value("${management.server.port:}") String managementServerPort,
             @Value("${DISCORD_MCP_FILE_ROOT:}") String fileRoot,
             @Value("${DISCORD_MCP_DOWNLOAD_ROOT:}") String downloadRoot,
-            @Value("${DISCORD_MCP_AUDIT_FILE:}") String auditFile) {
+            @Value("${DISCORD_MCP_AUDIT_FILE:}") String auditFile,
+            @Value("${logging.file.name:}") String operationalLogFile) {
         requireCredentialIsolation(tokenFile, fileRoot, "DISCORD_MCP_FILE_ROOT");
         requireCredentialIsolation(tokenFile, downloadRoot, "DISCORD_MCP_DOWNLOAD_ROOT");
         requireCredentialAuditIsolation(tokenFile, auditFile);
+        requireCredentialOperationalLogIsolation(tokenFile, operationalLogFile);
         requireSingleLinkCredential(tokenFile);
         String token = readToken(tokenFile);
         if (token != null && !"STREAMABLE".equalsIgnoreCase(protocol)) {
@@ -59,21 +61,35 @@ public class McpBearerAuthConfig {
                 throw startupError("MCP endpoint must not equal the public health endpoint");
             }
         }
-        return new BearerAuthSettings(token);
+        return new BearerAuthSettings(token == null ? null : sha256(token));
     }
 
     @Bean
     @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
     FilterRegistrationBean<OncePerRequestFilter> mcpBearerAuthFilter(BearerAuthSettings settings) {
         FilterRegistrationBean<OncePerRequestFilter> registration = new FilterRegistrationBean<>();
-        registration.setFilter(new BearerFilter(settings.token()));
+        registration.setFilter(new BearerFilter(settings.tokenDigest()));
         registration.addUrlPatterns("/*");
         registration.setName("mcpBearerAuthFilter");
         registration.setOrder(Integer.MIN_VALUE);
         return registration;
     }
 
-    record BearerAuthSettings(String token) {
+    record BearerAuthSettings(byte[] tokenDigest) {
+        BearerAuthSettings {
+            tokenDigest = tokenDigest == null ? null : tokenDigest.clone();
+        }
+
+        @Override
+        public byte[] tokenDigest() {
+            return tokenDigest == null ? null : tokenDigest.clone();
+        }
+
+        @Override
+        public String toString() {
+            return "BearerAuthSettings[tokenDigest="
+                    + (tokenDigest == null ? "disabled" : "configured") + "]";
+        }
     }
 
     private static String readToken(String tokenFile) {
@@ -143,7 +159,7 @@ public class McpBearerAuthConfig {
     }
 
     private static void requireCredentialAuditIsolation(String configuredTokenFile,
-                                                        String configuredAuditFile) {
+                                                         String configuredAuditFile) {
         if (configuredTokenFile == null || configuredTokenFile.isBlank()
                 || configuredAuditFile == null || configuredAuditFile.isBlank()) {
             return;
@@ -163,6 +179,23 @@ public class McpBearerAuthConfig {
             }
         } catch (InvalidPathException unusablePath) {
             // The dedicated readers report an invalid setting with its owning variable name.
+        }
+    }
+
+    private static void requireCredentialOperationalLogIsolation(String configuredTokenFile,
+                                                                  String configuredLogFile) {
+        if (configuredTokenFile == null || configuredTokenFile.isBlank()
+                || configuredLogFile == null || configuredLogFile.isBlank()) {
+            return;
+        }
+        try {
+            Path tokenPath = Path.of(configuredTokenFile).toAbsolutePath().normalize();
+            Path logPath = Path.of(configuredLogFile.strip()).toAbsolutePath().normalize();
+            if (sameConfiguredFile(tokenPath, logPath)) {
+                throw startupError("DISCORD_MCP_ACCESS_TOKEN_FILE must differ from logging.file.name");
+            }
+        } catch (InvalidPathException unusablePath) {
+            // The owning token or logging configuration reports its own invalid path.
         }
     }
 
@@ -220,6 +253,15 @@ public class McpBearerAuthConfig {
         return cause == null ? new IllegalArgumentException(message) : new IllegalArgumentException(message, cause);
     }
 
+    private static byte[] sha256(String value) {
+        try {
+            return MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(StandardCharsets.UTF_8));
+        } catch (java.security.NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException(impossible);
+        }
+    }
+
     private static String normalizeEndpoint(String endpoint) {
         if (endpoint == null || !endpoint.startsWith("/") || endpoint.contains("*")) {
             throw startupError("MCP endpoint must be an absolute path without wildcards");
@@ -234,6 +276,10 @@ public class McpBearerAuthConfig {
 
         BearerFilter(String token) {
             this.expected = token == null ? null : sha256(token);
+        }
+
+        BearerFilter(byte[] expected) {
+            this.expected = expected == null ? null : expected.clone();
         }
 
         @Override
@@ -264,13 +310,5 @@ public class McpBearerAuthConfig {
                     && expectedRawUri.equals(request.getRequestURI());
         }
 
-        private static byte[] sha256(String value) {
-            try {
-                return MessageDigest.getInstance("SHA-256")
-                        .digest(value.getBytes(StandardCharsets.UTF_8));
-            } catch (java.security.NoSuchAlgorithmException impossible) {
-                throw new IllegalStateException(impossible);
-            }
-        }
     }
 }

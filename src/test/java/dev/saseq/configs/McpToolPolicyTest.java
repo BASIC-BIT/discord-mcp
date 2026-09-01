@@ -309,11 +309,8 @@ class McpToolPolicyTest {
     }
 
     @Test
-    void policyForwardsArgumentsAboveJacksonsDefaultStringLimitUnchanged() {
-        int maximumAdvertisedBase64Characters = ((50 * 1024 * 1024 + 2) / 3) * 4;
-        assertThat(McpToolPolicy.MAX_POLICY_JSON_STRING_CHARACTERS)
-                .isGreaterThanOrEqualTo(maximumAdvertisedBase64Characters);
-        AtomicReference<String> received = new AtomicReference<>();
+    void policyRejectsArgumentsAboveTheTransportCompatibleStringLimit() {
+        AtomicInteger calls = new AtomicInteger();
         ToolDefinition definition = ToolDefinition.builder().name("send_file")
                 .description("test").inputSchema(schema("channelId", "fileData")).build();
         ToolCallback raw = new ToolCallback() {
@@ -324,7 +321,7 @@ class McpToolPolicyTest {
 
             @Override
             public String call(String arguments) {
-                received.set(arguments);
+                calls.incrementAndGet();
                 return "called";
             }
         };
@@ -332,9 +329,10 @@ class McpToolPolicyTest {
         String arguments = "{\"channelId\":\"32345678901234567\",\"fileData\":\""
                 + "A".repeat(20_000_004) + "\"}";
 
-        assertThat(only(policy.apply(ToolCallbackProvider.from(raw))).call(arguments))
-                .isEqualTo("called");
-        assertThat(received.get()).isSameAs(arguments);
+        assertThatThrownBy(() -> only(policy.apply(ToolCallbackProvider.from(raw))).call(arguments))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("not valid JSON");
+        assertThat(calls).hasValue(0);
     }
 
     @Test
@@ -524,8 +522,8 @@ class McpToolPolicyTest {
 
         assertThatThrownBy(() -> only(policy.apply(provider("list_channels", new AtomicInteger())))
                 .call("{\"guildId\":\"" + oversizedGuildId + "\"}"))
-                .isInstanceOf(SecurityException.class)
-                .hasMessageContaining("unavailable or outside");
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("17-20 digit Discord snowflake");
 
         assertThat(Files.readString(audit))
                 .contains("\"outcome\":\"denied-invalid-target\"")
@@ -1238,7 +1236,7 @@ class McpToolPolicyTest {
                 .build();
         McpToolPolicy policy = policy(jda, ALLOWED_GUILD, "", "preview", "");
         Set<String> hiddenByDefault = new LinkedHashSet<>(McpToolPolicy.globalTargetToolNames());
-        hiddenByDefault.addAll(McpToolPolicy.explicitOptInReadToolNames());
+        hiddenByDefault.addAll(McpToolPolicy.explicitOptInCredentialToolNames());
 
         assertThat(policy.apply(upstream).getToolCallbacks())
                 .hasSize(upstream.getToolCallbacks().length
@@ -1278,13 +1276,16 @@ class McpToolPolicyTest {
     }
 
     @Test
-    void policyActiveWithoutToolAllowlistHidesCredentialReturningReads() {
-        McpToolPolicy policy = policy(jdaWithChannel(), ALLOWED_GUILD, "", "preview", "");
+    void policyActiveWithoutToolAllowlistHidesCredentialTools() {
+        McpToolPolicy policy = policy(jdaWithChannel(), "", "", "preview", "");
         ToolCallbackProvider raw = ToolCallbackProvider.from(
                 callback("read_messages", new AtomicInteger()),
+                callback("create_webhook", new AtomicInteger()),
                 callback("list_webhooks", new AtomicInteger()),
+                callback("create_invite", new AtomicInteger()),
                 callback("list_invites", new AtomicInteger()),
-                callback("get_invite_details", new AtomicInteger()));
+                callback("get_invite_details", new AtomicInteger()),
+                callback("read_private_messages", new AtomicInteger()));
 
         assertThat(policy.apply(raw).getToolCallbacks())
                 .extracting(callback -> callback.getToolDefinition().name())
@@ -1292,13 +1293,27 @@ class McpToolPolicyTest {
     }
 
     @Test
-    void exactToolAllowlistCanOptIntoGuildScopedCredentialReturningRead() {
+    void exactToolAllowlistCanOptIntoGuildScopedCredentialTools() {
         McpToolPolicy policy = policy(jdaWithChannel(), ALLOWED_GUILD,
-                "list_webhooks", "preview", "");
+                "create_webhook,list_webhooks", "preview", "");
 
-        assertThat(policy.apply(provider("list_webhooks", new AtomicInteger())).getToolCallbacks())
+        ToolCallbackProvider raw = ToolCallbackProvider.from(
+                callback("create_webhook", new AtomicInteger()),
+                callback("list_webhooks", new AtomicInteger()));
+        assertThat(policy.apply(raw).getToolCallbacks())
                 .extracting(callback -> callback.getToolDefinition().name())
-                .containsExactly("list_webhooks");
+                .containsExactly("create_webhook", "list_webhooks");
+    }
+
+    @Test
+    void malformedGuildIdReturnsAnActionableInputError() {
+        McpToolPolicy policy = policy(jdaWithChannel(), ALLOWED_GUILD,
+                "list_channels", "allow", "");
+
+        assertThatThrownBy(() -> only(policy.apply(provider("list_channels", new AtomicInteger())))
+                .call("{\"guildId\":\"not-a-snowflake\"}"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("17-20 digit Discord snowflake");
     }
 
     @Test
@@ -1358,7 +1373,10 @@ class McpToolPolicyTest {
                     case "send_webhook_message" -> schema("webhookUrl", "message");
                     case "get_invite_details" -> schema("inviteCode");
                     case "list_webhooks" -> schema("channelId");
+                    case "create_webhook" -> schema("channelId", "name");
+                    case "create_invite" -> schema("guildId", "channelId");
                     case "list_invites" -> schema("guildId");
+                    case "read_private_messages" -> schema("userId");
                     case "create_emoji" -> schema("image");
                     case "future_channel_tool" -> schema("targetChannelId");
                     case "list_channels" -> schema("guildId");

@@ -6,6 +6,7 @@ services:
     image: saseq/discord-mcp:latest
     restart: unless-stopped
     ports:
+      # Loopback is intentional; see README "Multi-server deployment policy" for remote-client migration.
       - "127.0.0.1:8085:8085"
     environment:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-http}

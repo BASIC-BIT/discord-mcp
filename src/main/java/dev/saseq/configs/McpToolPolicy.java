@@ -1,7 +1,6 @@
 package dev.saseq.configs;
 
 import dev.saseq.services.LocalFileGuard;
-import tools.jackson.core.StreamReadConstraints;
 import tools.jackson.core.StreamReadFeature;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -58,11 +57,6 @@ public final class McpToolPolicy {
     private static final Logger LOGGER = LoggerFactory.getLogger(McpToolPolicy.class);
     private static final String TARGET_ACCESS_DENIED =
             "Discord target is unavailable or outside the allowed guild scope";
-    // A 50 MiB upload becomes 69,905,068 base64 characters. Preserve that advertised tool
-    // contract under policy while keeping the parser bounded above the default 20M ceiling.
-    // Policy parsing and delegate binding can briefly retain multiple copies, so deployments that
-    // export send_file at this maximum need a heap sized for that peak.
-    static final int MAX_POLICY_JSON_STRING_CHARACTERS = 70_000_000;
     private static final Set<String> READ_ONLY_TOOLS = Set.of(
             "get_server_info", "find_channel", "list_channels", "get_channel_info",
             "find_category", "list_channels_in_category", "list_channel_permission_overwrites",
@@ -78,8 +72,9 @@ public final class McpToolPolicy {
             "send_private_message", "edit_private_message", "delete_private_message",
             "read_private_messages"
     );
-    private static final Set<String> EXPLICIT_OPT_IN_READ_TOOLS = Set.of(
-            "list_webhooks", "list_invites", "get_invite_details"
+    private static final Set<String> EXPLICIT_OPT_IN_CREDENTIAL_TOOLS = Set.of(
+            "create_webhook", "list_webhooks", "create_invite", "list_invites",
+            "get_invite_details", "read_private_messages"
     );
     private final JDA jda;
     private final ObjectMapper objectMapper;
@@ -106,12 +101,7 @@ public final class McpToolPolicy {
             @Value("${DISCORD_MCP_DOWNLOAD_ROOT:}") String downloadRoot) {
         this.jda = jda;
         this.objectMapper = objectMapper;
-        var argumentFactory = objectMapper.tokenStreamFactory().rebuild()
-                .streamReadConstraints(StreamReadConstraints.builder()
-                        .maxStringLength(MAX_POLICY_JSON_STRING_CHARACTERS)
-                        .build())
-                .build();
-        this.argumentObjectMapper = new ObjectMapper(argumentFactory).rebuild()
+        this.argumentObjectMapper = objectMapper.rebuild()
                 .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
                 .build();
         this.allowedGuilds = parseCsv(allowedGuilds, "DISCORD_MCP_ALLOWED_GUILDS");
@@ -282,11 +272,11 @@ public final class McpToolPolicy {
                     + "scope: " + explicitlyAllowedGlobalTargets);
         }
         if (policyActive && allowedTools.isEmpty()) {
-            Set<String> hiddenCredentialReads = new LinkedHashSet<>(available);
-            hiddenCredentialReads.retainAll(EXPLICIT_OPT_IN_READ_TOOLS);
-            if (!hiddenCredentialReads.isEmpty()) {
-                LOGGER.info("Discord MCP policy omitted credential-returning reads because "
-                        + "DISCORD_MCP_ALLOWED_TOOLS is unset: {}", hiddenCredentialReads);
+            Set<String> hiddenCredentialTools = new LinkedHashSet<>(available);
+            hiddenCredentialTools.retainAll(EXPLICIT_OPT_IN_CREDENTIAL_TOOLS);
+            if (!hiddenCredentialTools.isEmpty()) {
+                LOGGER.info("Discord MCP policy omitted credential-returning tools because "
+                        + "DISCORD_MCP_ALLOWED_TOOLS is unset: {}", hiddenCredentialTools);
             }
         }
         if (!allowedGuilds.isEmpty()) {
@@ -301,7 +291,7 @@ public final class McpToolPolicy {
                 .filter(callback -> allowedTools.isEmpty()
                         || allowedTools.contains(callback.getToolDefinition().name()))
                 .filter(callback -> !policyActive || !allowedTools.isEmpty()
-                        || !EXPLICIT_OPT_IN_READ_TOOLS.contains(
+                        || !EXPLICIT_OPT_IN_CREDENTIAL_TOOLS.contains(
                                 callback.getToolDefinition().name()))
                 .filter(callback -> allowedGuilds.isEmpty()
                         || !GLOBAL_TARGET_TOOLS.contains(callback.getToolDefinition().name()))
@@ -468,7 +458,8 @@ public final class McpToolPolicy {
             }
             if (failOnUnresolvedChannel && !guildValue.asText().isBlank()
                     && !isSnowflake(guildValue.asText())) {
-                throw new SecurityException("Supplied guildId must be a 17-20 digit Discord snowflake");
+                throw new IllegalArgumentException(
+                        "Supplied guildId must be a 17-20 digit Discord snowflake");
             }
         }
         addText(arguments, "guildId", guildIds);
@@ -820,8 +811,8 @@ public final class McpToolPolicy {
         return GLOBAL_TARGET_TOOLS;
     }
 
-    static Set<String> explicitOptInReadToolNames() {
-        return EXPLICIT_OPT_IN_READ_TOOLS;
+    static Set<String> explicitOptInCredentialToolNames() {
+        return EXPLICIT_OPT_IN_CREDENTIAL_TOOLS;
     }
 
     private static void requireSnowflake(String value, String name) {

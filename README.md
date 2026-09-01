@@ -244,15 +244,14 @@ schema are rejected rather than ignored. Audit-only deployments retain upstream 
   echoed in full. `allow` executes writes. Unknown tool names are
   classified as writes, so new tools do not silently become read-only. Preview is a write gate,
   not a data-isolation mode: allowed read tools still execute and can return sensitive data.
-  In particular, omit `list_webhooks`, `list_invites`, and `get_invite_details` unless the caller
-  is explicitly allowed to receive their credentials or invite material. `create_webhook` and
-  `create_invite` are the write-side equivalents; allowing them lets their results return new
-  credentials after Preview is changed to `allow`.
-  Policy-active parsing retains the raw request while validating a JSON tree before the delegate
-  binds it. Policy authorization releases the parsed payload tree before the delegate performs its
-  network call, retaining only bounded audit identifiers. A deployment that exports `send_file` at
-  its 50 MiB maximum must still budget heap for the raw request, delegate binding, and base64 decode,
-  or omit that tool when running with a smaller heap.
+  When policy is active without an exact tool allowlist, credential-returning or credential-creating
+  tools are hidden by default: `create_webhook`, `list_webhooks`, `create_invite`, `list_invites`,
+  `get_invite_details`, and `read_private_messages`. Add one by exact name only when the caller is
+  explicitly allowed to receive that material. Policy-active parsing retains the raw request while
+  validating a JSON tree before the delegate binds it, then releases the parsed tree before the
+  network call while retaining only bounded audit identifiers. The MCP JSON transport's default
+  string bound limits base64 `fileData` to roughly 15 MiB; use `filePath` or `fileUrl` for larger
+  attachments, subject to Discord's guild-specific upload limit.
 - `DISCORD_EXPECTED_BOT_ID`: refuses startup when a valid token authenticates the wrong bot.
 - `DISCORD_MCP_ACCESS_TOKEN_FILE`: HTTP-only bearer credential, read from a mounted file. When
   set under the STREAMABLE protocol, the configured MCP endpoint returns `401` unless the request
@@ -273,7 +272,9 @@ schema are rejected rather than ignored. Audit-only deployments retain upstream 
   links so an in-root alias cannot bypass path containment. Deployment launchers should enforce
   the same invariant natively when the runtime filesystem does not expose that attribute. The
   resolved bearer target must be a regular file, so FIFOs, devices, and other special files fail
-  before the credential reader opens them.
+  before the credential reader opens them. The bearer file must also differ from
+  `logging.file.name`. After startup validation, only its SHA-256 digest remains in the settings
+  bean and request filter; the plaintext token is not retained there or rendered by `toString()`.
 - `DISCORD_MCP_AUDIT_FILE`: append-only JSONL tool audit. It records tool, outcome, write mode,
   a per-process salted arguments hash, and a per-call invocation ID that pairs `started` with its
   terminal record under concurrency. When deployment policy is active, it also records resolved
