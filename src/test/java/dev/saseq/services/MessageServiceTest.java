@@ -4,9 +4,11 @@ import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.MessageHistory;
 import net.dv8tion.jda.api.entities.User;
+import net.dv8tion.jda.api.entities.SelfUser;
 import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
 import net.dv8tion.jda.api.requests.RestAction;
+import net.dv8tion.jda.api.requests.GatewayIntent;
 import net.dv8tion.jda.api.requests.restaction.MessageCreateAction;
 import net.dv8tion.jda.api.utils.FileUpload;
 import org.junit.jupiter.api.Assumptions;
@@ -22,6 +24,7 @@ import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.time.OffsetDateTime;
+import java.util.EnumSet;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -116,6 +119,7 @@ class MessageServiceTest {
         when(author.getName()).thenReturn("alice");
         when(message.getContentRaw()).thenReturn("exact `copy`\nwith formatting");
         when(message.getJumpUrl()).thenReturn("https://discord.com/channels/123/456/789");
+        when(jda.getGatewayIntents()).thenReturn(EnumSet.of(GatewayIntent.MESSAGE_CONTENT));
 
         assertThat(messageService.getMessage(CHANNEL_ID, MESSAGE_ID)).isEqualTo(
                 "{\"guildId\":\"123456789012345678\","
@@ -124,7 +128,37 @@ class MessageServiceTest {
                         + "\"authorId\":\"234567890123456789\","
                         + "\"authorName\":\"alice\","
                         + "\"content\":\"exact `copy`\\nwith formatting\","
+                        + "\"contentAvailable\":true,"
                         + "\"jumpUrl\":\"https://discord.com/channels/123/456/789\"}");
+    }
+
+    @Test
+    void getMessageMarksContentUnavailableWithoutIntentForAnotherAuthor() {
+        TextChannel channel = mock(TextChannel.class);
+        Guild guild = mock(Guild.class);
+        Message message = mock(Message.class);
+        User author = mock(User.class);
+        SelfUser self = mock(SelfUser.class);
+        @SuppressWarnings("unchecked")
+        RestAction<Message> retrieve = mock(RestAction.class);
+
+        when(jda.getTextChannelById(CHANNEL_ID)).thenReturn(channel);
+        when(channel.getGuild()).thenReturn(guild);
+        when(guild.getId()).thenReturn("123456789012345678");
+        when(channel.retrieveMessageById(MESSAGE_ID)).thenReturn(retrieve);
+        when(retrieve.complete()).thenReturn(message);
+        when(message.getId()).thenReturn(MESSAGE_ID);
+        when(message.getAuthor()).thenReturn(author);
+        when(author.getId()).thenReturn("234567890123456789");
+        when(author.getName()).thenReturn("alice");
+        when(message.getContentRaw()).thenReturn("");
+        when(message.getJumpUrl()).thenReturn("https://discord.com/channels/123/456/789");
+        when(jda.getGatewayIntents()).thenReturn(EnumSet.noneOf(GatewayIntent.class));
+        when(jda.getSelfUser()).thenReturn(self);
+        when(self.getId()).thenReturn("999999999999999999");
+
+        assertThat(messageService.getMessage(CHANNEL_ID, MESSAGE_ID))
+                .contains("\"content\":\"\",\"contentAvailable\":false");
     }
 
     @Test

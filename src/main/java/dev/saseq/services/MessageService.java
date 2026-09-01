@@ -2,6 +2,7 @@ package dev.saseq.services;
 
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Message;
+import net.dv8tion.jda.api.requests.GatewayIntent;
 import net.dv8tion.jda.api.entities.channel.concrete.NewsChannel;
 import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
 import net.dv8tion.jda.api.entities.channel.concrete.ThreadChannel;
@@ -363,7 +364,7 @@ public class MessageService {
      * @param messageId The ID of the message to retrieve.
      * @return JSON containing stable target, author, content, and jump-link fields.
      */
-    @Tool(name = "get_message", description = "Get one guild message as a structured JSON snapshot for exact readback and comparison")
+    @Tool(name = "get_message", description = "Get one guild message as structured JSON; contentAvailable says whether content is safe for exact comparison")
     public String getMessage(@ToolParam(description = "Discord channel ID") String channelId,
                              @ToolParam(description = "Specific message ID") String messageId) {
         if (channelId == null || channelId.isEmpty()) {
@@ -381,6 +382,8 @@ public class MessageService {
         if (message == null) {
             throw new IllegalArgumentException("Message not found by messageId");
         }
+        boolean contentAvailable = jda.getGatewayIntents().contains(GatewayIntent.MESSAGE_CONTENT)
+                || message.getAuthor().getId().equals(jda.getSelfUser().getId());
         return JSON.writeValueAsString(new MessageSnapshot(
                 guildChannel.getGuild().getId(),
                 channelId,
@@ -388,12 +391,13 @@ public class MessageService {
                 message.getAuthor().getId(),
                 message.getAuthor().getName(),
                 message.getContentRaw(),
+                contentAvailable,
                 message.getJumpUrl()));
     }
 
     private record MessageSnapshot(String guildId, String channelId, String messageId,
                                    String authorId, String authorName, String content,
-                                   String jumpUrl) {
+                                   boolean contentAvailable, String jumpUrl) {
     }
 
     /**

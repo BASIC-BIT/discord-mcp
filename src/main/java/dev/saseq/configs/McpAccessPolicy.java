@@ -150,7 +150,9 @@ public final class McpAccessPolicy {
         Set<String> guildIds = new LinkedHashSet<>();
         if (declaredArguments.contains("guildId")) {
             JsonNode guildValue = arguments.get("guildId");
-            if (guildValue != null && !guildValue.isNull()) {
+            boolean absent = guildValue == null || guildValue.isNull()
+                    || (guildValue.isTextual() && guildValue.asText().isEmpty());
+            if (!absent) {
                 guildIds.add(requireSnowflakeText(guildValue, "guildId"));
             } else if (defaultGuildId != null) {
                 guildIds.add(defaultGuildId);

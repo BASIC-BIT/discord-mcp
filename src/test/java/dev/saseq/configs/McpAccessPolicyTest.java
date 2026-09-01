@@ -1,5 +1,20 @@
 package dev.saseq.configs;
 
+import dev.saseq.services.CategoryService;
+import dev.saseq.services.ChannelPermissionService;
+import dev.saseq.services.ChannelService;
+import dev.saseq.services.DiscordService;
+import dev.saseq.services.EmojiService;
+import dev.saseq.services.ForumService;
+import dev.saseq.services.InviteService;
+import dev.saseq.services.MessageService;
+import dev.saseq.services.ModerationService;
+import dev.saseq.services.RoleService;
+import dev.saseq.services.ScheduledEventService;
+import dev.saseq.services.ThreadService;
+import dev.saseq.services.UserService;
+import dev.saseq.services.VoiceChannelService;
+import dev.saseq.services.WebhookService;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.channel.middleman.GuildChannel;
@@ -7,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.ai.tool.definition.ToolDefinition;
+import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import tools.jackson.databind.ObjectMapper;
 
 import java.util.Arrays;
@@ -125,6 +141,8 @@ class McpAccessPolicyTest {
 
         assertThat(exposed.call("{}")).isEqualTo("called");
         assertThat(calls).hasValue(1);
+        assertThat(exposed.call("{\"guildId\":\"\"}")).isEqualTo("called");
+        assertThat(calls).hasValue(2);
 
         McpAccessPolicy channelPolicy = policy(mock(JDA.class), ALLOWED_GUILD,
                 "read_messages", ALLOWED_GUILD);
@@ -198,6 +216,46 @@ class McpAccessPolicyTest {
         assertThat(McpAccessPolicy.isGuildChannelArgument("forumPostId")).isTrue();
         assertThat(McpAccessPolicy.isGuildChannelArgument("messageId")).isFalse();
         assertThat(McpAccessPolicy.isGuildChannelArgument("userId")).isFalse();
+    }
+
+    @Test
+    void realToolSurfaceRequiresExplicitGuildScopeReview() {
+        ToolCallbackProvider raw = MethodToolCallbackProvider.builder().toolObjects(
+                mock(DiscordService.class), mock(MessageService.class), mock(UserService.class),
+                mock(ChannelService.class), mock(CategoryService.class), mock(WebhookService.class),
+                mock(ThreadService.class), mock(RoleService.class), mock(ModerationService.class),
+                mock(VoiceChannelService.class), mock(ScheduledEventService.class),
+                mock(InviteService.class), mock(ChannelPermissionService.class),
+                mock(EmojiService.class), mock(ForumService.class)).build();
+        ToolCallbackProvider scoped = policy(mock(JDA.class), ALLOWED_GUILD, "", "")
+                .apply(raw);
+        assertThat(Arrays.stream(scoped.getToolCallbacks())
+                .map(callback -> callback.getToolDefinition().name()).sorted().toList())
+                .containsExactly(
+                        "add_reaction", "assign_role", "ban_member", "create_category",
+                        "create_emoji", "create_forum_channel", "create_forum_post",
+                        "create_guild_scheduled_event", "create_invite", "create_role",
+                        "create_stage_channel", "create_text_channel", "create_voice_channel",
+                        "create_webhook", "delete_category", "delete_channel",
+                        "delete_channel_permission_overwrite", "delete_emoji",
+                        "delete_guild_scheduled_event", "delete_message", "delete_role",
+                        "disconnect_member", "download_attachment", "edit_category", "edit_emoji",
+                        "edit_forum_channel", "edit_guild_scheduled_event", "edit_message",
+                        "edit_role", "edit_text_channel", "edit_voice_channel", "find_category",
+                        "find_channel", "get_attachment", "get_bans", "get_channel_info",
+                        "get_emoji_details", "get_forum_channel_info",
+                        "get_guild_scheduled_event_users", "get_member_by_id", "get_message",
+                        "get_server_info", "get_user_id_by_name", "kick_member",
+                        "list_active_threads", "list_channel_permission_overwrites",
+                        "list_channels", "list_channels_in_category", "list_emojis",
+                        "list_forum_channels", "list_forum_posts", "list_forum_tags",
+                        "list_guild_scheduled_events", "list_invites", "list_roles",
+                        "list_webhooks", "modify_forum_post", "modify_voice_state", "move_channel",
+                        "move_member", "read_messages", "remove_reaction", "remove_role",
+                        "remove_timeout", "search_members", "send_file", "send_message",
+                        "set_guild_scheduled_event_image", "set_nickname", "timeout_member",
+                        "unban_member", "upsert_member_channel_permissions",
+                        "upsert_role_channel_permissions");
     }
 
     private static McpAccessPolicy policy(JDA jda, String guilds, String tools,

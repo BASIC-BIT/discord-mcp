@@ -218,6 +218,8 @@ The bot configuration always enables privileged `GUILD_MEMBERS` because member l
 it. Exact message content is opt-in for upgrade compatibility: set
 `DISCORD_MCP_ENABLE_MESSAGE_CONTENT=true` and enable Message Content Intent in the Discord
 Developer Portal before using content-dependent tools such as `read_messages` or `get_message`.
+The `get_message` snapshot includes `contentAvailable`; callers must not treat `content` as exact
+when that field is false.
 
 These are capability limits, not an approval workflow. Human confirmation, previews, per-server
 write policy, source-of-truth handling, and post-write readback belong in the calling client or a
