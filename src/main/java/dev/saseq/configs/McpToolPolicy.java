@@ -24,7 +24,10 @@ import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.InvalidPathException;
+import java.nio.file.LinkOption;
+import java.nio.file.OpenOption;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.StandardCopyOption;
@@ -157,7 +160,7 @@ public final class McpToolPolicy {
                 }
             }
             try {
-                probeAuditFile(this.auditFile);
+                probeAuditFile(this.auditFile, true);
             } catch (IOException error) {
                 throw startupError("DISCORD_MCP_AUDIT_FILE is not appendable");
             }
@@ -172,24 +175,41 @@ public final class McpToolPolicy {
         }
     }
 
-    private static void probeAuditFile(Path auditFile) throws IOException {
+    private static void probeAuditFile(Path auditFile, boolean tightenExisting) throws IOException {
         if (Files.isSymbolicLink(auditFile)) {
             throw new IOException("symbolic-link audit sinks are not allowed");
         }
-        Set<StandardOpenOption> options = Set.of(
-                StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.APPEND);
+        Set<StandardOpenOption> createOptions = Set.of(
+                StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE, StandardOpenOption.APPEND);
         if (auditFile.getFileSystem().supportedFileAttributeViews().contains("posix")) {
             Set<PosixFilePermission> ownerOnly = Set.of(
                     PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE);
-            try (var ignored = Files.newByteChannel(
-                    auditFile, options, PosixFilePermissions.asFileAttribute(ownerOnly))) {
-                // Open-and-close probes append permission without altering existing data.
+            try (var ignored = Files.newByteChannel(auditFile, createOptions,
+                    PosixFilePermissions.asFileAttribute(ownerOnly))) {
+                return;
+            } catch (FileAlreadyExistsException ignored) {
+                openExistingAuditFile(auditFile);
+                if (tightenExisting) {
+                    Files.setPosixFilePermissions(auditFile, ownerOnly);
+                }
             }
-            Files.setPosixFilePermissions(auditFile, ownerOnly);
             return;
         }
-        try (var ignored = Files.newByteChannel(auditFile, options)) {
-            // Non-POSIX filesystems use their native ACL and inheritance model.
+        try (var ignored = Files.newByteChannel(auditFile, createOptions)) {
+            // A newly created file uses the filesystem's native ACL and inheritance model.
+        } catch (FileAlreadyExistsException ignored) {
+            openExistingAuditFile(auditFile);
+        }
+    }
+
+    private static void openExistingAuditFile(Path auditFile) throws IOException {
+        if (Files.isSymbolicLink(auditFile)) {
+            throw new IOException("symbolic-link audit sinks are not allowed");
+        }
+        Set<OpenOption> appendOptions = Set.of(
+                StandardOpenOption.WRITE, StandardOpenOption.APPEND, LinkOption.NOFOLLOW_LINKS);
+        try (var ignored = Files.newByteChannel(auditFile, appendOptions)) {
+            // Open-and-close probes append permission without altering existing data.
         }
     }
 
@@ -536,7 +556,7 @@ public final class McpToolPolicy {
             // Rotation removes the active path. Re-probe before every append so a replacement is
             // created with owner-only POSIX permissions and an externally removed sink fails
             // closed under the same rules as startup.
-            probeAuditFile(auditFile);
+            probeAuditFile(auditFile, false);
             Files.writeString(auditFile, line, StandardCharsets.UTF_8, StandardOpenOption.APPEND);
         } catch (IOException error) {
             throw new IllegalStateException("Could not append DISCORD_MCP_AUDIT_FILE", error);
@@ -605,8 +625,14 @@ public final class McpToolPolicy {
     private Set<String> schemaProperties(ToolDefinition definition) {
         try {
             JsonNode schema = objectMapper.readTree(definition.inputSchema());
-            JsonNode properties = schema == null ? null : schema.get("properties");
-            if (properties == null || !properties.isObject()) {
+            if (schema == null || !schema.isObject()) {
+                throw startupError("Tool " + definition.name() + " has an invalid input schema");
+            }
+            JsonNode properties = schema.get("properties");
+            if (properties == null || properties.isNull()) {
+                return Set.of();
+            }
+            if (!properties.isObject()) {
                 throw startupError("Tool " + definition.name() + " has no object properties in its input schema");
             }
             Set<String> names = new LinkedHashSet<>();

@@ -234,6 +234,27 @@ class McpToolPolicyTest {
     }
 
     @Test
+    void policyAcceptsAnObjectSchemaWithoutPropertiesForANoArgumentTool() {
+        ToolDefinition definition = ToolDefinition.builder().name("send_message")
+                .description("test").inputSchema("{\"type\":\"object\"}").build();
+        ToolCallback raw = new ToolCallback() {
+            @Override
+            public ToolDefinition getToolDefinition() {
+                return definition;
+            }
+
+            @Override
+            public String call(String arguments) {
+                return "called";
+            }
+        };
+        McpToolPolicy policy = policy(mock(JDA.class), "", "send_message", "preview", "");
+
+        assertThat(only(policy.apply(ToolCallbackProvider.from(raw))).call("{}"))
+                .startsWith("WRITE_PREVIEW:");
+    }
+
+    @Test
     void auditOnlyForwardsArgumentsUnchanged() {
         AtomicReference<String> received = new AtomicReference<>();
         ToolDefinition definition = ToolDefinition.builder().name("send_message")
@@ -995,6 +1016,28 @@ class McpToolPolicyTest {
                     java.nio.file.attribute.PosixFilePermission.OWNER_READ,
                     java.nio.file.attribute.PosixFilePermission.OWNER_WRITE);
         }
+    }
+
+    @Test
+    void auditAppendPreservesOperatorGrantedPosixGroupRead() throws Exception {
+        Path audit = tempDir.resolve("collector-readable-audit.jsonl");
+        Assumptions.assumeTrue(
+                audit.getFileSystem().supportedFileAttributeViews().contains("posix"),
+                "POSIX permissions are unavailable on this filesystem");
+        McpToolPolicy policy = policy(jdaWithChannel(), ALLOWED_GUILD,
+                "read_messages", "allow", audit.toString());
+        Files.setPosixFilePermissions(audit, Set.of(
+                java.nio.file.attribute.PosixFilePermission.OWNER_READ,
+                java.nio.file.attribute.PosixFilePermission.OWNER_WRITE,
+                java.nio.file.attribute.PosixFilePermission.GROUP_READ));
+
+        only(policy.apply(provider("read_messages", new AtomicInteger())))
+                .call("{\"channelId\":\"32345678901234567\"}");
+
+        assertThat(Files.getPosixFilePermissions(audit)).containsExactlyInAnyOrder(
+                java.nio.file.attribute.PosixFilePermission.OWNER_READ,
+                java.nio.file.attribute.PosixFilePermission.OWNER_WRITE,
+                java.nio.file.attribute.PosixFilePermission.GROUP_READ);
     }
 
     @Test

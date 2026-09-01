@@ -290,7 +290,8 @@ schema are rejected rather than ignored. Audit-only deployments retain upstream 
   The sink must be a regular file, not a symbolic link, device, or FIFO, and neither it nor its `.1`
   rotation may be the configured `logging.file.name`; startup rejects lexical and resolved aliases. On POSIX
   filesystems, startup creates or tightens the active audit file to owner read/write (`0600`) and
-  preserves those permissions when rotation creates a new active file.
+  creates each post-rotation replacement with those permissions. Permission changes made by an
+  operator after startup, such as group read for a log collector, remain intact on later appends.
   `DISCORD_MCP_AUDIT_MAX_BYTES` is parsed only when `DISCORD_MCP_AUDIT_FILE` is configured, so an
   otherwise unused legacy value does not block startup.
 
