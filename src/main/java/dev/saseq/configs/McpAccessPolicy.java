@@ -165,6 +165,11 @@ public final class McpAccessPolicy {
             if (value == null || value.isNull()) {
                 continue;
             }
+            // Discord edit tools use an empty optional category ID to detach a channel.
+            // It contributes no guild evidence; another declared target must still establish scope.
+            if (value.isTextual() && value.asText().isEmpty()) {
+                continue;
+            }
             String channelId = requireSnowflakeText(value, field);
             GuildChannel channel = null;
             try {

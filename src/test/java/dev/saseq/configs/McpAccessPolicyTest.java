@@ -97,6 +97,25 @@ class McpAccessPolicyTest {
     }
 
     @Test
+    void emptyOptionalCategoryDetachesAfterAnotherTargetEstablishesScope() {
+        JDA jda = mock(JDA.class);
+        stubChannel(jda, CHANNEL, ALLOWED_GUILD);
+        AtomicReference<String> received = new AtomicReference<>();
+        ToolCallback exposed = only(policy(jda, ALLOWED_GUILD, "move_channel", "")
+                .apply(ToolCallbackProvider.from(callback("move_channel",
+                        schema("channelId", "categoryId"), received))));
+
+        String detachArguments = "{\"channelId\":\"" + CHANNEL
+                + "\",\"categoryId\":\"\"}";
+        assertThat(exposed.call(detachArguments)).isEqualTo("called");
+        assertThat(received).hasValue(detachArguments);
+
+        assertThatThrownBy(() -> exposed.call("{\"categoryId\":\"\"}"))
+                .isInstanceOf(SecurityException.class)
+                .hasMessageContaining("outside the allowed guild scope");
+    }
+
+    @Test
     void defaultGuildOnlyAppliesToToolsThatDeclareGuildId() {
         McpAccessPolicy policy = policy(mock(JDA.class), ALLOWED_GUILD,
                 "list_channels", ALLOWED_GUILD);
