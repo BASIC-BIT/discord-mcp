@@ -101,8 +101,6 @@ docker run -d -i \
 > mount**, because the operator puts files there and the app only reads them — a named volume
 > cannot be written from the host without `docker cp`, which makes "put the file there"
 > impossible to act on, and `:ro` enforces at the mount what the docs describe.
-> Mounting the downloads volume below `/var/lib/discord-mcp` is intentional. Docker applies the
-> more-specific child mount at `/var/lib/discord-mcp/downloads` over its parent path.
 
 Default MCP endpoint URL (HTTP profile): `http://localhost:8085/mcp`
 
@@ -225,9 +223,11 @@ schema are rejected rather than ignored. Audit-only deployments retain upstream 
   refused even when a guild is explicit. This matches the existing service implementations, which
   already depend on the same cache for those channel and thread lookups.
 - `DISCORD_MCP_ALLOWED_TOOLS`: comma-separated exact tool names. Unknown names fail startup and
-  tools not named here are not exported to MCP clients. When a guild allowlist is active, global
-  target tools that cannot prove a guild are intentionally uncallable and should be omitted:
-  webhook URL/ID operations, invite-code lookup/deletion, and private-message operations.
+  tools not named here are not exported to MCP clients. Setting this variable also enables strict
+  generated-schema checking, so caller-supplied argument keys that the selected tool does not
+  declare are rejected. When a guild allowlist is active, global target tools that cannot prove a
+  guild are rejected at startup and must be omitted: webhook URL/ID operations, invite-code
+  lookup/deletion, and private-message operations.
 - `DISCORD_MCP_WRITE_MODE`: `preview` returns `WRITE_PREVIEW` plus the proposed argument object
   for every mutation without calling Discord. Large payloads are bounded and hashed rather than
   echoed in full. `allow` executes writes. Unknown tool names are
@@ -243,11 +243,13 @@ schema are rejected rather than ignored. Audit-only deployments retain upstream 
   has the exact `Authorization: Bearer ...` header. Startup fails unless the protocol is explicitly
   configured as STREAMABLE while the bearer is enabled. Health checks remain available without the
   bearer; every other current or future servlet path defaults to protected. Use a separate random
-  token of at least 32 characters, never the Discord bot token. The file is read once at startup,
-  so restart the process after rotating it. Only the exact default `/actuator/health` path is public;
-  custom management paths and health subpaths remain bearer-protected. This filter covers the main
-  servlet context; if `management.server.port` creates a separate management context, secure or
-  firewall that port independently.
+  token of at least 32 characters, never the Discord bot token. Token files over 4096 bytes are
+  rejected. The file is read once at startup, so restart the process after rotating it. Only the
+  exact default `/actuator/health` path is public; custom management paths and health subpaths remain
+  bearer-protected. Do not set `spring.mvc.servlet.path` with the bundled health check. If a custom
+  servlet path is required, keep health protected and update the deployment health check to match.
+  This filter covers the main servlet context; if `management.server.port` creates a separate
+  management context, secure or firewall that port independently.
 - `DISCORD_MCP_AUDIT_FILE`: append-only JSONL tool audit. It records tool, outcome, write mode,
   resolved guild IDs, a per-process salted arguments hash, and a per-call invocation ID that pairs
   `started` with its terminal record under concurrency. When deployment policy is active, selected declared Discord
@@ -263,7 +265,8 @@ schema are rejected rather than ignored. Audit-only deployments retain upstream 
   This cap is a disk bound, not a retention guarantee. High call volume can rotate older evidence
   out of both files; forward audit records to a durable log sink when retention matters. Keep the
   audit file outside `DISCORD_MCP_FILE_ROOT` and `DISCORD_MCP_DOWNLOAD_ROOT` so an MCP tool cannot
-  read or write the audit trail.
+  read or write the audit trail. Startup rejects either configured path when its lexical or resolved
+  location contains the audit file.
   `DISCORD_MCP_AUDIT_MAX_BYTES` is parsed only when `DISCORD_MCP_AUDIT_FILE` is configured, so an
   otherwise unused legacy value does not block startup.
 
@@ -279,9 +282,10 @@ export DISCORD_MCP_AUDIT_FILE=/var/lib/discord-mcp/audit.jsonl
 export DISCORD_MCP_AUDIT_MAX_BYTES=10485760
 ```
 
-For plain `docker run`, create `./discord-mcp-access-token` as an operator-readable file outside
-Git, then add these arguments to the command above. The bind mount is required; forwarding only
-the container pathname makes startup fail because the credential is not present in the container.
+For plain `docker run`, create the gitignored repo-local file `./discord-mcp-access-token` as an
+operator-readable file, then add these arguments to the command above. The bind mount is required;
+forwarding only the container pathname makes startup fail because the credential is not present in
+the container.
 
 ```bash
   --mount type=bind,src="$PWD/discord-mcp-access-token",dst=/run/secrets/discord-mcp-access-token,readonly \
@@ -290,6 +294,10 @@ the container pathname makes startup fail because the credential is not present 
   -e DISCORD_MCP_AUDIT_FILE \
   -e DISCORD_MCP_AUDIT_MAX_BYTES \
 ```
+
+The named audit parent at `/var/lib/discord-mcp` and the more-specific downloads child mount at
+`/var/lib/discord-mcp/downloads` are intentional. Docker applies the child mount over its parent,
+so downloads still use their dedicated volume while the audit remains in its separate volume.
 
 The allowlist is application-enforced and complements,
 rather than replaces, Discord role hierarchy, channel overrides, and least-privilege bot grants.

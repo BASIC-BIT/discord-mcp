@@ -24,7 +24,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import java.util.Arrays;
 import java.util.Set;
 
 @Configuration
@@ -70,36 +69,10 @@ public class DiscordMcpConfig {
                 emojiService,
                 forumService
         };
-        // Keep runtime exports tied to the parameter classification inventory asserted by
-        // policy tests.
-        validateToolServiceTypes(toolObjects);
         ToolCallbackProvider rawProvider = MethodToolCallbackProvider.builder()
                 .toolObjects(toolObjects)
                 .build();
         return toolPolicy.apply(rawProvider);
-    }
-
-    private static void validateToolServiceTypes(Object[] toolObjects) {
-        boolean exactInventory = toolObjects.length == TOOL_SERVICE_TYPES.size()
-                && TOOL_SERVICE_TYPES.stream()
-                .allMatch(type -> Arrays.stream(toolObjects).anyMatch(type::isInstance));
-        if (!exactInventory) {
-            String missing = TOOL_SERVICE_TYPES.stream()
-                    .filter(type -> Arrays.stream(toolObjects).noneMatch(type::isInstance))
-                    .map(Class::getSimpleName)
-                    .sorted()
-                    .collect(java.util.stream.Collectors.joining(", "));
-            String unexpected = Arrays.stream(toolObjects)
-                    .filter(object -> TOOL_SERVICE_TYPES.stream().noneMatch(type -> type.isInstance(object)))
-                    .map(object -> object.getClass().getSimpleName())
-                    .distinct()
-                    .sorted()
-                    .collect(java.util.stream.Collectors.joining(", "));
-            throw new IllegalStateException("Discord MCP tool service inventory is inconsistent: "
-                    + "expected count " + TOOL_SERVICE_TYPES.size() + ", actual count "
-                    + toolObjects.length + ", missing [" + missing + "], unexpected ["
-                    + unexpected + "]");
-        }
     }
 
     static Set<Class<?>> toolServiceTypes() {
@@ -160,7 +133,7 @@ public class DiscordMcpConfig {
         } else if (lower.contains("intent") || lower.contains("4014")) {
             System.err.println("  Likely cause: a privileged gateway intent is not enabled for this bot.");
             System.err.println("  Fix: in the Discord Developer Portal (Bot -> Privileged Gateway Intents), enable");
-            System.err.println("       'Server Members Intent'.");
+            System.err.println("       'Server Members Intent' (GUILD_MEMBERS).");
         }
         System.err.println("  Details: " + details);
     }

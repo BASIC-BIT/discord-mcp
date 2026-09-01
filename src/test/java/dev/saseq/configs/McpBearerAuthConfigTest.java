@@ -105,6 +105,17 @@ class McpBearerAuthConfigTest {
     }
 
     @Test
+    void oversizedTokenFileFailsBeforeItIsReadInFull() throws Exception {
+        Path tokenFile = tempDir.resolve("oversized-token");
+        Files.writeString(tokenFile, "x".repeat(4_097));
+
+        assertThatThrownBy(() -> new McpBearerAuthConfig()
+                .mcpBearerAuthSettings(tokenFile.toString(), "/mcp", "STREAMABLE", "servlet"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("exceeds 4096 bytes");
+    }
+
+    @Test
     void healthRemainsPublicWhileOtherFuturePathsDefaultToProtected() throws Exception {
         var filter = new McpBearerAuthConfig.BearerFilter(TOKEN);
         var healthRequest = new MockHttpServletRequest("GET", "/actuator/health");

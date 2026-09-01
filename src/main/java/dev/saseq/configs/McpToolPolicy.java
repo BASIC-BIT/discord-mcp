@@ -1,7 +1,9 @@
 package dev.saseq.configs;
 
+import dev.saseq.services.LocalFileGuard;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.channel.middleman.GuildChannel;
 import org.springframework.ai.chat.model.ToolContext;
@@ -28,7 +30,9 @@ import java.security.DigestOutputStream;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.Arrays;
+import java.util.HexFormat;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
@@ -97,7 +101,9 @@ public final class McpToolPolicy {
             @Value("${DISCORD_GUILD_ID:}") String defaultGuildId,
             @Value("${DISCORD_MCP_WRITE_MODE:allow}") String writeMode,
             @Value("${DISCORD_MCP_AUDIT_FILE:}") String auditFile,
-            @Value("${DISCORD_MCP_AUDIT_MAX_BYTES:10485760}") String auditMaxBytes) {
+            @Value("${DISCORD_MCP_AUDIT_MAX_BYTES:10485760}") String auditMaxBytes,
+            @Value("${DISCORD_MCP_FILE_ROOT:}") String fileRoot,
+            @Value("${DISCORD_MCP_DOWNLOAD_ROOT:}") String downloadRoot) {
         this.jda = jda;
         this.objectMapper = objectMapper;
         this.allowedGuilds = parseCsv(allowedGuilds, "DISCORD_MCP_ALLOWED_GUILDS");
@@ -128,6 +134,8 @@ public final class McpToolPolicy {
             } catch (IOException error) {
                 throw startupError("DISCORD_MCP_AUDIT_FILE is not appendable");
             }
+            requireAuditIsolation(fileRoot, "DISCORD_MCP_FILE_ROOT");
+            requireAuditIsolation(downloadRoot, "DISCORD_MCP_DOWNLOAD_ROOT");
         }
 
         this.allowedGuilds.forEach(id -> requireSnowflake(id, "DISCORD_MCP_ALLOWED_GUILDS"));
@@ -349,7 +357,7 @@ public final class McpToolPolicy {
                 fieldsToNormalize.add(field);
             }
         }
-        var object = (tools.jackson.databind.node.ObjectNode) arguments;
+        var object = (ObjectNode) arguments;
         fieldsToNormalize.forEach(field -> object.put(field, object.get(field).asText()));
         return !fieldsToNormalize.isEmpty();
     }
@@ -486,14 +494,19 @@ public final class McpToolPolicy {
         arguments.propertyNames().forEach(supplied::add);
         supplied.removeAll(declared);
         if (!supplied.isEmpty()) {
-            throw new SecurityException("Tool " + tool + " received undeclared arguments: " + supplied);
+            List<String> firstKeys = supplied.stream().limit(5)
+                    .map(McpToolPolicy::boundedDiagnosticName)
+                    .toList();
+            String remainder = supplied.size() > firstKeys.size() ? ", additional keys omitted" : "";
+            throw new SecurityException("Tool " + tool + " received " + supplied.size()
+                    + " undeclared arguments; first key names: " + firstKeys + remainder);
         }
     }
 
     private String previewArguments(String raw, JsonNode parsed) {
         final int maximumCharacters = 16_384;
         final int largeValueCharacters = 4_096;
-        var redacted = (tools.jackson.databind.node.ObjectNode) parsed.deepCopy();
+        var redacted = (ObjectNode) parsed.deepCopy();
         parsed.properties().forEach(entry -> {
             if (entry.getValue().isTextual()
                     && entry.getValue().asText().length() > largeValueCharacters) {
@@ -507,7 +520,11 @@ public final class McpToolPolicy {
             return compact;
         }
         String suffix = "<preview truncated; full arguments sha256=" + sha256(raw) + ">";
-        return compact.substring(0, maximumCharacters - suffix.length()) + suffix;
+        int prefixLength = maximumCharacters - suffix.length();
+        if (prefixLength > 0 && Character.isHighSurrogate(compact.charAt(prefixLength - 1))) {
+            prefixLength--;
+        }
+        return compact.substring(0, prefixLength) + suffix;
     }
 
     private static Set<String> parseCsv(String raw, String name) {
@@ -530,12 +547,46 @@ public final class McpToolPolicy {
         return value.trim();
     }
 
-    private static String boundedAuditIdentifier(String value) {
+    private String boundedAuditIdentifier(String value) {
         final int maximumCharacters = 64;
         if (value.length() <= maximumCharacters) {
             return value;
         }
-        return "<omitted " + value.length() + " characters; sha256=" + sha256(value) + ">";
+        return "<omitted " + value.length() + " characters; saltedSha256="
+                + sha256(value, auditHashSalt) + ">";
+    }
+
+    private static String boundedDiagnosticName(String value) {
+        final int maximumCharacters = 64;
+        String sanitized = value.codePoints()
+                .map(codePoint -> Character.isISOControl(codePoint) ? '?' : codePoint)
+                .limit(maximumCharacters)
+                .collect(StringBuilder::new, StringBuilder::appendCodePoint, StringBuilder::append)
+                .toString();
+        return value.codePointCount(0, value.length()) > maximumCharacters
+                ? sanitized + "..." : sanitized;
+    }
+
+    private void requireAuditIsolation(String configuredRoot, String variableName) {
+        if (configuredRoot == null || configuredRoot.isBlank()) {
+            return;
+        }
+        LocalFileGuard.Root resolvedRoot;
+        try {
+            resolvedRoot = LocalFileGuard.resolveRoot(configuredRoot, variableName);
+        } catch (IllegalArgumentException unusableRoot) {
+            return;
+        }
+        try {
+            Path configuredRootPath = Path.of(configuredRoot).toAbsolutePath().normalize();
+            Path realAuditFile = auditFile.toRealPath();
+            if (auditFile.startsWith(configuredRootPath)
+                    || realAuditFile.startsWith(resolvedRoot.path())) {
+                throw startupError("DISCORD_MCP_AUDIT_FILE must be outside " + variableName);
+            }
+        } catch (IOException error) {
+            throw startupError("DISCORD_MCP_AUDIT_FILE cannot be resolved after its append check");
+        }
     }
 
     private static long parseAuditMaxBytes(String value) {
@@ -592,7 +643,7 @@ public final class McpToolPolicy {
                     StandardCharsets.UTF_8)) {
                 writer.write(value);
             }
-            return java.util.HexFormat.of().formatHex(digest.digest());
+            return HexFormat.of().formatHex(digest.digest());
         } catch (java.security.NoSuchAlgorithmException | IOException impossible) {
             throw new IllegalStateException(impossible);
         }

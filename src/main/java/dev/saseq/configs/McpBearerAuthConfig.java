@@ -12,14 +12,18 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 
 /** Optional bearer authentication for the HTTP MCP endpoint. */
 @Configuration
 public class McpBearerAuthConfig {
+    private static final int MAX_TOKEN_FILE_BYTES = 4_096;
+
     @Bean
     BearerAuthSettings mcpBearerAuthSettings(
             @Value("${DISCORD_MCP_ACCESS_TOKEN_FILE:}") String tokenFile,
@@ -63,7 +67,14 @@ public class McpBearerAuthConfig {
             return null;
         }
         try {
-            String token = Files.readString(Path.of(tokenFile), StandardCharsets.UTF_8).strip();
+            byte[] bytes;
+            try (InputStream input = Files.newInputStream(Path.of(tokenFile))) {
+                bytes = input.readNBytes(MAX_TOKEN_FILE_BYTES + 1);
+            }
+            if (bytes.length > MAX_TOKEN_FILE_BYTES) {
+                throw startupError("DISCORD_MCP_ACCESS_TOKEN_FILE exceeds 4096 bytes");
+            }
+            String token = new String(bytes, StandardCharsets.UTF_8).strip();
             if (token.startsWith("\uFEFF")) {
                 token = token.substring(1).strip();
             }
@@ -72,7 +83,7 @@ public class McpBearerAuthConfig {
                         "DISCORD_MCP_ACCESS_TOKEN_FILE must contain exactly one token of at least 32 characters");
             }
             return token;
-        } catch (IOException error) {
+        } catch (IOException | InvalidPathException error) {
             throw startupError("Could not read DISCORD_MCP_ACCESS_TOKEN_FILE", error);
         }
     }
