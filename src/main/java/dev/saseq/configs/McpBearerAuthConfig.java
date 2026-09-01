@@ -177,6 +177,9 @@ public class McpBearerAuthConfig {
             // readToken reports the owning setting and fails startup below.
             return;
         }
+        if (!Files.isRegularFile(tokenPath, LinkOption.NOFOLLOW_LINKS)) {
+            throw startupError("DISCORD_MCP_ACCESS_TOKEN_FILE must resolve to a regular file");
+        }
         if (!tokenPath.getFileSystem().supportedFileAttributeViews().contains("unix")) {
             return;
         }

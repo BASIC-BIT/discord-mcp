@@ -989,6 +989,47 @@ class McpToolPolicyTest {
     }
 
     @Test
+    void auditPathMustNotHaveAdditionalHardLinksWhenLinkCountsAreAvailable() throws Exception {
+        Assumptions.assumeTrue(
+                tempDir.getFileSystem().supportedFileAttributeViews().contains("unix"),
+                "unix:nlink is unavailable on this filesystem");
+        Path uploads = Files.createDirectories(tempDir.resolve("uploads"));
+        Path audit = tempDir.resolve("audit.jsonl");
+        Files.writeString(audit, "existing evidence");
+        try {
+            Files.createLink(uploads.resolve("audit-alias.jsonl"), audit);
+        } catch (UnsupportedOperationException | SecurityException | java.io.IOException error) {
+            Assumptions.abort("hard links are unavailable on this filesystem");
+        }
+
+        assertThatThrownBy(() -> new McpToolPolicy(mock(JDA.class), new ObjectMapper(),
+                "", "send_message", "", "preview", audit.toString(),
+                "10485760", uploads.toString(), ""))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("additional hard links");
+    }
+
+    @Test
+    void auditRotationPathMustNotHaveAdditionalHardLinksWhenLinkCountsAreAvailable() throws Exception {
+        Assumptions.assumeTrue(
+                tempDir.getFileSystem().supportedFileAttributeViews().contains("unix"),
+                "unix:nlink is unavailable on this filesystem");
+        Path audit = tempDir.resolve("audit.jsonl");
+        Path rotated = tempDir.resolve("audit.jsonl.1");
+        Files.writeString(rotated, "existing rotated evidence");
+        try {
+            Files.createLink(tempDir.resolve("audit-rotation-alias.jsonl"), rotated);
+        } catch (UnsupportedOperationException | SecurityException | java.io.IOException error) {
+            Assumptions.abort("hard links are unavailable on this filesystem");
+        }
+
+        assertThatThrownBy(() -> policy(jdaWithChannel(), ALLOWED_GUILD,
+                "read_messages", "allow", audit.toString()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("rotation target");
+    }
+
+    @Test
     void auditPathMustNotBeASymbolicLink() throws Exception {
         Path target = tempDir.resolve("audit-target.jsonl");
         Path audit = tempDir.resolve("audit-link.jsonl");

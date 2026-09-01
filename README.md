@@ -271,7 +271,9 @@ schema are rejected rather than ignored. Audit-only deployments retain upstream 
   must use printable ASCII without whitespace so it can be represented in an HTTP header. On
   filesystems that expose `unix:nlink`, startup also rejects bearer files with additional hard
   links so an in-root alias cannot bypass path containment. Deployment launchers should enforce
-  the same invariant natively when the runtime filesystem does not expose that attribute.
+  the same invariant natively when the runtime filesystem does not expose that attribute. The
+  resolved bearer target must be a regular file, so FIFOs, devices, and other special files fail
+  before the credential reader opens them.
 - `DISCORD_MCP_AUDIT_FILE`: append-only JSONL tool audit. It records tool, outcome, write mode,
   a per-process salted arguments hash, and a per-call invocation ID that pairs `started` with its
   terminal record under concurrency. When deployment policy is active, it also records resolved
@@ -294,8 +296,9 @@ schema are rejected rather than ignored. Audit-only deployments retain upstream 
   read or write the audit trail. Startup rejects either configured path when its lexical or resolved
   location contains the audit file.
   The sink and any existing `.1` rotation target must be regular files, not symbolic links,
-  directories, devices, or FIFOs, and neither may be the configured `logging.file.name`; startup
-  rejects lexical and resolved aliases. On POSIX
+  directories, devices, or FIFOs. On filesystems that expose `unix:nlink`, both must also have a
+  single hard link so an in-root alias cannot expose the audit trail. Neither may be the configured
+  `logging.file.name`; startup rejects lexical and resolved aliases. On POSIX
   filesystems, startup creates or tightens the active audit file to owner read/write (`0600`) and
   creates each post-rotation replacement with those permissions. Permission changes made by an
   operator after startup, such as group read for a log collector, remain intact on later appends.

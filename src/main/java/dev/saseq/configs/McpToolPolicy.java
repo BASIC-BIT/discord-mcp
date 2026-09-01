@@ -146,11 +146,10 @@ public final class McpToolPolicy {
             // The resolved check below still catches aliases and symlinks once the file exists.
             requireLexicalAuditIsolation(fileRoot, "DISCORD_MCP_FILE_ROOT");
             requireLexicalAuditIsolation(downloadRoot, "DISCORD_MCP_DOWNLOAD_ROOT");
-            if (Files.isSymbolicLink(this.auditFile)) {
-                throw startupError("DISCORD_MCP_AUDIT_FILE must not be a symbolic link");
-            }
-            if (Files.exists(this.auditFile) && !Files.isRegularFile(this.auditFile)) {
-                throw startupError("DISCORD_MCP_AUDIT_FILE must be a regular file");
+            try {
+                requireSingleLinkRegularFile(this.auditFile, true);
+            } catch (IOException error) {
+                throw startupError("DISCORD_MCP_AUDIT_FILE " + error.getMessage());
             }
             if (this.auditFile.getParent() != null) {
                 try {
@@ -166,14 +165,9 @@ public final class McpToolPolicy {
             }
             try {
                 probeAuditFile(this.auditFile, true);
+                requireSingleLinkRegularFile(this.auditFile, false);
             } catch (IOException error) {
                 throw startupError("DISCORD_MCP_AUDIT_FILE is not appendable");
-            }
-            if (Files.isSymbolicLink(this.auditFile)) {
-                throw startupError("DISCORD_MCP_AUDIT_FILE must not be a symbolic link");
-            }
-            if (!Files.isRegularFile(this.auditFile)) {
-                throw startupError("DISCORD_MCP_AUDIT_FILE must be a regular file");
             }
             requireResolvedAuditIsolation(fileRoot, "DISCORD_MCP_FILE_ROOT");
             requireResolvedAuditIsolation(downloadRoot, "DISCORD_MCP_DOWNLOAD_ROOT");
@@ -220,12 +214,25 @@ public final class McpToolPolicy {
 
     private static void requireUsableAuditRotationTarget(Path auditFile) throws IOException {
         Path rotated = auditFile.resolveSibling(auditFile.getFileName() + ".1");
-        if (!Files.exists(rotated, LinkOption.NOFOLLOW_LINKS)) {
-            return;
+        requireSingleLinkRegularFile(rotated, true);
+    }
+
+    private static void requireSingleLinkRegularFile(Path file, boolean allowMissing) throws IOException {
+        if (!Files.exists(file, LinkOption.NOFOLLOW_LINKS)) {
+            if (allowMissing) {
+                return;
+            }
+            throw new IOException("required audit file is missing");
         }
-        if (Files.isSymbolicLink(rotated)
-                || !Files.isRegularFile(rotated, LinkOption.NOFOLLOW_LINKS)) {
-            throw new IOException("audit rotation target is not a replaceable regular file");
+        if (Files.isSymbolicLink(file)
+                || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) {
+            throw new IOException("must not be a symbolic link and must be a regular file");
+        }
+        if (file.getFileSystem().supportedFileAttributeViews().contains("unix")) {
+            Object value = Files.getAttribute(file, "unix:nlink", LinkOption.NOFOLLOW_LINKS);
+            if (!(value instanceof Number linkCount) || linkCount.longValue() != 1L) {
+                throw new IOException("must not have additional hard links");
+            }
         }
     }
 
@@ -573,7 +580,12 @@ public final class McpToolPolicy {
             // created with owner-only POSIX permissions and an externally removed sink fails
             // closed under the same rules as startup.
             probeAuditFile(auditFile, false);
-            Files.writeString(auditFile, line, StandardCharsets.UTF_8, StandardOpenOption.APPEND);
+            requireSingleLinkRegularFile(auditFile, false);
+            try (OutputStream out = Files.newOutputStream(auditFile,
+                    StandardOpenOption.WRITE, StandardOpenOption.APPEND,
+                    LinkOption.NOFOLLOW_LINKS)) {
+                out.write(line.getBytes(StandardCharsets.UTF_8));
+            }
         } catch (IOException error) {
             throw new IllegalStateException("Could not append DISCORD_MCP_AUDIT_FILE", error);
         }
@@ -600,7 +612,7 @@ public final class McpToolPolicy {
     private void rotateAuditIfNeeded(int nextLineBytes) throws IOException {
         Path rotated = auditFile.resolveSibling(auditFile.getFileName() + ".1");
         requireUsableAuditRotationTarget(auditFile);
-        if (Files.exists(rotated)) {
+        if (Files.exists(rotated, LinkOption.NOFOLLOW_LINKS)) {
             long rotatedBytes = Files.size(rotated);
             if (rotatedBytes > auditMaxBytes) {
                 LOGGER.warn("Discarding oversized Discord MCP audit file {} ({} bytes) after cap was lowered to {} bytes.",
@@ -608,7 +620,8 @@ public final class McpToolPolicy {
                 Files.delete(rotated);
             }
         }
-        if (!Files.exists(auditFile)) {
+        requireSingleLinkRegularFile(auditFile, true);
+        if (!Files.exists(auditFile, LinkOption.NOFOLLOW_LINKS)) {
             return;
         }
         long activeBytes = Files.size(auditFile);

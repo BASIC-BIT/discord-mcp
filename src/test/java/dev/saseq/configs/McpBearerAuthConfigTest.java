@@ -9,6 +9,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -275,6 +276,28 @@ class McpBearerAuthConfigTest {
                 uploads.toString(), ""))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("additional hard links");
+    }
+
+    @Test
+    void bearerCredentialMustResolveToARegularFile() throws Exception {
+        Assumptions.assumeTrue(
+                tempDir.getFileSystem().supportedFileAttributeViews().contains("unix"),
+                "Unix special files are unavailable on this filesystem");
+        Path fifo = tempDir.resolve("access-token-fifo");
+        Process process;
+        try {
+            process = new ProcessBuilder("mkfifo", fifo.toString()).start();
+        } catch (UnsupportedOperationException | SecurityException | java.io.IOException error) {
+            Assumptions.abort("mkfifo is unavailable on this system");
+            return;
+        }
+        Assumptions.assumeTrue(process.waitFor(5, TimeUnit.SECONDS) && process.exitValue() == 0,
+                "mkfifo could not create a test FIFO");
+
+        assertThatThrownBy(() -> settings(
+                fifo.toString(), "/mcp", "STREAMABLE", "servlet"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must resolve to a regular file");
     }
 
     @Test
