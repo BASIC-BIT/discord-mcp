@@ -1,5 +1,7 @@
 package dev.saseq.services;
 
+import dev.saseq.DiscordSnowflake;
+
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.Icon;
@@ -234,15 +236,7 @@ public class ScheduledEventService {
      * claim out of a malformed field.
      */
     static boolean isSnowflake(String id) {
-        if (id == null || id.isEmpty() || !id.chars().allMatch(c -> c >= '0' && c <= '9')) {
-            return false;
-        }
-        try {
-            Long.parseUnsignedLong(id);
-            return true;
-        } catch (NumberFormatException tooLargeForASnowflake) {
-            return false;
-        }
+        return DiscordSnowflake.isUnsignedValue(id);
     }
 
     /**

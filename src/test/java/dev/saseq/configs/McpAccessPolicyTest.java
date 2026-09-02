@@ -57,7 +57,7 @@ class McpAccessPolicyTest {
     }
 
     @Test
-    void policyParserPreservesTheDocumentedFiftyMebibyteUploadCeiling() {
+    void policyParserIsNotTheLayerThatRejectsTheDocumentedFiftyMebibyteUpload() {
         ObjectMapper mapper = McpAccessPolicy.createArgumentObjectMapper(new ObjectMapper());
         assertThat(mapper.tokenStreamFactory().streamReadConstraints().getMaxStringLength())
                 .isEqualTo(McpAccessPolicy.MAX_ARGUMENT_STRING_CHARACTERS);
@@ -277,6 +277,13 @@ class McpAccessPolicyTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("unreviewed Discord ID targets")
                 .hasMessageContaining("targetId");
+
+        assertThatThrownBy(() -> policy.apply(ToolCallbackProvider.from(
+                callback("future_target_tool", schema("guildId", "destinationIds"),
+                        new AtomicReference<>()))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("unreviewed Discord ID targets")
+                .hasMessageContaining("destinationIds");
     }
 
     @Test

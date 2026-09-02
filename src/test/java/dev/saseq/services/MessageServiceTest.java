@@ -102,6 +102,7 @@ class MessageServiceTest {
 
     @Test
     void getMessageReturnsAnExactMachineReadableSnapshot() {
+        String paddedChannelId = "0" + CHANNEL_ID;
         TextChannel channel = mock(TextChannel.class);
         Guild guild = mock(Guild.class);
         Message message = mock(Message.class);
@@ -109,8 +110,9 @@ class MessageServiceTest {
         @SuppressWarnings("unchecked")
         RestAction<Message> retrieve = mock(RestAction.class);
 
-        when(jda.getTextChannelById(CHANNEL_ID)).thenReturn(channel);
+        when(jda.getTextChannelById(paddedChannelId)).thenReturn(channel);
         when(channel.getGuild()).thenReturn(guild);
+        when(channel.getId()).thenReturn(CHANNEL_ID);
         when(guild.getId()).thenReturn("123456789012345678");
         when(channel.retrieveMessageById(MESSAGE_ID)).thenReturn(retrieve);
         when(retrieve.complete()).thenReturn(message);
@@ -122,7 +124,7 @@ class MessageServiceTest {
         when(message.getJumpUrl()).thenReturn("https://discord.com/channels/123/456/789");
         when(jda.getGatewayIntents()).thenReturn(EnumSet.of(GatewayIntent.MESSAGE_CONTENT));
 
-        assertThat(messageService.getMessage(CHANNEL_ID, MESSAGE_ID)).isEqualTo(
+        assertThat(messageService.getMessage(paddedChannelId, MESSAGE_ID)).isEqualTo(
                 "{\"guildId\":\"123456789012345678\","
                         + "\"channelId\":\"345678901234567890\","
                         + "\"messageId\":\"456789012345678901\","
@@ -146,6 +148,7 @@ class MessageServiceTest {
 
         when(jda.getTextChannelById(CHANNEL_ID)).thenReturn(channel);
         when(channel.getGuild()).thenReturn(guild);
+        when(channel.getId()).thenReturn(CHANNEL_ID);
         when(guild.getId()).thenReturn("123456789012345678");
         when(channel.retrieveMessageById(MESSAGE_ID)).thenReturn(retrieve);
         when(retrieve.complete()).thenReturn(message);
@@ -179,6 +182,7 @@ class MessageServiceTest {
 
         when(jda.getTextChannelById(CHANNEL_ID)).thenReturn(channel);
         when(channel.getGuild()).thenReturn(guild);
+        when(channel.getId()).thenReturn(CHANNEL_ID);
         when(guild.getId()).thenReturn("123456789012345678");
         when(channel.retrieveMessageById(MESSAGE_ID)).thenReturn(retrieve);
         when(retrieve.complete()).thenReturn(message);

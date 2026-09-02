@@ -388,7 +388,7 @@ public class MessageService {
                         jda.getSelfUser(), Message.MentionType.USER);
         return JSON.writeValueAsString(new MessageSnapshot(
                 guildChannel.getGuild().getId(),
-                channelId,
+                guildChannel.getId(),
                 message.getId(),
                 message.getAuthor().getId(),
                 message.getAuthor().getName(),

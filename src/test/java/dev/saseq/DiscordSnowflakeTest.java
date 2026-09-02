@@ -15,5 +15,9 @@ class DiscordSnowflakeTest {
         assertThat(DiscordSnowflake.isValid("00000000000000000")).isFalse();
         assertThat(DiscordSnowflake.isValid("99999999999999999999")).isFalse();
         assertThat(DiscordSnowflake.isValid("1234567890123456٧")).isFalse();
+
+        assertThat(DiscordSnowflake.isUnsignedValue("1")).isTrue();
+        assertThat(DiscordSnowflake.isUnsignedValue("99999999999999999999")).isFalse();
+        assertThat(DiscordSnowflake.isUnsignedValue("12a")).isFalse();
     }
 }

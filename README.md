@@ -207,25 +207,28 @@ that share one bot across multiple Discord servers can add narrow, application-e
 
 - `DISCORD_MCP_ALLOWED_GUILDS`: comma-separated guild IDs. Exported tools must declare a `guildId`
   or a channel-like target that the JDA cache resolves to an allowed guild. Calls fail closed when
-  a supplied target is uncached, malformed, or belongs to another guild. Tools with no
-  guild-resolvable target are omitted with a startup diagnostic. This includes direct-message
-  tools, invite-by-ID tools, `delete_webhook`, and `send_webhook_message`; `create_webhook` remains
-  scoped by its channel target, but its returned URL must be handled outside this guild-scoped MCP
-  surface. If
+  a supplied target is uncached, malformed, or belongs to another guild. Archived threads and
+  forum posts may be absent from the JDA cache and therefore fail closed under this policy. Tools
+  with no guild-resolvable target are omitted with a startup diagnostic. This includes
+  direct-message tools, invite-by-ID tools, `delete_webhook`, and `send_webhook_message`.
+  `create_webhook` and `list_webhooks` remain scoped by their channel target, but both can return
+  URLs containing durable webhook tokens. Exclude both from an allowlist unless the calling client
+  is trusted to handle those credentials outside this guild-scoped MCP surface. If
   `DISCORD_MCP_ALLOWED_TOOLS` explicitly requests an unresolvable tool, startup fails instead of
   silently weakening the guild boundary. Under guild scoping, Discord IDs must be JSON strings so
   17-20 digit snowflakes cannot be rounded by numeric JSON parsers. The policy reads only target
   fields from the argument stream, so a large upload is not copied into a second JSON tree merely
-  to establish its guild. New singular `*Id` tool arguments must be explicitly classified for
-  that exact tool before a guild-scoped deployment will export it.
+  to establish its guild. New `*Id`/`*Ids` tool arguments, plus known ID-valued aliases, must be
+  explicitly classified for that exact tool before a guild-scoped deployment will export it.
 - `DISCORD_MCP_ALLOWED_TOOLS`: comma-separated exact tool names. Unknown names fail startup and
   tools not named here are not exported to MCP clients. A whitespace-only value is invalid rather
   than being treated as an unset allowlist.
 - `DISCORD_EXPECTED_BOT_ID`: refuses startup when a valid token authenticates a different bot.
 
-The allowlists and default guild are validated before the bot connects to Discord. Configuration
-and connection failures are also written to stderr so stdio MCP clients can show an actionable
-startup error without contaminating the JSON-RPC stream on stdout.
+The allowlist syntax and default guild are validated before the bot connects to Discord. Exact tool
+names and target schemas are validated after the tool surface is built. Configuration and
+connection failures are also written to stderr so stdio MCP clients can show an actionable startup
+error without contaminating the JSON-RPC stream on stdout.
 
 The bot configuration always enables privileged `GUILD_MEMBERS` because member lookup depends on
 it. Exact message content is opt-in for upgrade compatibility: set

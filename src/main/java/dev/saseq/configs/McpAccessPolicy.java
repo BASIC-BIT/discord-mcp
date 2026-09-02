@@ -36,8 +36,8 @@ import java.util.stream.Collectors;
  */
 @Component
 public final class McpAccessPolicy {
-    // A 50 MiB upload becomes 69,905,068 base64 characters. Keep guild scoping compatible with
-    // that documented tool contract while retaining hard per-string and whole-document bounds.
+    // A 50 MiB upload becomes 69,905,068 base64 characters. Do not make this policy parser the
+    // limiting layer for that documented tool contract; transport and delegate limits are separate.
     static final int MAX_ARGUMENT_STRING_CHARACTERS = 70_000_000;
     static final long MAX_ARGUMENT_DOCUMENT_CHARACTERS = 70_100_000L;
     private static final String TARGET_ACCESS_DENIED =
@@ -68,7 +68,12 @@ public final class McpAccessPolicy {
             "kick_member.userId",
             "modify_voice_state.userId",
             "move_member.userId",
+            "create_emoji.roles", "edit_emoji.roles",
+            "create_forum_post.tagIds", "modify_forum_post.tagIds",
+            "read_messages.after", "read_messages.around", "read_messages.before",
             "read_private_messages.userId",
+            "read_private_messages.after", "read_private_messages.around",
+            "read_private_messages.before",
             "remove_reaction.messageId",
             "remove_role.roleId", "remove_role.userId",
             "remove_timeout.userId",
@@ -332,7 +337,8 @@ public final class McpAccessPolicy {
 
     private static void requireReviewedIdArguments(String toolName, Set<String> declared) {
         Set<String> unreviewed = declared.stream()
-                .filter(field -> field.endsWith("Id"))
+                .filter(field -> field.endsWith("Id") || field.endsWith("Ids")
+                        || REVIEWED_NON_CHANNEL_ID_ARGUMENTS.contains(toolName + "." + field))
                 .filter(field -> !"guildId".equals(field))
                 .filter(field -> !isGuildChannelArgument(field))
                 .filter(field -> !REVIEWED_NON_CHANNEL_ID_ARGUMENTS.contains(

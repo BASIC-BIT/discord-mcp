@@ -25,6 +25,7 @@ public class DiscordService {
 
     /**
      * Returns the authenticated bot identity so callers can bind policy to the actual token.
+     * The guild is an authorization anchor and is also returned for deployment verification.
      *
      * @return machine-readable JSON containing the stable bot user ID and display name.
      */
