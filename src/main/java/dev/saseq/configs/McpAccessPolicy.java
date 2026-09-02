@@ -99,14 +99,19 @@ public final class McpAccessPolicy {
             return ToolCallbackProvider.from(selected);
         }
 
+        Set<String> omitted = new LinkedHashSet<>();
         ToolCallback[] scoped = Arrays.stream(selected)
-                .map(this::scopeIfResolvable)
+                .map(callback -> scopeIfResolvable(callback, omitted))
                 .filter(callback -> callback != null)
                 .toArray(ToolCallback[]::new);
+        if (!omitted.isEmpty()) {
+            System.err.println("Discord guild scope omitted tools with no guild-resolvable target: "
+                    + omitted);
+        }
         return ToolCallbackProvider.from(scoped);
     }
 
-    private ToolCallback scopeIfResolvable(ToolCallback delegate) {
+    private ToolCallback scopeIfResolvable(ToolCallback delegate, Set<String> omitted) {
         Set<String> declared = schemaProperties(delegate.getToolDefinition());
         boolean resolvable = declared.contains("guildId")
                 || declared.stream().anyMatch(McpAccessPolicy::isGuildChannelArgument);
@@ -118,6 +123,7 @@ public final class McpAccessPolicy {
                     + " has no guild-resolvable target and cannot be explicitly exported under "
                     + "DISCORD_MCP_ALLOWED_GUILDS");
         }
+        omitted.add(delegate.getToolDefinition().name());
         return null;
     }
 

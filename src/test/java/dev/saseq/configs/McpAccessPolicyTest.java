@@ -64,6 +64,22 @@ class McpAccessPolicyTest {
     }
 
     @Test
+    void guildScopeRejectsDuplicateTargetKeysBeforeDelegation() {
+        JDA jda = mock(JDA.class);
+        stubChannel(jda, CHANNEL, ALLOWED_GUILD);
+        AtomicReference<String> received = new AtomicReference<>();
+        ToolCallback exposed = only(policy(jda, ALLOWED_GUILD, "send_message", "")
+                .apply(ToolCallbackProvider.from(callback("send_message",
+                        schema("channelId", "message"), received))));
+
+        assertThatThrownBy(() -> exposed.call("{\"channelId\":\"" + CHANNEL
+                + "\",\"channelId\":\"" + OTHER_CHANNEL + "\",\"message\":\"hello\"}"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("not valid JSON");
+        assertThat(received.get()).isNull();
+    }
+
+    @Test
     void exactToolAllowlistFiltersAndRejectsUnknownNames() {
         McpAccessPolicy policy = policy(mock(JDA.class), "", "read_messages", "");
         ToolCallbackProvider filtered = policy.apply(ToolCallbackProvider.from(

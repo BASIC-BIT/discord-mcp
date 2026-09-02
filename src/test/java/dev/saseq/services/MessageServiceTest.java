@@ -161,7 +161,7 @@ class MessageServiceTest {
         when(self.getId()).thenReturn("999999999999999999");
 
         assertThat(messageService.getMessage(CHANNEL_ID, MESSAGE_ID))
-                .contains("\"content\":\"\",\"contentAvailable\":false");
+                .contains("\"content\":null,\"contentAvailable\":false");
     }
 
     @Test

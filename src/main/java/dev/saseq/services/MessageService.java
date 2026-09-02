@@ -391,7 +391,7 @@ public class MessageService {
                 message.getId(),
                 message.getAuthor().getId(),
                 message.getAuthor().getName(),
-                message.getContentRaw(),
+                contentAvailable ? message.getContentRaw() : null,
                 contentAvailable,
                 message.getJumpUrl()));
     }

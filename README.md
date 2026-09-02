@@ -208,8 +208,13 @@ that share one bot across multiple Discord servers can add narrow, application-e
 - `DISCORD_MCP_ALLOWED_GUILDS`: comma-separated guild IDs. Exported tools must declare a `guildId`
   or a channel-like target that the JDA cache resolves to an allowed guild. Calls fail closed when
   a supplied target is uncached, malformed, or belongs to another guild. Tools with no
-  guild-resolvable target are omitted. If `DISCORD_MCP_ALLOWED_TOOLS` explicitly requests one,
-  startup fails instead of silently weakening the guild boundary.
+  guild-resolvable target are omitted with a startup diagnostic. This includes direct-message
+  tools, invite-by-ID tools, `delete_webhook`, and `send_webhook_message`; `create_webhook` remains
+  scoped by its channel target, but its returned URL must be handled outside this guild-scoped MCP
+  surface. If
+  `DISCORD_MCP_ALLOWED_TOOLS` explicitly requests an unresolvable tool, startup fails instead of
+  silently weakening the guild boundary. Under guild scoping, Discord IDs must be JSON strings so
+  17-20 digit snowflakes cannot be rounded by numeric JSON parsers.
 - `DISCORD_MCP_ALLOWED_TOOLS`: comma-separated exact tool names. Unknown names fail startup and
   tools not named here are not exported to MCP clients.
 - `DISCORD_EXPECTED_BOT_ID`: refuses startup when a valid token authenticates a different bot.
@@ -218,8 +223,8 @@ The bot configuration always enables privileged `GUILD_MEMBERS` because member l
 it. Exact message content is opt-in for upgrade compatibility: set
 `DISCORD_MCP_ENABLE_MESSAGE_CONTENT=true` and enable Message Content Intent in the Discord
 Developer Portal before using content-dependent tools such as `read_messages` or `get_message`.
-The `get_message` snapshot includes `contentAvailable`; callers must not treat `content` as exact
-when that field is false.
+The `get_message` snapshot includes `contentAvailable`; `content` is `null` and cannot be used for
+exact comparison when that field is false.
 
 These are capability limits, not an approval workflow. Human confirmation, previews, per-server
 write policy, source-of-truth handling, and post-write readback belong in the calling client or a
@@ -658,6 +663,7 @@ mvn -Dtest=DiscordLiveIntegrationTest test
 
 #### Message Management
 - [`send_message`](): Send a message to a specific channel
+- [`get_message`](): Get one guild message as structured JSON, including stable IDs, author, exact content availability, and jump URL
 - [`send_file`](): Send a file (attachment) to a specific channel via local path, URL, or base64, with an optional message (max 50MB, Discord-boost dependent). Local `filePath` uploads require [`DISCORD_MCP_FILE_ROOT`](#-security-notes)
 - [`get_attachment`](): Get attachment metadata (filename, size, content type, URLs) from a specific message, without downloading
 - [`download_attachment`](): Download a message's attachments to disk and return the saved paths (max 50MB each, 100MB per call). Requires [`DISCORD_MCP_DOWNLOAD_ROOT`](#-security-notes)
