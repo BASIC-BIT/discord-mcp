@@ -124,6 +124,23 @@ class McpAccessPolicyTest {
     }
 
     @Test
+    void guildScopeComparesCanonicalSnowflakeValues() {
+        JDA jda = mock(JDA.class);
+        Guild guild = mock(Guild.class);
+        AtomicReference<String> received = new AtomicReference<>();
+        when(jda.getGuildById(ALLOWED_GUILD)).thenReturn(guild);
+        when(guild.getId()).thenReturn(ALLOWED_GUILD);
+        ToolCallback exposed = only(policy(jda, "0" + ALLOWED_GUILD,
+                "list_channels", "0" + ALLOWED_GUILD)
+                .apply(ToolCallbackProvider.from(callback("list_channels",
+                        schema("guildId"), received))));
+
+        String arguments = "{\"guildId\":\"0" + ALLOWED_GUILD + "\"}";
+        assertThat(exposed.call(arguments)).isEqualTo("called");
+        assertThat(received).hasValue(arguments);
+    }
+
+    @Test
     void toolContextOverloadEnforcesScopeBeforeDelegation() {
         JDA jda = mock(JDA.class);
         stubChannel(jda, OTHER_CHANNEL, DENIED_GUILD);

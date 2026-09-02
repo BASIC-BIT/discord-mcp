@@ -90,6 +90,7 @@ class MessageServiceTest {
         RestAction<List<Message>> retrievePast = restAction(List.of(guildMessage, directAuthorMessage));
 
         when(jda.getTextChannelById("345678901234567890")).thenReturn(channel);
+        when(jda.getGatewayIntents()).thenReturn(EnumSet.of(GatewayIntent.MESSAGE_CONTENT));
         when(channel.getHistory()).thenReturn(history);
         when(history.retrievePast(2)).thenReturn(retrievePast);
 
@@ -98,6 +99,34 @@ class MessageServiceTest {
         assertThat(result).isEqualTo("**Retrieved 2 messages:** \n"
                 + "- (ID: 111111111111111111) **[alice]** (Author ID: 123456789012345678) `2026-05-26T00:00Z`: ```hello```\n"
                 + "- (ID: 222222222222222222) **[bob]** (Author ID: 234567890123456789) `2026-05-26T00:00Z`: ```hi```");
+    }
+
+    @Test
+    void readMessagesLabelsWithheldContentInsteadOfRenderingItAsBlank() {
+        TextChannel channel = mock(TextChannel.class);
+        MessageHistory history = mock(MessageHistory.class);
+        Message guildMessage = message(
+                "111111111111111111",
+                "123456789012345678",
+                "alice",
+                ""
+        );
+        Mentions mentions = mock(Mentions.class);
+        SelfUser self = mock(SelfUser.class);
+        RestAction<List<Message>> retrievePast = restAction(List.of(guildMessage));
+
+        when(jda.getTextChannelById(CHANNEL_ID)).thenReturn(channel);
+        when(jda.getGatewayIntents()).thenReturn(EnumSet.noneOf(GatewayIntent.class));
+        when(jda.getSelfUser()).thenReturn(self);
+        when(self.getId()).thenReturn("999999999999999999");
+        when(guildMessage.getMentions()).thenReturn(mentions);
+        when(mentions.isMentioned(self, Message.MentionType.USER)).thenReturn(false);
+        when(channel.getHistory()).thenReturn(history);
+        when(history.retrievePast(1)).thenReturn(retrievePast);
+
+        assertThat(messageService.readMessages(CHANNEL_ID, "1", null, null, null))
+                .contains("[message content unavailable]")
+                .doesNotContain("``````");
     }
 
     @Test

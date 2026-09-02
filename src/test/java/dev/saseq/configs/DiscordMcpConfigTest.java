@@ -12,7 +12,7 @@ class DiscordMcpConfigTest {
         assertThat(DiscordMcpConfig.normalizeExpectedBotId(null)).isNull();
         assertThat(DiscordMcpConfig.normalizeExpectedBotId("  ")).isNull();
         assertThat(DiscordMcpConfig.botIdMatches(null, "12345678901234567")).isTrue();
-        assertThat(DiscordMcpConfig.normalizeExpectedBotId(" 12345678901234567 "))
+        assertThat(DiscordMcpConfig.normalizeExpectedBotId(" 012345678901234567 "))
                 .isEqualTo("12345678901234567");
         assertThat(DiscordMcpConfig.botIdMatches("12345678901234567",
                 "12345678901234567")).isTrue();

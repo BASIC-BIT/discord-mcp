@@ -101,14 +101,14 @@ public final class McpAccessPolicy {
         this.jda = jda;
         this.objectMapper = objectMapper;
         this.argumentObjectMapper = createArgumentObjectMapper(objectMapper);
-        this.allowedGuilds = parseCsv(allowedGuilds, "DISCORD_MCP_ALLOWED_GUILDS");
+        this.allowedGuilds = parseGuildCsv(allowedGuilds);
         this.allowedTools = parseCsv(allowedTools, "DISCORD_MCP_ALLOWED_TOOLS");
         this.defaultGuildId = validateDefaultGuild(this.allowedGuilds, defaultGuildId);
     }
 
     static void validateConfiguration(String allowedGuilds, String allowedTools,
                                       String defaultGuildId) {
-        Set<String> parsedGuilds = parseCsv(allowedGuilds, "DISCORD_MCP_ALLOWED_GUILDS");
+        Set<String> parsedGuilds = parseGuildCsv(allowedGuilds);
         parseCsv(allowedTools, "DISCORD_MCP_ALLOWED_TOOLS");
         validateDefaultGuild(parsedGuilds, defaultGuildId);
     }
@@ -171,7 +171,8 @@ public final class McpAccessPolicy {
                 throw startupError("Tool " + toolName
                         + " declares unreviewed Discord ID targets: " + unreviewed);
             }
-            omitted.add(toolName);
+            System.err.println("Discord guild scope omitted tool " + toolName
+                    + " because its ID arguments need review: " + unreviewed);
             return null;
         }
         boolean resolvable = declared.contains("guildId")
@@ -302,6 +303,10 @@ public final class McpAccessPolicy {
                         throw new IllegalArgumentException("Tool arguments are not valid JSON");
                     }
                     if (targetArguments.contains(field)) {
+                        if (valueToken == JsonToken.VALUE_STRING && parser.getTextLength() > 20) {
+                            throw new IllegalArgumentException(field
+                                    + " must be at most 20 characters");
+                        }
                         String text = valueToken == JsonToken.VALUE_STRING ? parser.getText() : null;
                         parsed.put(field, new TargetArgument(valueToken, text));
                     }
@@ -366,7 +371,16 @@ public final class McpAccessPolicy {
             throw new IllegalArgumentException(name
                     + " must be a 17-20 digit Discord snowflake encoded as a JSON string");
         }
-        return value.text();
+        return DiscordSnowflake.canonicalize(value.text());
+    }
+
+    private static Set<String> parseGuildCsv(String raw) {
+        return parseCsv(raw, "DISCORD_MCP_ALLOWED_GUILDS").stream()
+                .map(value -> {
+                    requireSnowflake(value, "DISCORD_MCP_ALLOWED_GUILDS");
+                    return DiscordSnowflake.canonicalize(value);
+                })
+                .collect(Collectors.toUnmodifiableSet());
     }
 
     private static Set<String> parseCsv(String raw, String name) {
@@ -393,16 +407,16 @@ public final class McpAccessPolicy {
     }
 
     private static String validateDefaultGuild(Set<String> allowedGuilds, String defaultGuildId) {
-        allowedGuilds.forEach(id -> requireSnowflake(id, "DISCORD_MCP_ALLOWED_GUILDS"));
         if (allowedGuilds.isEmpty()) {
             return trimToNull(defaultGuildId);
         }
         if (defaultGuildId != null && !defaultGuildId.isEmpty()) {
             requireSnowflake(defaultGuildId, "DISCORD_GUILD_ID");
-            if (!allowedGuilds.contains(defaultGuildId)) {
+            String canonicalDefaultGuildId = DiscordSnowflake.canonicalize(defaultGuildId);
+            if (!allowedGuilds.contains(canonicalDefaultGuildId)) {
                 throw startupError("DISCORD_GUILD_ID must be in DISCORD_MCP_ALLOWED_GUILDS");
             }
-            return defaultGuildId;
+            return canonicalDefaultGuildId;
         }
         return null;
     }

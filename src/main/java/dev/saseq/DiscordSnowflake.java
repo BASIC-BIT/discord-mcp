@@ -26,4 +26,12 @@ public final class DiscordSnowflake {
             return false;
         }
     }
+
+    /** Returns the canonical unsigned decimal form of a validated snowflake. */
+    public static String canonicalize(String value) {
+        if (!isValid(value)) {
+            throw new IllegalArgumentException("Invalid Discord snowflake");
+        }
+        return Long.toUnsignedString(Long.parseUnsignedLong(value));
+    }
 }

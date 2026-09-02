@@ -383,10 +383,7 @@ public class MessageService {
         if (message == null) {
             throw new IllegalArgumentException("Message not found by messageId");
         }
-        boolean contentAvailable = jda.getGatewayIntents().contains(GatewayIntent.MESSAGE_CONTENT)
-                || message.getAuthor().getId().equals(jda.getSelfUser().getId())
-                || message.getMentions().isMentioned(
-                        jda.getSelfUser(), Message.MentionType.USER);
+        boolean contentAvailable = isMessageContentAvailable(message);
         return JSON.writeValueAsString(new MessageSnapshot(
                 guildChannel.getGuild().getId(),
                 guildChannel.getId(),
@@ -402,6 +399,13 @@ public class MessageService {
 
     private static String timestampOf(OffsetDateTime timestamp) {
         return timestamp == null ? null : timestamp.toString();
+    }
+
+    private boolean isMessageContentAvailable(Message message) {
+        return jda.getGatewayIntents().contains(GatewayIntent.MESSAGE_CONTENT)
+                || message.getAuthor().getId().equals(jda.getSelfUser().getId())
+                || message.getMentions().isMentioned(
+                        jda.getSelfUser(), Message.MentionType.USER);
     }
 
     private record MessageSnapshot(String guildId, String channelId, String messageId,
@@ -449,7 +453,7 @@ public class MessageService {
      * @param around    Optional message ID to fetch messages around this message.
      * @return A formatted string containing the retrieved messages.
      */
-    @Tool(name = "read_messages", description = "Read message history from a specific channel, optionally paginated with before/after/around")
+    @Tool(name = "read_messages", description = "Read message history from a specific channel, optionally paginated with before/after/around; unavailable message content is labeled rather than shown as blank")
     public String readMessages(@ToolParam(description = "Discord channel ID") String channelId,
                                @ToolParam(description = "Number of messages to retrieve (1-100)", required = false) String count,
                                @ToolParam(description = "Message ID to fetch messages before this message", required = false) String before,
@@ -1070,18 +1074,21 @@ public class MessageService {
                     String authorName = m.getAuthor().getName();
                     String authorId = m.getAuthor().getId();
                     String timestamp = m.getTimeCreated().toString();
-                    String content = m.getContentDisplay();
+                    boolean contentAvailable = isMessageContentAvailable(m);
+                    String content = contentAvailable ? m.getContentDisplay() : null;
                     String msgId = m.getId();
 
                     StringBuilder sb = new StringBuilder();
-                    sb.append(String.format(
-                            "- (ID: %s) **[%s]** (Author ID: %s) `%s`: ```%s```",
+                    sb.append(String.format("- (ID: %s) **[%s]** (Author ID: %s) `%s`: ",
                             msgId,
                             authorName,
                             authorId,
-                            timestamp,
-                            content
-                    ));
+                            timestamp));
+                    if (contentAvailable) {
+                        sb.append("```").append(content).append("```");
+                    } else {
+                        sb.append("[message content unavailable]");
+                    }
 
                     List<Message.Attachment> attachments = m.getAttachments();
                     if (!attachments.isEmpty()) {

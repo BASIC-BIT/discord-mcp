@@ -159,7 +159,7 @@ public class DiscordMcpConfig {
             throw new IllegalArgumentException(
                     "DISCORD_EXPECTED_BOT_ID must be a nonzero 17-20 digit Discord snowflake");
         }
-        return normalized;
+        return DiscordSnowflake.canonicalize(normalized);
     }
 
     static Set<GatewayIntent> requiredGatewayIntents(boolean enableMessageContent) {
