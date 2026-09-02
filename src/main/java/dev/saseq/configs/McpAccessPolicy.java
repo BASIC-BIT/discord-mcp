@@ -358,10 +358,19 @@ public final class McpAccessPolicy {
     private final class GuildScopedToolCallback implements ToolCallback {
         private final ToolCallback delegate;
         private final Set<String> declaredArguments;
+        private final Set<String> policyArguments;
 
         private GuildScopedToolCallback(ToolCallback delegate, Set<String> declaredArguments) {
             this.delegate = delegate;
             this.declaredArguments = declaredArguments;
+            Set<String> selected = declaredArguments.stream()
+                    .filter(field -> "guildId".equals(field) || isGuildChannelArgument(field))
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
+            if ("create_invite".equals(delegate.getToolDefinition().name())) {
+                selected.add("maxAge");
+                selected.add("maxUses");
+            }
+            this.policyArguments = Set.copyOf(selected);
         }
 
         @Override
@@ -387,13 +396,17 @@ public final class McpAccessPolicy {
         }
 
         private void enforceGuildScope(String arguments) {
-            Map<String, TargetArgument> parsed = parseTargetArguments(arguments, declaredArguments);
+            Map<String, TargetArgument> parsed = parsePolicyArguments(arguments, policyArguments);
             Set<String> guildIds = resolveGuildIds(parsed, declaredArguments);
             if (guildIds.isEmpty()) {
                 throw new IllegalArgumentException("A Discord guild or channel target is required");
             }
             if (!allowedGuilds.containsAll(guildIds)) {
                 throw new SecurityException(TARGET_ACCESS_DENIED);
+            }
+            if ("create_invite".equals(delegate.getToolDefinition().name())) {
+                requirePositiveInviteBound(parsed.get("maxAge"), "maxAge");
+                requirePositiveInviteBound(parsed.get("maxUses"), "maxUses");
             }
         }
     }
@@ -444,15 +457,12 @@ public final class McpAccessPolicy {
         return guildIds;
     }
 
-    private Map<String, TargetArgument> parseTargetArguments(
-            String arguments, Set<String> declaredArguments) {
+    private Map<String, TargetArgument> parsePolicyArguments(
+            String arguments, Set<String> policyArguments) {
         if (arguments == null || arguments.isBlank() || "null".equals(arguments.strip())) {
             return Map.of();
         }
         try {
-            Set<String> targetArguments = declaredArguments.stream()
-                    .filter(field -> "guildId".equals(field) || isGuildChannelArgument(field))
-                    .collect(Collectors.toSet());
             Map<String, TargetArgument> parsed = new LinkedHashMap<>();
             try (JsonParser parser = argumentObjectMapper.tokenStreamFactory()
                     .createParser(arguments)) {
@@ -468,7 +478,7 @@ public final class McpAccessPolicy {
                     if (valueToken == null) {
                         throw new IllegalArgumentException("Tool arguments are not valid JSON");
                     }
-                    if (targetArguments.contains(field)) {
+                    if (policyArguments.contains(field)) {
                         // Jackson must decode a string token to report its length. The global read
                         // constraint still bounds that allocation before this target-specific cap.
                         if (valueToken == JsonToken.VALUE_STRING && parser.getTextLength() > 20) {
@@ -496,6 +506,23 @@ public final class McpAccessPolicy {
     }
 
     private record TargetArgument(JsonToken token, String text) {
+    }
+
+    private static void requirePositiveInviteBound(TargetArgument value, String name) {
+        if (value == null || value.token() != JsonToken.VALUE_STRING
+                || value.text() == null || value.text().isEmpty()) {
+            throw new IllegalArgumentException(name
+                    + " must be explicitly set to a positive integer for a guild-scoped invite");
+        }
+        try {
+            if (Integer.parseInt(value.text()) <= 0) {
+                throw new IllegalArgumentException(name
+                        + " must be a positive integer for a guild-scoped invite");
+            }
+        } catch (NumberFormatException error) {
+            throw new IllegalArgumentException(name
+                    + " must be a positive integer for a guild-scoped invite", error);
+        }
     }
 
     private record SchemaProperties(Set<String> names, Set<String> structured) {

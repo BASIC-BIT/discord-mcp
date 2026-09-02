@@ -262,6 +262,42 @@ class McpAccessPolicyTest {
     }
 
     @Test
+    void guildScopedInviteCreationRequiresFiniteAgeAndUseBounds() {
+        JDA jda = mock(JDA.class);
+        stubChannel(jda, CHANNEL, ALLOWED_GUILD);
+        AtomicReference<String> received = new AtomicReference<>();
+        ToolCallback createInvite = callback("create_invite",
+                schema("guildId", "channelId", "maxAge", "maxUses", "temporary", "unique"),
+                received);
+        ToolCallback exposed = only(policy(jda, ALLOWED_GUILD, "create_invite", "")
+                .apply(ToolCallbackProvider.from(createInvite)));
+
+        assertThatThrownBy(() -> exposed.call("{\"guildId\":\"" + ALLOWED_GUILD
+                + "\",\"channelId\":\"" + CHANNEL + "\"}"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("maxAge")
+                .hasMessageContaining("explicitly set");
+        assertThatThrownBy(() -> exposed.call("{\"guildId\":\"" + ALLOWED_GUILD
+                + "\",\"channelId\":\"" + CHANNEL
+                + "\",\"maxAge\":\"0\",\"maxUses\":\"10\"}"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("maxAge")
+                .hasMessageContaining("positive integer");
+        assertThatThrownBy(() -> exposed.call("{\"guildId\":\"" + ALLOWED_GUILD
+                + "\",\"channelId\":\"" + CHANNEL
+                + "\",\"maxAge\":\"86400\",\"maxUses\":\"0\"}"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("maxUses")
+                .hasMessageContaining("positive integer");
+
+        String bounded = "{\"guildId\":\"" + ALLOWED_GUILD
+                + "\",\"channelId\":\"" + CHANNEL
+                + "\",\"maxAge\":\"86400\",\"maxUses\":\"10\"}";
+        assertThat(exposed.call(bounded)).isEqualTo("called");
+        assertThat(received).hasValue(bounded);
+    }
+
+    @Test
     void realCredentialToolSchemasRemainExplicitlyExportable() {
         ToolCallbackProvider scoped = policy(mock(JDA.class), ALLOWED_GUILD,
                 "create_invite,list_invites,create_webhook,list_webhooks", "")

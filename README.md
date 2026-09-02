@@ -214,11 +214,13 @@ that share one bot across multiple Discord servers can add narrow, application-e
   Consequently a scoped deployment cannot inspect or revoke invites by default. `create_invite`,
   `list_invites`, `create_webhook`, and `list_webhooks` are omitted by default because they can
   return durable access credentials. They can be explicitly allowlisted only when the calling
-  client is trusted to handle those credentials outside this guild-scoped MCP surface. A scoped
+  client is trusted to handle those credentials outside this guild-scoped MCP surface. When
+  `create_invite` is explicitly exported, every call must supply positive `maxAge` and `maxUses`
+  values; the policy rejects Discord's never-expiring and unlimited defaults before delegation. A scoped
   deployment still cannot revoke an invite or send through or delete a webhook through this
   server; use Discord directly for those operations. Treat allowing a create tool as a deliberate
-  create-without-revoke decision. A trusted calling client should require human confirmation,
-  bounded invite `maxAge`/`maxUses`, and a retained manual Discord revocation path. If
+  create-without-revoke decision. A trusted calling client should still require human
+  confirmation and retain a manual Discord revocation path. If
   `DISCORD_MCP_ALLOWED_TOOLS` explicitly requests an unresolvable tool, startup fails instead of
   silently weakening the guild boundary. The same hard failure applies if a later jar changes an
   explicitly allowlisted tool's target schema. Review the new schema before restarting the scoped
