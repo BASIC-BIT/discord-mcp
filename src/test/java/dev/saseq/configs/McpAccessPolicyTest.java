@@ -373,6 +373,14 @@ class McpAccessPolicyTest {
                 "future_status_tool", ALLOWED_GUILD).apply(ToolCallbackProvider.from(
                 callback("future_status_tool", schema("guildId", "valid"),
                         new AtomicReference<>()))).getToolCallbacks()).hasSize(1);
+
+        assertThatThrownBy(() -> policy(mock(JDA.class), ALLOWED_GUILD,
+                "future_structured_tool", ALLOWED_GUILD).apply(ToolCallbackProvider.from(
+                callback("future_structured_tool", structuredSchema("target", "object"),
+                        new AtomicReference<>()))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("unreviewed structured arguments")
+                .hasMessageContaining("target");
     }
 
     @Test
@@ -484,5 +492,11 @@ class McpAccessPolicyTest {
                 .map(name -> "\"" + name + "\":{\"type\":\"string\"}")
                 .collect(Collectors.joining(","));
         return "{\"type\":\"object\",\"properties\":{" + body + "}}";
+    }
+
+    private static String structuredSchema(String name, String type) {
+        return "{\"type\":\"object\",\"properties\":{"
+                + "\"guildId\":{\"type\":\"string\"},"
+                + "\"" + name + "\":{\"type\":\"" + type + "\"}}}";
     }
 }

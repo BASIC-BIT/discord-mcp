@@ -14,6 +14,7 @@ import tools.jackson.core.JsonParser;
 import tools.jackson.core.JsonToken;
 import tools.jackson.core.StreamReadConstraints;
 import tools.jackson.core.StreamReadFeature;
+import tools.jackson.core.exc.StreamConstraintsException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
@@ -166,7 +167,21 @@ public final class McpAccessPolicy {
             omitted.add(toolName);
             return null;
         }
-        Set<String> declared = schemaProperties(delegate.getToolDefinition());
+        if (EXPLICIT_ONLY_WHEN_GUILD_SCOPED.contains(toolName)) {
+            System.err.println("Discord guild scope is explicitly exporting " + toolName
+                    + ", which can return a durable webhook credential");
+        }
+        SchemaProperties schema = schemaProperties(delegate.getToolDefinition());
+        Set<String> declared = schema.names();
+        if (!schema.structured().isEmpty()) {
+            if (allowedTools.contains(toolName)) {
+                throw startupError("Tool " + toolName
+                        + " declares unreviewed structured arguments: " + schema.structured());
+            }
+            System.err.println("Discord guild scope omitted tool " + toolName
+                    + " because its structured arguments need review: " + schema.structured());
+            return null;
+        }
         Set<String> unreviewed = unreviewedIdArguments(toolName, declared);
         if (!unreviewed.isEmpty()) {
             if (allowedTools.contains(toolName)) {
@@ -305,6 +320,8 @@ public final class McpAccessPolicy {
                         throw new IllegalArgumentException("Tool arguments are not valid JSON");
                     }
                     if (targetArguments.contains(field)) {
+                        // Jackson must decode a string token to report its length. The global read
+                        // constraint still bounds that allocation before this target-specific cap.
                         if (valueToken == JsonToken.VALUE_STRING && parser.getTextLength() > 20) {
                             throw new IllegalArgumentException(field
                                     + " must be at most 20 characters");
@@ -321,6 +338,9 @@ public final class McpAccessPolicy {
             return parsed;
         } catch (IllegalArgumentException error) {
             throw error;
+        } catch (StreamConstraintsException error) {
+            throw new IllegalArgumentException(
+                    "Tool arguments exceed the maximum supported size", error);
         } catch (RuntimeException error) {
             throw new IllegalArgumentException("Tool arguments are not valid JSON", error);
         }
@@ -329,20 +349,31 @@ public final class McpAccessPolicy {
     private record TargetArgument(JsonToken token, String text) {
     }
 
-    private Set<String> schemaProperties(ToolDefinition definition) {
+    private record SchemaProperties(Set<String> names, Set<String> structured) {
+    }
+
+    private SchemaProperties schemaProperties(ToolDefinition definition) {
         try {
             JsonNode schema = objectMapper.readTree(definition.inputSchema());
             JsonNode properties = schema == null ? null : schema.get("properties");
             if (properties == null || properties.isNull()) {
-                return Set.of();
+                return new SchemaProperties(Set.of(), Set.of());
             }
             if (!properties.isObject()) {
                 throw startupError("Tool " + definition.name()
                         + " has no object properties in its input schema");
             }
             Set<String> names = new LinkedHashSet<>();
-            properties.propertyNames().forEach(names::add);
-            return Set.copyOf(names);
+            Set<String> structured = new LinkedHashSet<>();
+            properties.propertyNames().forEach(name -> {
+                names.add(name);
+                JsonNode type = properties.get(name).get("type");
+                if (type != null && ("object".equals(type.asText())
+                        || "array".equals(type.asText()))) {
+                    structured.add(name);
+                }
+            });
+            return new SchemaProperties(Set.copyOf(names), Set.copyOf(structured));
         } catch (RuntimeException error) {
             if (error instanceof IllegalArgumentException) {
                 throw error;

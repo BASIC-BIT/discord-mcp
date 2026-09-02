@@ -239,6 +239,10 @@ that share one bot across multiple Discord servers can add narrow, application-e
   than being treated as an unset allowlist.
 - `DISCORD_EXPECTED_BOT_ID`: refuses startup when a valid token authenticates a different bot.
 
+Guild-scoped schema review currently supports flat scalar tool arguments. A future object or array
+argument is omitted by default and hard-fails startup when its tool is explicitly allowlisted until
+that structured shape receives an explicit guild-boundary review.
+
 The allowlist syntax and default guild are validated before the bot connects to Discord. Exact tool
 names and target schemas are validated after the tool surface is built. Configuration and
 connection failures are also written to stderr so stdio MCP clients can show an actionable startup
@@ -682,7 +686,9 @@ mvn -Dtest=DiscordLiveIntegrationTest test
 
 #### Server Information
 - [`get_server_info`](): Get detailed discord server information
-- [`get_bot_info`](): Get the authenticated Discord bot identity for a server as structured JSON
+- [`get_bot_info`](): Get the authenticated Discord bot identity for a server as structured JSON.
+  Under guild scoping it requires a supplied `guildId` or configured `DISCORD_GUILD_ID` so the
+  identity read retains a guild-resolvable policy anchor.
 
 #### User Management
 - [`get_user_id_by_name`](): Get a Discord user's ID by username in a guild for ping usage `<@id>`
