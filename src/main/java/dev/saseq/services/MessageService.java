@@ -1087,7 +1087,7 @@ public class MessageService {
                     } else if (contentAvailable) {
                         sb.append("[no text content]");
                     } else {
-                        sb.append("[content unavailable]");
+                        sb.append("[no text content, or content not available to this bot]");
                     }
 
                     List<Message.Attachment> attachments = m.getAttachments();

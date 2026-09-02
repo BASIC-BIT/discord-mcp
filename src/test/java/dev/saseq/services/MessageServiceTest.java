@@ -117,7 +117,7 @@ class MessageServiceTest {
         when(history.retrievePast(1)).thenReturn(retrievePast);
 
         assertThat(messageService.readMessages(CHANNEL_ID, "1", null, null, null))
-                .contains("[content unavailable]")
+                .contains("[no text content, or content not available to this bot]")
                 .doesNotContain("``````");
     }
 
@@ -141,7 +141,7 @@ class MessageServiceTest {
 
         assertThat(messageService.readMessages(CHANNEL_ID, "1", null, null, null))
                 .contains("```returned text```")
-                .doesNotContain("[content unavailable]");
+                .doesNotContain("[no text content, or content not available to this bot]");
     }
 
     @Test

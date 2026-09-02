@@ -32,7 +32,7 @@ Discord by managing channels, sending messages, and retrieving server informatio
 #### 1) Set local env variables
 ```bash
 export DISCORD_TOKEN="YOUR_DISCORD_BOT_TOKEN"
-export DISCORD_GUILD_ID="OPTIONAL_DEFAULT_SERVER_ID"
+# Optional: export DISCORD_GUILD_ID="YOUR_SERVER_ID"
 export SPRING_PROFILES_ACTIVE=http
 # Only if you want download_attachment. Must match the container path mounted below,
 # not a host path — see Security notes.
@@ -119,7 +119,7 @@ cd discord-mcp
 cat > .env <<EOF
 SPRING_PROFILES_ACTIVE=http
 DISCORD_TOKEN=<YOUR_DISCORD_BOT_TOKEN>
-DISCORD_GUILD_ID=<OPTIONAL_DEFAULT_SERVER_ID>
+DISCORD_GUILD_ID=
 # Optional, enables download_attachment. Container path, matching the named volume.
 DISCORD_MCP_DOWNLOAD_ROOT=/var/lib/discord-mcp/downloads
 # Optional, enables local-path uploads. Uncomment to grant it — send_file's filePath and
@@ -187,7 +187,6 @@ Run the JAR as a long-running server:
 
 ```bash
 DISCORD_TOKEN=<YOUR_DISCORD_BOT_TOKEN> \
-DISCORD_GUILD_ID=<OPTIONAL_DEFAULT_SERVER_ID> \
 SPRING_PROFILES_ACTIVE=http \
 java -jar /absolute/path/to/discord-mcp-1.0.0.jar
 ```
@@ -515,8 +514,6 @@ Legacy mode (stdio, starts a new process/container per client session):
         "-i",
         "-e",
         "DISCORD_TOKEN=<YOUR_DISCORD_BOT_TOKEN>",
-        "-e",
-        "DISCORD_GUILD_ID=<OPTIONAL_DEFAULT_SERVER_ID>",
         "saseq/discord-mcp:latest"
       ]
     }
@@ -536,7 +533,7 @@ claude mcp add discord-mcp --transport http http://localhost:8085/mcp
 
 Legacy mode (stdio, starts a new process/container per client session):
 ```bash
-claude mcp add discord-mcp -- docker run --rm -i -e DISCORD_TOKEN=<YOUR_DISCORD_BOT_TOKEN> -e DISCORD_GUILD_ID=<OPTIONAL_DEFAULT_SERVER_ID> saseq/discord-mcp:latest
+claude mcp add discord-mcp -- docker run --rm -i -e DISCORD_TOKEN=<YOUR_DISCORD_BOT_TOKEN> saseq/discord-mcp:latest
 ```
 
 </details>
@@ -640,8 +637,6 @@ STDIO local config (Default, legacy):
         "-i",
         "-e",
         "DISCORD_TOKEN=<YOUR_DISCORD_BOT_TOKEN>",
-        "-e",
-        "DISCORD_GUILD_ID=<OPTIONAL_DEFAULT_SERVER_ID>",
         "saseq/discord-mcp:latest"
       ]
     }

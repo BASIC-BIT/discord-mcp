@@ -248,6 +248,10 @@ public final class McpAccessPolicy {
         return new ObjectMapper(argumentFactory);
     }
 
+    static Set<String> reviewedToolNames() {
+        return REVIEWED_ARGUMENTS.keySet();
+    }
+
     ToolCallbackProvider apply(ToolCallbackProvider rawProvider) {
         ToolCallback[] raw = rawProvider.getToolCallbacks();
         Set<String> available = Arrays.stream(raw)
@@ -554,7 +558,7 @@ public final class McpAccessPolicy {
     private static Set<String> parseGuildCsv(String raw) {
         return parseCsv(raw, "DISCORD_MCP_ALLOWED_GUILDS").stream()
                 .map(value -> {
-                    requireSnowflake(value, "DISCORD_MCP_ALLOWED_GUILDS");
+                    requireSnowflake(value, "DISCORD_MCP_ALLOWED_GUILDS entries");
                     return DiscordSnowflake.canonicalize(value);
                 })
                 .collect(Collectors.toUnmodifiableSet());
@@ -579,7 +583,7 @@ public final class McpAccessPolicy {
 
     private static void requireSnowflake(String value, String name) {
         if (!DiscordSnowflake.isValid(value)) {
-            throw startupError(name + " entries must be 17-20 digit Discord snowflakes");
+            throw startupError(name + " must be 17-20 digit Discord snowflakes");
         }
     }
 

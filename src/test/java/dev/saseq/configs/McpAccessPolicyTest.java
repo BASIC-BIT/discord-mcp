@@ -432,8 +432,13 @@ class McpAccessPolicyTest {
 
     @Test
     void realToolSurfaceRequiresExplicitGuildScopeReview() {
+        ToolCallbackProvider realTools = realToolProvider();
+        assertThat(McpAccessPolicy.reviewedToolNames())
+                .isEqualTo(Arrays.stream(realTools.getToolCallbacks())
+                        .map(callback -> callback.getToolDefinition().name())
+                        .collect(Collectors.toSet()));
         ToolCallbackProvider scoped = policy(mock(JDA.class), ALLOWED_GUILD, "", "")
-                .apply(realToolProvider());
+                .apply(realTools);
         assertThat(Arrays.stream(scoped.getToolCallbacks())
                 .map(callback -> callback.getToolDefinition().name()).sorted().toList())
                 .containsExactly(
