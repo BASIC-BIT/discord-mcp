@@ -44,6 +44,8 @@ public final class McpAccessPolicy {
             "Discord target is unavailable or outside the allowed guild scope";
     private static final Set<String> EXPLICIT_ONLY_WHEN_GUILD_SCOPED = Set.of(
             "create_webhook", "list_webhooks");
+    // This list can only classify names that advertise ID semantics. Schema reviews must also
+    // inspect aliases such as webhookUrl, inviteCode, before/after/around, and comma-separated roles.
     private static final Set<String> REVIEWED_NON_CHANNEL_ID_ARGUMENTS = Set.of(
             "add_reaction.messageId",
             "assign_role.roleId", "assign_role.userId",
@@ -101,15 +103,14 @@ public final class McpAccessPolicy {
         this.argumentObjectMapper = createArgumentObjectMapper(objectMapper);
         this.allowedGuilds = parseCsv(allowedGuilds, "DISCORD_MCP_ALLOWED_GUILDS");
         this.allowedTools = parseCsv(allowedTools, "DISCORD_MCP_ALLOWED_TOOLS");
-        this.defaultGuildId = trimToNull(defaultGuildId);
-        validateParsedConfiguration(this.allowedGuilds, this.defaultGuildId);
+        this.defaultGuildId = validateDefaultGuild(this.allowedGuilds, defaultGuildId);
     }
 
     static void validateConfiguration(String allowedGuilds, String allowedTools,
                                       String defaultGuildId) {
         Set<String> parsedGuilds = parseCsv(allowedGuilds, "DISCORD_MCP_ALLOWED_GUILDS");
         parseCsv(allowedTools, "DISCORD_MCP_ALLOWED_TOOLS");
-        validateParsedConfiguration(parsedGuilds, trimToNull(defaultGuildId));
+        validateDefaultGuild(parsedGuilds, defaultGuildId);
     }
 
     static ObjectMapper createArgumentObjectMapper(ObjectMapper objectMapper) {
@@ -164,7 +165,15 @@ public final class McpAccessPolicy {
             return null;
         }
         Set<String> declared = schemaProperties(delegate.getToolDefinition());
-        requireReviewedIdArguments(toolName, declared);
+        Set<String> unreviewed = unreviewedIdArguments(toolName, declared);
+        if (!unreviewed.isEmpty()) {
+            if (allowedTools.contains(toolName)) {
+                throw startupError("Tool " + toolName
+                        + " declares unreviewed Discord ID targets: " + unreviewed);
+            }
+            omitted.add(toolName);
+            return null;
+        }
         boolean resolvable = declared.contains("guildId")
                 || declared.stream().anyMatch(McpAccessPolicy::isGuildChannelArgument);
         if (resolvable) {
@@ -342,18 +351,14 @@ public final class McpAccessPolicy {
                 || normalized.contains("thread") || normalized.contains("post"));
     }
 
-    private static void requireReviewedIdArguments(String toolName, Set<String> declared) {
-        Set<String> unreviewed = declared.stream()
+    private static Set<String> unreviewedIdArguments(String toolName, Set<String> declared) {
+        return declared.stream()
                 .filter(field -> field.endsWith("Id") || field.endsWith("Ids"))
                 .filter(field -> !"guildId".equals(field))
                 .filter(field -> !isGuildChannelArgument(field))
                 .filter(field -> !REVIEWED_NON_CHANNEL_ID_ARGUMENTS.contains(
                         toolName + "." + field))
                 .collect(Collectors.toCollection(LinkedHashSet::new));
-        if (!unreviewed.isEmpty()) {
-            throw startupError("Tool " + toolName + " declares unreviewed Discord ID targets: "
-                    + unreviewed);
-        }
     }
 
     private static String requireSnowflakeText(TargetArgument value, String name) {
@@ -387,15 +392,19 @@ public final class McpAccessPolicy {
         }
     }
 
-    private static void validateParsedConfiguration(Set<String> allowedGuilds,
-                                                    String defaultGuildId) {
+    private static String validateDefaultGuild(Set<String> allowedGuilds, String defaultGuildId) {
         allowedGuilds.forEach(id -> requireSnowflake(id, "DISCORD_MCP_ALLOWED_GUILDS"));
-        if (!allowedGuilds.isEmpty() && defaultGuildId != null) {
+        if (allowedGuilds.isEmpty()) {
+            return trimToNull(defaultGuildId);
+        }
+        if (defaultGuildId != null && !defaultGuildId.isEmpty()) {
             requireSnowflake(defaultGuildId, "DISCORD_GUILD_ID");
             if (!allowedGuilds.contains(defaultGuildId)) {
                 throw startupError("DISCORD_GUILD_ID must be in DISCORD_MCP_ALLOWED_GUILDS");
             }
+            return defaultGuildId;
         }
+        return null;
     }
 
     private static String normalizeAbsentArguments(String arguments) {

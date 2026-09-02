@@ -52,7 +52,7 @@ class McpAccessPolicyTest {
         ToolCallback exposed = only(policy.apply(ToolCallbackProvider.from(raw)));
 
         assertThat(exposed).isSameAs(raw);
-        assertThat(exposed.call("{\"channelId\":123}")) .isEqualTo("called");
+        assertThat(exposed.call("{\"channelId\":123}")).isEqualTo("called");
         assertThat(received).hasValue("{\"channelId\":123}");
     }
 
@@ -253,6 +253,10 @@ class McpAccessPolicyTest {
         assertThatThrownBy(() -> policy(mock(JDA.class), ALLOWED_GUILD, "", DENIED_GUILD))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("must be in DISCORD_MCP_ALLOWED_GUILDS");
+        assertThatThrownBy(() -> policy(mock(JDA.class), ALLOWED_GUILD, "",
+                " " + ALLOWED_GUILD + " "))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("17-20 digit");
 
         ToolCallback exposed = only(policy(mock(JDA.class), ALLOWED_GUILD,
                 "list_channels", "").apply(ToolCallbackProvider.from(
@@ -280,6 +284,13 @@ class McpAccessPolicyTest {
 
     @Test
     void futureUnclassifiedIdArgumentsFailStartupReviewClosed() {
+        McpAccessPolicy defaultPolicy = policy(mock(JDA.class), ALLOWED_GUILD, "",
+                ALLOWED_GUILD);
+        ToolCallbackProvider omitted = defaultPolicy.apply(ToolCallbackProvider.from(
+                callback("future_target_tool", schema("guildId", "parentId"),
+                        new AtomicReference<>())));
+        assertThat(omitted.getToolCallbacks()).isEmpty();
+
         McpAccessPolicy policy = policy(mock(JDA.class), ALLOWED_GUILD,
                 "future_target_tool", ALLOWED_GUILD);
 
@@ -317,7 +328,7 @@ class McpAccessPolicyTest {
     @Test
     void realToolSurfaceRequiresExplicitGuildScopeReview() {
         ToolCallbackProvider raw = MethodToolCallbackProvider.builder().toolObjects(
-                new DiscordService(mock(JDA.class)), mock(MessageService.class), mock(UserService.class),
+                mock(DiscordService.class), mock(MessageService.class), mock(UserService.class),
                 mock(ChannelService.class), mock(CategoryService.class), mock(WebhookService.class),
                 mock(ThreadService.class), mock(RoleService.class), mock(ModerationService.class),
                 mock(VoiceChannelService.class), mock(ScheduledEventService.class),
