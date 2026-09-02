@@ -402,7 +402,8 @@ public class MessageService {
     }
 
     private boolean isMessageContentAvailable(Message message) {
-        return jda.getGatewayIntents().contains(GatewayIntent.MESSAGE_CONTENT)
+        return !message.getContentRaw().isEmpty()
+                || jda.getGatewayIntents().contains(GatewayIntent.MESSAGE_CONTENT)
                 || message.getAuthor().getId().equals(jda.getSelfUser().getId())
                 || message.getMentions().isMentioned(
                         jda.getSelfUser(), Message.MentionType.USER);

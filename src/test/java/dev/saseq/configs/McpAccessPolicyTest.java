@@ -17,6 +17,7 @@ import dev.saseq.services.VoiceChannelService;
 import dev.saseq.services.WebhookService;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Guild;
+import net.dv8tion.jda.api.entities.channel.concrete.ThreadChannel;
 import net.dv8tion.jda.api.entities.channel.middleman.GuildChannel;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ToolContext;
@@ -270,10 +271,8 @@ class McpAccessPolicyTest {
         assertThatThrownBy(() -> policy(mock(JDA.class), ALLOWED_GUILD, "", DENIED_GUILD))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("must be in DISCORD_MCP_ALLOWED_GUILDS");
-        assertThatThrownBy(() -> policy(mock(JDA.class), ALLOWED_GUILD, "",
-                " " + ALLOWED_GUILD + " "))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("17-20 digit");
+        assertThat(policy(mock(JDA.class), ALLOWED_GUILD, "",
+                " " + ALLOWED_GUILD + " ")).isNotNull();
 
         ToolCallback exposed = only(policy(mock(JDA.class), ALLOWED_GUILD,
                 "list_channels", "").apply(ToolCallbackProvider.from(
@@ -284,6 +283,25 @@ class McpAccessPolicyTest {
         assertThatThrownBy(() -> exposed.call("[]"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("JSON object");
+        assertThatThrownBy(() -> exposed.call("{\"guildId\":\"123456789012345678901\"}"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("at most 20 characters");
+    }
+
+    @Test
+    void threadTargetsResolveThroughTheThreadChannelFallback() {
+        JDA jda = mock(JDA.class);
+        ThreadChannel thread = mock(ThreadChannel.class);
+        Guild guild = mock(Guild.class);
+        when(jda.getThreadChannelById(CHANNEL)).thenReturn(thread);
+        when(thread.getGuild()).thenReturn(guild);
+        when(guild.getId()).thenReturn(ALLOWED_GUILD);
+        ToolCallback exposed = only(policy(jda, ALLOWED_GUILD, "read_messages", "")
+                .apply(ToolCallbackProvider.from(callback("read_messages", schema("channelId"),
+                        new AtomicReference<>()))));
+
+        assertThat(exposed.call("{\"channelId\":\"" + CHANNEL + "\"}"))
+                .isEqualTo("called");
     }
 
     @Test

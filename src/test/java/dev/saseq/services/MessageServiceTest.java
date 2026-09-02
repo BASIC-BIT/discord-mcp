@@ -130,6 +130,29 @@ class MessageServiceTest {
     }
 
     @Test
+    void readMessagesPreservesContentDiscordActuallyReturnedWithoutTheIntent() {
+        TextChannel channel = mock(TextChannel.class);
+        MessageHistory history = mock(MessageHistory.class);
+        Message guildMessage = message(
+                "111111111111111111",
+                "123456789012345678",
+                "alice",
+                "returned text"
+        );
+        RestAction<List<Message>> retrievePast = restAction(List.of(guildMessage));
+
+        when(jda.getTextChannelById(CHANNEL_ID)).thenReturn(channel);
+        when(jda.getGatewayIntents()).thenReturn(EnumSet.noneOf(GatewayIntent.class));
+        when(guildMessage.getContentRaw()).thenReturn("returned text");
+        when(channel.getHistory()).thenReturn(history);
+        when(history.retrievePast(1)).thenReturn(retrievePast);
+
+        assertThat(messageService.readMessages(CHANNEL_ID, "1", null, null, null))
+                .contains("```returned text```")
+                .doesNotContain("[message content unavailable]");
+    }
+
+    @Test
     void getMessageReturnsAnExactMachineReadableSnapshot() {
         String paddedChannelId = "0" + CHANNEL_ID;
         TextChannel channel = mock(TextChannel.class);
@@ -767,6 +790,7 @@ class MessageServiceTest {
         when(message.getId()).thenReturn(messageId);
         when(message.getAuthor()).thenReturn(author);
         when(message.getTimeCreated()).thenReturn(OffsetDateTime.parse("2026-05-26T00:00:00Z"));
+        when(message.getContentRaw()).thenReturn(content);
         when(message.getContentDisplay()).thenReturn(content);
         when(message.getAttachments()).thenReturn(List.of());
         return message;

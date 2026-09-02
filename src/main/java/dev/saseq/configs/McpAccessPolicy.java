@@ -45,7 +45,9 @@ public final class McpAccessPolicy {
     private static final Set<String> EXPLICIT_ONLY_WHEN_GUILD_SCOPED = Set.of(
             "create_webhook", "list_webhooks");
     // This list can only classify names that advertise ID semantics. Schema reviews must also
-    // inspect aliases such as webhookUrl, inviteCode, before/after/around, and comma-separated roles.
+    // inspect aliases such as webhookUrl, inviteCode, before/after/around, and comma-separated roles,
+    // plus near-miss names such as crosspostMessageId or threadStarterMessageId that contain a
+    // channel-shaped substring without identifying a channel.
     private static final Set<String> REVIEWED_NON_CHANNEL_ID_ARGUMENTS = Set.of(
             "add_reaction.messageId",
             "assign_role.roleId", "assign_role.userId",
@@ -407,12 +409,14 @@ public final class McpAccessPolicy {
     }
 
     private static String validateDefaultGuild(Set<String> allowedGuilds, String defaultGuildId) {
+        String normalizedDefaultGuildId = trimToNull(defaultGuildId);
         if (allowedGuilds.isEmpty()) {
-            return trimToNull(defaultGuildId);
+            return normalizedDefaultGuildId;
         }
-        if (defaultGuildId != null && !defaultGuildId.isEmpty()) {
-            requireSnowflake(defaultGuildId, "DISCORD_GUILD_ID");
-            String canonicalDefaultGuildId = DiscordSnowflake.canonicalize(defaultGuildId);
+        if (normalizedDefaultGuildId != null) {
+            requireSnowflake(normalizedDefaultGuildId, "DISCORD_GUILD_ID");
+            String canonicalDefaultGuildId = DiscordSnowflake.canonicalize(
+                    normalizedDefaultGuildId);
             if (!allowedGuilds.contains(canonicalDefaultGuildId)) {
                 throw startupError("DISCORD_GUILD_ID must be in DISCORD_MCP_ALLOWED_GUILDS");
             }
