@@ -226,12 +226,12 @@ that share one bot across multiple Discord servers can add narrow, application-e
   Under guild scoping, guild and channel target IDs must be JSON strings so 17-20 digit snowflakes
   cannot be rounded by numeric JSON parsers. The policy reads only target fields from the argument
   stream, so a large upload is not copied into a second JSON tree merely to establish its guild.
-  New `*Id`/`*Ids` tool arguments must be explicitly classified for that exact tool before a
-  guild-scoped deployment will export it. An unclassified tool is omitted by default; startup
-  fails if the exact tool allowlist requests it. Arguments with other names cannot be inferred as
-  IDs; reviewers must assess semantic aliases when changing a tool schema. Names such as
-  `crosspostMessageId` or `threadStarterMessageId` also need explicit review because their
-  channel-shaped substrings would otherwise make the policy treat them as channel IDs.
+  Every argument name is pinned for its exact tool before a guild-scoped deployment will export
+  it, including aliases such as `inviteCode`, `webhookUrl`, and `filePath` that do not advertise ID
+  semantics. A tool with a new or unreviewed argument is omitted by default; startup fails if the
+  exact tool allowlist requests it. Channel-shaped names such as `crosspostMessageId` or
+  `threadStarterMessageId` receive an additional classification review because their substrings
+  would otherwise make the policy treat them as channel IDs.
 - `DISCORD_MCP_ALLOWED_TOOLS`: comma-separated exact tool names. Unknown names fail startup and
   tools not named here are not exported to MCP clients. A whitespace-only value is invalid rather
   than being treated as an unset allowlist.
@@ -243,9 +243,9 @@ hard-fails startup when its tool is explicitly allowlisted until that shape rece
 guild-boundary review.
 
 The allowlist syntax and default guild are validated before the bot connects to Discord. Exact tool
-names and target schemas are validated after the tool surface is built. Configuration and
-connection failures are also written to stderr so stdio MCP clients can show an actionable startup
-error without contaminating the JSON-RPC stream on stdout.
+names and target schemas are validated after the tool surface is built, after a successful Discord
+login. Configuration and connection failures are also written to stderr so stdio MCP clients can
+show an actionable startup error without contaminating the JSON-RPC stream on stdout.
 
 Guild scoping resolves channel targets from the bot's JDA cache. Archived threads and forum posts
 can be absent, so `modify_forum_post` may be unable to perform its documented unarchive action and

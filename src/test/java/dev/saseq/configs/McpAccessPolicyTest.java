@@ -358,7 +358,7 @@ class McpAccessPolicyTest {
     }
 
     @Test
-    void futureUnclassifiedIdArgumentsFailStartupReviewClosed() {
+    void futureUnreviewedArgumentsFailStartupReviewClosed() {
         McpAccessPolicy defaultPolicy = policy(mock(JDA.class), ALLOWED_GUILD, "",
                 ALLOWED_GUILD);
         ToolCallbackProvider omitted = defaultPolicy.apply(ToolCallbackProvider.from(
@@ -373,35 +373,44 @@ class McpAccessPolicyTest {
                 callback("future_target_tool", schema("guildId", "parentId"),
                         new AtomicReference<>()))))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("unreviewed Discord ID targets")
+                .hasMessageContaining("unreviewed arguments")
                 .hasMessageContaining("parentId");
 
         assertThatThrownBy(() -> policy.apply(ToolCallbackProvider.from(
                 callback("future_target_tool", schema("guildId", "targetId"),
                         new AtomicReference<>()))))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("unreviewed Discord ID targets")
+                .hasMessageContaining("unreviewed arguments")
                 .hasMessageContaining("targetId");
 
         assertThatThrownBy(() -> policy.apply(ToolCallbackProvider.from(
                 callback("future_target_tool", schema("guildId", "destinationIds"),
                         new AtomicReference<>()))))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("unreviewed Discord ID targets")
+                .hasMessageContaining("unreviewed arguments")
                 .hasMessageContaining("destinationIds");
 
         assertThatThrownBy(() -> policy.apply(ToolCallbackProvider.from(
                 callback("future_target_tool", schema("guildId", "id", "parent_id"),
                         new AtomicReference<>()))))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("unreviewed Discord ID targets")
+                .hasMessageContaining("unreviewed arguments")
                 .hasMessageContaining("id")
                 .hasMessageContaining("parent_id");
 
-        assertThat(policy(mock(JDA.class), ALLOWED_GUILD,
-                "future_status_tool", ALLOWED_GUILD).apply(ToolCallbackProvider.from(
-                callback("future_status_tool", schema("guildId", "valid"),
-                        new AtomicReference<>()))).getToolCallbacks()).hasSize(1);
+        ToolCallbackProvider scalarAliasOmitted = policy(mock(JDA.class), ALLOWED_GUILD,
+                "", "").apply(ToolCallbackProvider.from(callback(
+                        "send_message", schema("channelId", "message", "inviteCode"),
+                        new AtomicReference<>())));
+        assertThat(scalarAliasOmitted.getToolCallbacks()).isEmpty();
+
+        assertThatThrownBy(() -> policy(mock(JDA.class), ALLOWED_GUILD,
+                "send_message", "").apply(ToolCallbackProvider.from(callback(
+                        "send_message", schema("channelId", "message", "inviteCode"),
+                        new AtomicReference<>()))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("unreviewed arguments")
+                .hasMessageContaining("inviteCode");
 
         assertThatThrownBy(() -> policy(mock(JDA.class), ALLOWED_GUILD,
                 "future_structured_tool", ALLOWED_GUILD).apply(ToolCallbackProvider.from(

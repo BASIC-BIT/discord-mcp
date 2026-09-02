@@ -117,7 +117,7 @@ class MessageServiceTest {
         when(history.retrievePast(1)).thenReturn(retrievePast);
 
         assertThat(messageService.readMessages(CHANNEL_ID, "1", null, null, null))
-                .contains("[no text content, or content unavailable]")
+                .contains("[content unavailable]")
                 .doesNotContain("``````");
     }
 
@@ -141,7 +141,7 @@ class MessageServiceTest {
 
         assertThat(messageService.readMessages(CHANNEL_ID, "1", null, null, null))
                 .contains("```returned text```")
-                .doesNotContain("[no text content, or content unavailable]");
+                .doesNotContain("[content unavailable]");
     }
 
     @Test
@@ -158,7 +158,7 @@ class MessageServiceTest {
         when(history.retrievePast(1)).thenReturn(retrievePast);
 
         assertThat(messageService.readMessages(CHANNEL_ID, "1", null, null, null))
-                .contains("[no text content, or content unavailable]")
+                .contains("[no text content]")
                 .doesNotContain("``````");
     }
 

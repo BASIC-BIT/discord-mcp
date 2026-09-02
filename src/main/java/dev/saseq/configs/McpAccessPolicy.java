@@ -86,48 +86,128 @@ public final class McpAccessPolicy {
             "send_message.channelId",
             "upsert_member_channel_permissions.channelId",
             "upsert_role_channel_permissions.channelId");
-    // This list can only classify names that advertise ID semantics. Schema reviews must also
-    // inspect aliases such as webhookUrl, inviteCode, before/after/around, and comma-separated roles,
-    // plus near-miss names such as crosspostMessageId or threadStarterMessageId that contain a
-    // channel-shaped substring without identifying a channel.
-    private static final Set<String> REVIEWED_NON_CHANNEL_ID_ARGUMENTS = Set.of(
-            "add_reaction.messageId",
-            "assign_role.roleId", "assign_role.userId",
-            "ban_member.userId",
-            "delete_channel_permission_overwrite.targetId",
-            "delete_emoji.emojiId",
-            "delete_guild_scheduled_event.eventId",
-            "delete_message.messageId",
-            "delete_private_message.messageId", "delete_private_message.userId",
-            "delete_role.roleId",
-            "delete_webhook.webhookId",
-            "disconnect_member.userId",
-            "download_attachment.attachmentId", "download_attachment.messageId",
-            "edit_emoji.emojiId",
-            "edit_guild_scheduled_event.eventId",
-            "edit_message.messageId",
-            "edit_private_message.messageId", "edit_private_message.userId",
-            "edit_role.roleId",
-            "get_attachment.attachmentId", "get_attachment.messageId",
-            "get_emoji_details.emojiId",
-            "get_guild_scheduled_event_users.eventId",
-            "get_member_by_id.userId",
-            "get_message.messageId",
-            "kick_member.userId",
-            "modify_voice_state.userId",
-            "move_member.userId",
-            "create_forum_post.tagIds", "modify_forum_post.tagIds",
-            "read_private_messages.userId",
-            "remove_reaction.messageId",
-            "remove_role.roleId", "remove_role.userId",
-            "remove_timeout.userId",
-            "send_private_message.userId",
-            "set_guild_scheduled_event_image.eventId",
-            "set_nickname.userId",
-            "timeout_member.userId",
-            "unban_member.userId",
-            "upsert_member_channel_permissions.userId",
-            "upsert_role_channel_permissions.roleId");
+    // Pin every reviewed argument name, including aliases without an ID suffix. This makes any
+    // future schema expansion fail closed instead of depending on a reviewer recognizing that a
+    // new inviteCode, webhookUrl, filePath, or similar scalar carries cross-guild authority.
+    private static final Map<String, Set<String>> REVIEWED_ARGUMENTS = Map.ofEntries(
+            Map.entry("add_reaction", Set.of("channelId", "messageId", "emoji")),
+            Map.entry("assign_role", Set.of("guildId", "userId", "roleId")),
+            Map.entry("ban_member", Set.of(
+                    "guildId", "userId", "deleteMessageSeconds", "reason")),
+            Map.entry("create_category", Set.of("guildId", "name")),
+            Map.entry("create_emoji", Set.of(
+                    "guildId", "name", "image", "imageUrl", "roles")),
+            Map.entry("create_forum_channel", Set.of(
+                    "guildId", "name", "categoryId", "topic", "nsfw", "slowmode",
+                    "position")),
+            Map.entry("create_forum_post", Set.of(
+                    "guildId", "channelId", "title", "message", "tagIds")),
+            Map.entry("create_guild_scheduled_event", Set.of(
+                    "guildId", "name", "description", "scheduledStartTime", "scheduledEndTime",
+                    "entityType", "channelId", "location", "recurrenceRule")),
+            Map.entry("create_invite", Set.of(
+                    "guildId", "channelId", "maxAge", "maxUses", "temporary", "unique")),
+            Map.entry("create_role", Set.of(
+                    "guildId", "name", "color", "hoist", "mentionable", "permissions")),
+            Map.entry("create_stage_channel", Set.of(
+                    "guildId", "name", "categoryId", "bitrate")),
+            Map.entry("create_text_channel", Set.of(
+                    "guildId", "name", "categoryId", "topic", "nsfw", "slowmode",
+                    "position")),
+            Map.entry("create_voice_channel", Set.of(
+                    "guildId", "name", "categoryId", "userLimit", "bitrate")),
+            Map.entry("create_webhook", Set.of("channelId", "name")),
+            Map.entry("delete_category", Set.of("guildId", "categoryId")),
+            Map.entry("delete_channel", Set.of("guildId", "channelId", "reason")),
+            Map.entry("delete_channel_permission_overwrite", Set.of(
+                    "guildId", "channelId", "targetType", "targetId", "reason")),
+            Map.entry("delete_emoji", Set.of("guildId", "emojiId")),
+            Map.entry("delete_guild_scheduled_event", Set.of("guildId", "eventId")),
+            Map.entry("delete_invite", Set.of("inviteCode")),
+            Map.entry("delete_message", Set.of("channelId", "messageId")),
+            Map.entry("delete_private_message", Set.of("userId", "messageId")),
+            Map.entry("delete_role", Set.of("guildId", "roleId")),
+            Map.entry("delete_webhook", Set.of("webhookId")),
+            Map.entry("disconnect_member", Set.of("guildId", "userId")),
+            Map.entry("download_attachment", Set.of(
+                    "channelId", "messageId", "attachmentId")),
+            Map.entry("edit_category", Set.of(
+                    "guildId", "categoryId", "name", "position", "reason")),
+            Map.entry("edit_emoji", Set.of("guildId", "emojiId", "name", "roles")),
+            Map.entry("edit_forum_channel", Set.of(
+                    "guildId", "channelId", "name", "topic", "nsfw", "slowmode",
+                    "categoryId", "position", "defaultSort", "defaultLayout", "reason")),
+            Map.entry("edit_guild_scheduled_event", Set.of(
+                    "guildId", "eventId", "status", "name", "description",
+                    "scheduledStartTime", "scheduledEndTime", "location", "recurrenceRule")),
+            Map.entry("edit_message", Set.of("channelId", "messageId", "newMessage")),
+            Map.entry("edit_private_message", Set.of("userId", "messageId", "newMessage")),
+            Map.entry("edit_role", Set.of(
+                    "guildId", "roleId", "name", "color", "hoist", "mentionable",
+                    "permissions")),
+            Map.entry("edit_text_channel", Set.of(
+                    "guildId", "channelId", "name", "topic", "nsfw", "slowmode",
+                    "categoryId", "position", "reason")),
+            Map.entry("edit_voice_channel", Set.of(
+                    "channelId", "name", "bitrate", "userLimit", "rtcRegion")),
+            Map.entry("find_category", Set.of("guildId", "categoryName")),
+            Map.entry("find_channel", Set.of("guildId", "channelName")),
+            Map.entry("get_attachment", Set.of("channelId", "messageId", "attachmentId")),
+            Map.entry("get_bans", Set.of("guildId", "limit")),
+            Map.entry("get_bot_info", Set.of("guildId")),
+            Map.entry("get_channel_info", Set.of("guildId", "channelId")),
+            Map.entry("get_emoji_details", Set.of("guildId", "emojiId")),
+            Map.entry("get_forum_channel_info", Set.of("guildId", "channelId")),
+            Map.entry("get_guild_scheduled_event_users", Set.of(
+                    "guildId", "eventId", "limit", "withMember")),
+            Map.entry("get_invite_details", Set.of("inviteCode", "withCounts")),
+            Map.entry("get_member_by_id", Set.of("userId", "guildId")),
+            Map.entry("get_message", Set.of("channelId", "messageId")),
+            Map.entry("get_server_info", Set.of("guildId")),
+            Map.entry("get_user_id_by_name", Set.of("username", "guildId")),
+            Map.entry("kick_member", Set.of("guildId", "userId", "reason")),
+            Map.entry("list_active_threads", Set.of("guildId")),
+            Map.entry("list_channel_permission_overwrites", Set.of("guildId", "channelId")),
+            Map.entry("list_channels", Set.of("guildId")),
+            Map.entry("list_channels_in_category", Set.of("guildId", "categoryId")),
+            Map.entry("list_emojis", Set.of("guildId")),
+            Map.entry("list_forum_channels", Set.of("guildId")),
+            Map.entry("list_forum_posts", Set.of("guildId", "channelId")),
+            Map.entry("list_forum_tags", Set.of("guildId", "channelId")),
+            Map.entry("list_guild_scheduled_events", Set.of("guildId", "withUserCount")),
+            Map.entry("list_invites", Set.of("guildId")),
+            Map.entry("list_roles", Set.of("guildId")),
+            Map.entry("list_webhooks", Set.of("channelId")),
+            Map.entry("modify_forum_post", Set.of(
+                    "guildId", "postId", "locked", "archived", "pinned", "tagIds", "reason")),
+            Map.entry("modify_voice_state", Set.of("guildId", "userId", "mute", "deafen")),
+            Map.entry("move_channel", Set.of(
+                    "guildId", "channelId", "categoryId", "position", "reason")),
+            Map.entry("move_member", Set.of("guildId", "userId", "channelId")),
+            Map.entry("read_messages", Set.of("channelId", "count", "before", "after", "around")),
+            Map.entry("read_private_messages", Set.of(
+                    "userId", "count", "before", "after", "around")),
+            Map.entry("remove_reaction", Set.of("channelId", "messageId", "emoji")),
+            Map.entry("remove_role", Set.of("guildId", "userId", "roleId")),
+            Map.entry("remove_timeout", Set.of("guildId", "userId", "reason")),
+            Map.entry("search_members", Set.of("query", "count", "guildId")),
+            Map.entry("send_file", Set.of(
+                    "channelId", "filePath", "fileUrl", "fileData", "fileName", "message")),
+            Map.entry("send_message", Set.of("channelId", "message")),
+            Map.entry("send_private_message", Set.of("userId", "message")),
+            Map.entry("send_webhook_message", Set.of("webhookUrl", "message")),
+            Map.entry("set_guild_scheduled_event_image", Set.of(
+                    "guildId", "eventId", "imageUrl", "filePath")),
+            Map.entry("set_nickname", Set.of("guildId", "userId", "nick", "reason")),
+            Map.entry("timeout_member", Set.of(
+                    "guildId", "userId", "durationSeconds", "reason")),
+            Map.entry("unban_member", Set.of("guildId", "userId", "reason")),
+            Map.entry("upsert_member_channel_permissions", Set.of(
+                    "guildId", "channelId", "userId", "allowRaw", "denyRaw",
+                    "allowPermissions", "denyPermissions", "reason")),
+            Map.entry("upsert_role_channel_permissions", Set.of(
+                    "guildId", "channelId", "roleId", "allowRaw", "denyRaw",
+                    "allowPermissions", "denyPermissions", "reason")));
 
     private final JDA jda;
     private final ObjectMapper objectMapper;
@@ -247,14 +327,14 @@ public final class McpAccessPolicy {
                     + " because its channel arguments need review: " + unreviewedChannels);
             return null;
         }
-        Set<String> unreviewed = unreviewedIdArguments(toolName, declared);
+        Set<String> unreviewed = unreviewedArguments(toolName, declared);
         if (!unreviewed.isEmpty()) {
             if (allowedTools.contains(toolName)) {
                 throw startupError("Tool " + toolName
-                        + " declares unreviewed Discord ID targets: " + unreviewed);
+                        + " declares unreviewed arguments: " + unreviewed);
             }
             System.err.println("Discord guild scope omitted tool " + toolName
-                    + " because its ID arguments need review: " + unreviewed);
+                    + " because its arguments need review: " + unreviewed);
             return null;
         }
         boolean resolvable = declared.contains("guildId")
@@ -456,24 +536,11 @@ public final class McpAccessPolicy {
                 || normalized.contains("thread") || normalized.contains("post"));
     }
 
-    private static Set<String> unreviewedIdArguments(String toolName, Set<String> declared) {
+    private static Set<String> unreviewedArguments(String toolName, Set<String> declared) {
+        Set<String> reviewed = REVIEWED_ARGUMENTS.getOrDefault(toolName, Set.of());
         return declared.stream()
-                .filter(McpAccessPolicy::isIdShapedArgument)
-                .filter(field -> !"guildId".equals(field))
-                .filter(field -> !isGuildChannelArgument(field))
-                .filter(field -> !REVIEWED_NON_CHANNEL_ID_ARGUMENTS.contains(
-                        toolName + "." + field))
+                .filter(field -> !reviewed.contains(field))
                 .collect(Collectors.toCollection(LinkedHashSet::new));
-    }
-
-    private static boolean isIdShapedArgument(String field) {
-        String lowercase = field.toLowerCase(Locale.ROOT);
-        // Lowercase words such as "valid" are not ID names. Without a separator or camel/upper
-        // boundary, a lowercase suffix is ambiguous and must be covered by semantic schema review.
-        return lowercase.equals("id") || lowercase.equals("ids")
-                || lowercase.endsWith("_id") || lowercase.endsWith("_ids")
-                || field.endsWith("Id") || field.endsWith("Ids")
-                || field.endsWith("ID") || field.endsWith("IDs");
     }
 
     private static String requireSnowflakeText(TargetArgument value, String name) {

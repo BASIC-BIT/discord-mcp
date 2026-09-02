@@ -1084,8 +1084,10 @@ public class MessageService {
                             timestamp));
                     if (contentAvailable && !content.isEmpty()) {
                         sb.append("```").append(content).append("```");
+                    } else if (contentAvailable) {
+                        sb.append("[no text content]");
                     } else {
-                        sb.append("[no text content, or content unavailable]");
+                        sb.append("[content unavailable]");
                     }
 
                     List<Message.Attachment> attachments = m.getAttachments();
