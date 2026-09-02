@@ -370,6 +370,8 @@ public final class McpAccessPolicy {
 
     private static boolean isIdShapedArgument(String field) {
         String lowercase = field.toLowerCase(Locale.ROOT);
+        // Lowercase words such as "valid" are not ID names. Without a separator or camel/upper
+        // boundary, a lowercase suffix is ambiguous and must be covered by semantic schema review.
         return lowercase.equals("id") || lowercase.equals("ids")
                 || lowercase.endsWith("_id") || lowercase.endsWith("_ids")
                 || field.endsWith("Id") || field.endsWith("Ids")

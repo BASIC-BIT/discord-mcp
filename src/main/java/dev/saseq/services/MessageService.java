@@ -365,7 +365,7 @@ public class MessageService {
      * @param messageId The ID of the message to retrieve.
      * @return JSON containing stable target, author, content, and jump-link fields.
      */
-    @Tool(name = "get_message", description = "Get one guild message as structured JSON; contentAvailable says whether content is safe for exact comparison")
+    @Tool(name = "get_message", description = "Get one guild message as structured JSON with raw markdown and unresolved mentions; contentAvailable says whether content is safe for exact comparison")
     public String getMessage(@ToolParam(description = "Discord channel ID") String channelId,
                              @ToolParam(description = "Specific message ID") String messageId) {
         if (channelId == null || channelId.isEmpty()) {

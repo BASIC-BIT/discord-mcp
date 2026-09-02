@@ -142,6 +142,17 @@ class McpAccessPolicyTest {
     }
 
     @Test
+    void guildIdOnlyToolDeniesANonAllowlistedGuild() {
+        ToolCallback exposed = only(policy(mock(JDA.class), ALLOWED_GUILD,
+                "list_channels", "").apply(ToolCallbackProvider.from(
+                callback("list_channels", schema("guildId"), new AtomicReference<>()))));
+
+        assertThatThrownBy(() -> exposed.call("{\"guildId\":\"" + DENIED_GUILD + "\"}"))
+                .isInstanceOf(SecurityException.class)
+                .hasMessageContaining("outside the allowed guild scope");
+    }
+
+    @Test
     void toolContextOverloadEnforcesScopeBeforeDelegation() {
         JDA jda = mock(JDA.class);
         stubChannel(jda, OTHER_CHANNEL, DENIED_GUILD);

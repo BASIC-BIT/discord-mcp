@@ -222,14 +222,17 @@ that share one bot across multiple Discord servers can add narrow, application-e
   permission-checks them and invite grants can be configured to expire and remain revocable
   through Discord. If
   `DISCORD_MCP_ALLOWED_TOOLS` explicitly requests an unresolvable tool, startup fails instead of
-  silently weakening the guild boundary. Under guild scoping, guild and channel target IDs must be
-  JSON strings so 17-20 digit snowflakes cannot be rounded by numeric JSON parsers. The policy reads only target
-  fields from the argument stream, so a large upload is not copied into a second JSON tree merely
-  to establish its guild. New `*Id`/`*Ids` tool arguments must be explicitly classified for that
-  exact tool before a guild-scoped deployment will export it. An unclassified tool is omitted by
-  default; startup fails if the exact tool allowlist requests it. Arguments with other names cannot
-  be inferred as IDs; reviewers must assess semantic aliases when changing a tool schema. Names
-  such as `crosspostMessageId` or `threadStarterMessageId` also need explicit review because their
+  silently weakening the guild boundary. The same hard failure applies if a later jar changes an
+  explicitly allowlisted tool's target schema. Review the new schema before restarting the scoped
+  deployment; other allowlisted tools remain unavailable until configuration and code agree.
+  Under guild scoping, guild and channel target IDs must be JSON strings so 17-20 digit snowflakes
+  cannot be rounded by numeric JSON parsers. The policy reads only target fields from the argument
+  stream, so a large upload is not copied into a second JSON tree merely to establish its guild.
+  New `*Id`/`*Ids` tool arguments must be explicitly classified for that exact tool before a
+  guild-scoped deployment will export it. An unclassified tool is omitted by default; startup
+  fails if the exact tool allowlist requests it. Arguments with other names cannot be inferred as
+  IDs; reviewers must assess semantic aliases when changing a tool schema. Names such as
+  `crosspostMessageId` or `threadStarterMessageId` also need explicit review because their
   channel-shaped substrings would otherwise make the policy treat them as channel IDs.
 - `DISCORD_MCP_ALLOWED_TOOLS`: comma-separated exact tool names. Unknown names fail startup and
   tools not named here are not exported to MCP clients. A whitespace-only value is invalid rather
@@ -248,10 +251,10 @@ The bot configuration always enables privileged `GUILD_MEMBERS` because member l
 it. Exact message content is opt-in for upgrade compatibility: set
 `DISCORD_MCP_ENABLE_MESSAGE_CONTENT=true` and enable Message Content Intent in the Discord
 Developer Portal before using content-dependent tools such as `read_messages` or `get_message`.
-The `get_message` snapshot includes `contentAvailable`; `content` is `null` and cannot be used for
-exact comparison when that field is false. A false value can also mean the message genuinely has
-no text, because Discord does not expose a separate withheld-content marker. Discord documents
-that Message Content controls data
+The `get_message` snapshot returns raw markdown with mentions unresolved and includes
+`contentAvailable`; `content` is `null` and cannot be used for exact comparison when that field is
+false. A false value can also mean the message genuinely has no text, because Discord does not
+expose a separate withheld-content marker. Discord documents that Message Content controls data
 across its APIs, including HTTP responses, not only Gateway events; see the
 [Message Content Intent documentation](https://docs.discord.com/developers/events/gateway#message-content-intent).
 
