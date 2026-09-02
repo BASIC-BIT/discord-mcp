@@ -216,7 +216,9 @@ that share one bot across multiple Discord servers can add narrow, application-e
   return durable access credentials. They can be explicitly allowlisted only when the calling
   client is trusted to handle those credentials outside this guild-scoped MCP surface. A scoped
   deployment still cannot revoke an invite or send through or delete a webhook through this
-  server; use Discord directly for those operations. If
+  server; use Discord directly for those operations. Treat allowing a create tool as a deliberate
+  create-without-revoke decision. A trusted calling client should require human confirmation,
+  bounded invite `maxAge`/`maxUses`, and a retained manual Discord revocation path. If
   `DISCORD_MCP_ALLOWED_TOOLS` explicitly requests an unresolvable tool, startup fails instead of
   silently weakening the guild boundary. The same hard failure applies if a later jar changes an
   explicitly allowlisted tool's target schema. Review the new schema before restarting the scoped
@@ -244,6 +246,10 @@ The allowlist syntax and default guild are validated before the bot connects to 
 names and target schemas are validated after the tool surface is built. Configuration and
 connection failures are also written to stderr so stdio MCP clients can show an actionable startup
 error without contaminating the JSON-RPC stream on stdout.
+
+Guild scoping resolves channel targets from the bot's JDA cache. Archived threads and forum posts
+can be absent, so `modify_forum_post` may be unable to perform its documented unarchive action and
+message tools may deny those targets until Discord places them in cache.
 
 For a one-guild scoped deployment, set `DISCORD_GUILD_ID` to that guild as well as listing it in
 `DISCORD_MCP_ALLOWED_GUILDS`; otherwise callers must supply `guildId` on every tool that permits it.

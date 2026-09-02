@@ -42,7 +42,8 @@ public final class McpAccessPolicy {
     static final int MAX_ARGUMENT_STRING_CHARACTERS = 70_000_000;
     static final long MAX_ARGUMENT_DOCUMENT_CHARACTERS = 70_100_000L;
     private static final String TARGET_ACCESS_DENIED =
-            "Discord target is unavailable or outside the allowed guild scope";
+            "Discord target is not in the bot's channel cache (archived threads and forum posts "
+                    + "may be absent) or is outside the allowed guild scope";
     private static final Set<String> EXPLICIT_ONLY_WHEN_GUILD_SCOPED = Set.of(
             "create_invite", "list_invites", "create_webhook", "list_webhooks");
     private static final Set<String> SCALAR_SCHEMA_TYPES = Set.of(
@@ -75,6 +76,7 @@ public final class McpAccessPolicy {
             "list_channels_in_category.categoryId",
             "list_forum_posts.channelId",
             "list_forum_tags.channelId",
+            "list_webhooks.channelId",
             "modify_forum_post.postId",
             "move_channel.categoryId", "move_channel.channelId",
             "move_member.channelId",

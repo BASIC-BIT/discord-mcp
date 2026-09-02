@@ -262,6 +262,18 @@ class McpAccessPolicyTest {
     }
 
     @Test
+    void realCredentialToolSchemasRemainExplicitlyExportable() {
+        ToolCallbackProvider scoped = policy(mock(JDA.class), ALLOWED_GUILD,
+                "create_invite,list_invites,create_webhook,list_webhooks", "")
+                .apply(realToolProvider());
+
+        assertThat(Arrays.stream(scoped.getToolCallbacks())
+                .map(callback -> callback.getToolDefinition().name()).sorted().toList())
+                .containsExactly("create_invite", "create_webhook",
+                        "list_invites", "list_webhooks");
+    }
+
+    @Test
     void guildScopeHidesUnresolvableToolsUnlessTheyWereExplicitlyRequested() {
         ToolCallback global = callback("send_private_message", schema("userId", "message"),
                 new AtomicReference<>());
@@ -411,15 +423,8 @@ class McpAccessPolicyTest {
 
     @Test
     void realToolSurfaceRequiresExplicitGuildScopeReview() {
-        ToolCallbackProvider raw = MethodToolCallbackProvider.builder().toolObjects(
-                mock(DiscordService.class), mock(MessageService.class), mock(UserService.class),
-                mock(ChannelService.class), mock(CategoryService.class), mock(WebhookService.class),
-                mock(ThreadService.class), mock(RoleService.class), mock(ModerationService.class),
-                mock(VoiceChannelService.class), mock(ScheduledEventService.class),
-                mock(InviteService.class), mock(ChannelPermissionService.class),
-                mock(EmojiService.class), mock(ForumService.class)).build();
         ToolCallbackProvider scoped = policy(mock(JDA.class), ALLOWED_GUILD, "", "")
-                .apply(raw);
+                .apply(realToolProvider());
         assertThat(Arrays.stream(scoped.getToolCallbacks())
                 .map(callback -> callback.getToolDefinition().name()).sorted().toList())
                 .containsExactly(
@@ -447,6 +452,16 @@ class McpAccessPolicyTest {
                         "set_guild_scheduled_event_image", "set_nickname", "timeout_member",
                         "unban_member", "upsert_member_channel_permissions",
                         "upsert_role_channel_permissions");
+    }
+
+    private static ToolCallbackProvider realToolProvider() {
+        return MethodToolCallbackProvider.builder().toolObjects(
+                mock(DiscordService.class), mock(MessageService.class), mock(UserService.class),
+                mock(ChannelService.class), mock(CategoryService.class), mock(WebhookService.class),
+                mock(ThreadService.class), mock(RoleService.class), mock(ModerationService.class),
+                mock(VoiceChannelService.class), mock(ScheduledEventService.class),
+                mock(InviteService.class), mock(ChannelPermissionService.class),
+                mock(EmojiService.class), mock(ForumService.class)).build();
     }
 
     private static McpAccessPolicy policy(JDA jda, String guilds, String tools,
