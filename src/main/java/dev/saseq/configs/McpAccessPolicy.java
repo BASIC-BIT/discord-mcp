@@ -44,7 +44,9 @@ public final class McpAccessPolicy {
     private static final String TARGET_ACCESS_DENIED =
             "Discord target is unavailable or outside the allowed guild scope";
     private static final Set<String> EXPLICIT_ONLY_WHEN_GUILD_SCOPED = Set.of(
-            "create_invite", "create_webhook", "list_webhooks");
+            "create_invite", "list_invites", "create_webhook", "list_webhooks");
+    private static final Set<String> SCALAR_SCHEMA_TYPES = Set.of(
+            "string", "number", "integer", "boolean");
     private static final Set<String> REVIEWED_CHANNEL_ID_ARGUMENTS = Set.of(
             "add_reaction.channelId",
             "create_forum_channel.categoryId",
@@ -208,7 +210,17 @@ public final class McpAccessPolicy {
             System.err.println("Discord guild scope is explicitly exporting " + toolName
                     + ", which can return a durable access credential");
         }
-        SchemaProperties schema = schemaProperties(delegate.getToolDefinition());
+        SchemaProperties schema;
+        try {
+            schema = schemaProperties(delegate.getToolDefinition());
+        } catch (IllegalArgumentException error) {
+            if (allowedTools.contains(toolName)) {
+                throw startupError(error.getMessage());
+            }
+            System.err.println("Discord guild scope omitted tool " + toolName
+                    + " because its input schema is invalid or unsupported");
+            return null;
+        }
         Set<String> declared = schema.names();
         if (!schema.structured().isEmpty()) {
             if (allowedTools.contains(toolName)) {
@@ -411,16 +423,17 @@ public final class McpAccessPolicy {
                 return new SchemaProperties(Set.of(), Set.of());
             }
             if (!properties.isObject()) {
-                throw startupError("Tool " + definition.name()
+                throw new IllegalArgumentException("Tool " + definition.name()
                         + " has no object properties in its input schema");
             }
             Set<String> names = new LinkedHashSet<>();
             Set<String> structured = new LinkedHashSet<>();
             properties.propertyNames().forEach(name -> {
                 names.add(name);
-                JsonNode type = properties.get(name).get("type");
-                if (type != null && ("object".equals(type.asText())
-                        || "array".equals(type.asText()))) {
+                JsonNode property = properties.get(name);
+                JsonNode type = property == null ? null : property.get("type");
+                if (type == null || !type.isTextual()
+                        || !SCALAR_SCHEMA_TYPES.contains(type.asText())) {
                     structured.add(name);
                 }
             });
@@ -429,7 +442,8 @@ public final class McpAccessPolicy {
             if (error instanceof IllegalArgumentException) {
                 throw error;
             }
-            throw startupError("Tool " + definition.name() + " has an invalid input schema");
+            throw new IllegalArgumentException(
+                    "Tool " + definition.name() + " has an invalid input schema", error);
         }
     }
 
@@ -505,8 +519,8 @@ public final class McpAccessPolicy {
         if (allowedGuilds.isEmpty()) {
             return normalizedDefaultGuildId;
         }
-        if (normalizedDefaultGuildId != null
-                && !normalizedDefaultGuildId.equals(defaultGuildId)) {
+        if (defaultGuildId != null && !defaultGuildId.isEmpty()
+                && !defaultGuildId.strip().equals(defaultGuildId)) {
             throw startupError("DISCORD_GUILD_ID must not contain surrounding whitespace");
         }
         if (normalizedDefaultGuildId != null) {

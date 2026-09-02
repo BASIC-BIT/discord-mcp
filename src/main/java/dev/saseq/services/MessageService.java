@@ -1082,7 +1082,7 @@ public class MessageService {
                             authorName,
                             authorId,
                             timestamp));
-                    if (contentAvailable) {
+                    if (contentAvailable && !content.isEmpty()) {
                         sb.append("```").append(content).append("```");
                     } else {
                         sb.append("[no text content, or content unavailable]");

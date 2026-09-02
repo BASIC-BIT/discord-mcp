@@ -211,12 +211,12 @@ that share one bot across multiple Discord servers can add narrow, application-e
   forum posts may be absent from the JDA cache and therefore fail closed under this policy. Tools
   with no guild-resolvable target are omitted with a startup diagnostic. This includes
   direct-message tools, invite-by-ID tools, `delete_webhook`, and `send_webhook_message`.
-  Consequently a scoped deployment can list invites, but cannot look one up by code or revoke it
-  through this server. `create_invite`, `create_webhook`, and `list_webhooks` are omitted by default
-  because they can return durable access credentials. They can be explicitly allowlisted only when
-  the calling client is trusted to handle those credentials outside this guild-scoped MCP surface.
-  A scoped deployment still cannot revoke an invite or send through or delete a webhook through
-  this server; use Discord directly for those operations. If
+  Consequently a scoped deployment cannot inspect or revoke invites by default. `create_invite`,
+  `list_invites`, `create_webhook`, and `list_webhooks` are omitted by default because they can
+  return durable access credentials. They can be explicitly allowlisted only when the calling
+  client is trusted to handle those credentials outside this guild-scoped MCP surface. A scoped
+  deployment still cannot revoke an invite or send through or delete a webhook through this
+  server; use Discord directly for those operations. If
   `DISCORD_MCP_ALLOWED_TOOLS` explicitly requests an unresolvable tool, startup fails instead of
   silently weakening the guild boundary. The same hard failure applies if a later jar changes an
   explicitly allowlisted tool's target schema. Review the new schema before restarting the scoped
@@ -235,9 +235,10 @@ that share one bot across multiple Discord servers can add narrow, application-e
   than being treated as an unset allowlist.
 - `DISCORD_EXPECTED_BOT_ID`: refuses startup when a valid token authenticates a different bot.
 
-Guild-scoped schema review currently supports flat scalar tool arguments. A future object or array
-argument is omitted by default and hard-fails startup when its tool is explicitly allowlisted until
-that structured shape receives an explicit guild-boundary review.
+Guild-scoped schema review currently supports flat scalar tool arguments. A future structured,
+referenced, union, missing-type, or otherwise unknown property shape is omitted by default and
+hard-fails startup when its tool is explicitly allowlisted until that shape receives an explicit
+guild-boundary review.
 
 The allowlist syntax and default guild are validated before the bot connects to Discord. Exact tool
 names and target schemas are validated after the tool surface is built. Configuration and

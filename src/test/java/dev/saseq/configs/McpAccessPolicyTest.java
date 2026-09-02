@@ -248,13 +248,17 @@ class McpAccessPolicyTest {
     void inviteCreationRequiresExplicitOptInWhenGuildScoped() {
         ToolCallback createInvite = callback("create_invite", schema("guildId", "channelId"),
                 new AtomicReference<>());
+        ToolCallback listInvites = callback("list_invites", schema("guildId"),
+                new AtomicReference<>());
 
         assertThat(policy(mock(JDA.class), ALLOWED_GUILD, "", "")
-                .apply(ToolCallbackProvider.from(createInvite)).getToolCallbacks()).isEmpty();
-        assertThat(policy(mock(JDA.class), ALLOWED_GUILD, "create_invite", "")
-                .apply(ToolCallbackProvider.from(createInvite)).getToolCallbacks())
+                .apply(ToolCallbackProvider.from(createInvite, listInvites))
+                .getToolCallbacks()).isEmpty();
+        assertThat(policy(mock(JDA.class), ALLOWED_GUILD,
+                "create_invite,list_invites", "")
+                .apply(ToolCallbackProvider.from(createInvite, listInvites)).getToolCallbacks())
                 .extracting(callback -> callback.getToolDefinition().name())
-                .containsExactly("create_invite");
+                .containsExactly("create_invite", "list_invites");
     }
 
     @Test
@@ -436,7 +440,7 @@ class McpAccessPolicyTest {
                         "list_active_threads", "list_channel_permission_overwrites",
                         "list_channels", "list_channels_in_category", "list_emojis",
                         "list_forum_channels", "list_forum_posts", "list_forum_tags",
-                        "list_guild_scheduled_events", "list_invites", "list_roles",
+                        "list_guild_scheduled_events", "list_roles",
                         "modify_forum_post", "modify_voice_state", "move_channel",
                         "move_member", "read_messages", "remove_reaction", "remove_role",
                         "remove_timeout", "search_members", "send_file", "send_message",

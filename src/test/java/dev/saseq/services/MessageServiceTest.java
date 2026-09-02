@@ -145,6 +145,24 @@ class MessageServiceTest {
     }
 
     @Test
+    void readMessagesLabelsEmptyTextWhenContentIntentIsEnabled() {
+        TextChannel channel = mock(TextChannel.class);
+        MessageHistory history = mock(MessageHistory.class);
+        Message guildMessage = message(
+                "111111111111111111", "123456789012345678", "alice", "");
+        RestAction<List<Message>> retrievePast = restAction(List.of(guildMessage));
+
+        when(jda.getTextChannelById(CHANNEL_ID)).thenReturn(channel);
+        when(jda.getGatewayIntents()).thenReturn(EnumSet.of(GatewayIntent.MESSAGE_CONTENT));
+        when(channel.getHistory()).thenReturn(history);
+        when(history.retrievePast(1)).thenReturn(retrievePast);
+
+        assertThat(messageService.readMessages(CHANNEL_ID, "1", null, null, null))
+                .contains("[no text content, or content unavailable]")
+                .doesNotContain("``````");
+    }
+
+    @Test
     void getMessageReturnsAnExactMachineReadableSnapshot() {
         String paddedChannelId = "0" + CHANNEL_ID;
         TextChannel channel = mock(TextChannel.class);
