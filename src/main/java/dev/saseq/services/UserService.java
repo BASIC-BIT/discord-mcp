@@ -442,6 +442,9 @@ public class UserService {
                     String authorId = m.getAuthor().getId();
                     String timestamp = m.getTimeCreated().toString();
                     String content = m.getContentDisplay();
+                    if (content.isEmpty()) {
+                        content = "[no text content]";
+                    }
                     String msgId = m.getId();
 
                     StringBuilder sb = new StringBuilder();

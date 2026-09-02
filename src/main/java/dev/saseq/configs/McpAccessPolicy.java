@@ -41,6 +41,8 @@ public final class McpAccessPolicy {
     // limiting layer for that documented tool contract; transport and delegate limits are separate.
     static final int MAX_ARGUMENT_STRING_CHARACTERS = 70_000_000;
     static final long MAX_ARGUMENT_DOCUMENT_CHARACTERS = 70_100_000L;
+    static final int MAX_ORDINARY_ARGUMENT_STRING_CHARACTERS = 16_384;
+    static final long MAX_ORDINARY_ARGUMENT_DOCUMENT_CHARACTERS = 1_000_000L;
     private static final String TARGET_ACCESS_DENIED =
             "Discord target is not in the bot's channel cache (archived threads and forum posts "
                     + "may be absent) or is outside the allowed guild scope";
@@ -48,6 +50,8 @@ public final class McpAccessPolicy {
             "create_invite", "list_invites", "create_webhook", "list_webhooks");
     private static final Set<String> SCALAR_SCHEMA_TYPES = Set.of(
             "string", "number", "integer", "boolean");
+    private static final Set<String> LARGE_ARGUMENT_TOOLS = Set.of(
+            "create_emoji", "send_file", "set_guild_scheduled_event_image");
     private static final Set<String> REVIEWED_CHANNEL_ID_ARGUMENTS = Set.of(
             "add_reaction.channelId",
             "create_forum_channel.categoryId",
@@ -212,6 +216,7 @@ public final class McpAccessPolicy {
     private final JDA jda;
     private final ObjectMapper objectMapper;
     private final ObjectMapper argumentObjectMapper;
+    private final ObjectMapper ordinaryArgumentObjectMapper;
     private final Set<String> allowedGuilds;
     private final Set<String> allowedTools;
     private final String defaultGuildId;
@@ -225,6 +230,7 @@ public final class McpAccessPolicy {
         this.jda = jda;
         this.objectMapper = objectMapper;
         this.argumentObjectMapper = createArgumentObjectMapper(objectMapper);
+        this.ordinaryArgumentObjectMapper = createOrdinaryArgumentObjectMapper(objectMapper);
         this.allowedGuilds = parseGuildCsv(allowedGuilds);
         this.allowedTools = parseCsv(allowedTools, "DISCORD_MCP_ALLOWED_TOOLS");
         this.defaultGuildId = validateDefaultGuild(this.allowedGuilds, defaultGuildId);
@@ -238,11 +244,23 @@ public final class McpAccessPolicy {
     }
 
     static ObjectMapper createArgumentObjectMapper(ObjectMapper objectMapper) {
+        return createArgumentObjectMapper(objectMapper, MAX_ARGUMENT_STRING_CHARACTERS,
+                MAX_ARGUMENT_DOCUMENT_CHARACTERS);
+    }
+
+    static ObjectMapper createOrdinaryArgumentObjectMapper(ObjectMapper objectMapper) {
+        return createArgumentObjectMapper(objectMapper, MAX_ORDINARY_ARGUMENT_STRING_CHARACTERS,
+                MAX_ORDINARY_ARGUMENT_DOCUMENT_CHARACTERS);
+    }
+
+    private static ObjectMapper createArgumentObjectMapper(ObjectMapper objectMapper,
+                                                            int maxStringLength,
+                                                            long maxDocumentLength) {
         var argumentFactory = objectMapper.tokenStreamFactory().rebuild()
                 .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
                 .streamReadConstraints(StreamReadConstraints.builder()
-                        .maxStringLength(MAX_ARGUMENT_STRING_CHARACTERS)
-                        .maxDocumentLength(MAX_ARGUMENT_DOCUMENT_CHARACTERS)
+                        .maxStringLength(maxStringLength)
+                        .maxDocumentLength(maxDocumentLength)
                         .build())
                 .build();
         return new ObjectMapper(argumentFactory);
@@ -359,6 +377,7 @@ public final class McpAccessPolicy {
         private final ToolCallback delegate;
         private final Set<String> declaredArguments;
         private final Set<String> policyArguments;
+        private final ObjectMapper policyArgumentObjectMapper;
 
         private GuildScopedToolCallback(ToolCallback delegate, Set<String> declaredArguments) {
             this.delegate = delegate;
@@ -371,6 +390,9 @@ public final class McpAccessPolicy {
                 selected.add("maxUses");
             }
             this.policyArguments = Set.copyOf(selected);
+            this.policyArgumentObjectMapper = LARGE_ARGUMENT_TOOLS.contains(
+                    delegate.getToolDefinition().name())
+                    ? argumentObjectMapper : ordinaryArgumentObjectMapper;
         }
 
         @Override
@@ -396,7 +418,8 @@ public final class McpAccessPolicy {
         }
 
         private void enforceGuildScope(String arguments) {
-            Map<String, TargetArgument> parsed = parsePolicyArguments(arguments, policyArguments);
+            Map<String, TargetArgument> parsed = parsePolicyArguments(
+                    arguments, policyArguments, policyArgumentObjectMapper);
             Set<String> guildIds = resolveGuildIds(parsed, declaredArguments);
             if (guildIds.isEmpty()) {
                 throw new IllegalArgumentException("A Discord guild or channel target is required");
@@ -458,13 +481,22 @@ public final class McpAccessPolicy {
     }
 
     private Map<String, TargetArgument> parsePolicyArguments(
-            String arguments, Set<String> policyArguments) {
+            String arguments, Set<String> policyArguments, ObjectMapper parserObjectMapper) {
         if (arguments == null || arguments.isBlank() || "null".equals(arguments.strip())) {
             return Map.of();
         }
         try {
+            // Upload-capable tools keep the streaming path so their documented payloads are not
+            // copied into a tree. Ordinary tools have no large-string contract, so force a
+            // bounded validation pass before decoding any target value.
+            if (parserObjectMapper == ordinaryArgumentObjectMapper) {
+                JsonNode validated = parserObjectMapper.readTree(arguments);
+                if (validated == null || !validated.isObject()) {
+                    throw new IllegalArgumentException("Tool arguments must be a JSON object");
+                }
+            }
             Map<String, TargetArgument> parsed = new LinkedHashMap<>();
-            try (JsonParser parser = argumentObjectMapper.tokenStreamFactory()
+            try (JsonParser parser = parserObjectMapper.tokenStreamFactory()
                     .createParser(arguments)) {
                 if (parser.nextToken() != JsonToken.START_OBJECT) {
                     throw new IllegalArgumentException("Tool arguments must be a JSON object");

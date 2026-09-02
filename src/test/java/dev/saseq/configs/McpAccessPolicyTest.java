@@ -67,6 +67,34 @@ class McpAccessPolicyTest {
     }
 
     @Test
+    void ordinaryToolParserUsesATightStringLimit() {
+        ObjectMapper mapper = McpAccessPolicy.createOrdinaryArgumentObjectMapper(
+                new ObjectMapper());
+        assertThat(mapper.tokenStreamFactory().streamReadConstraints().getMaxStringLength())
+                .isEqualTo(McpAccessPolicy.MAX_ORDINARY_ARGUMENT_STRING_CHARACTERS);
+        assertThat(mapper.tokenStreamFactory().streamReadConstraints().getMaxDocumentLength())
+                .isEqualTo(McpAccessPolicy.MAX_ORDINARY_ARGUMENT_DOCUMENT_CHARACTERS);
+    }
+
+    @Test
+    void ordinaryToolRejectsAnOversizedTargetStringBeforeDelegation() {
+        JDA jda = mock(JDA.class);
+        stubChannel(jda, CHANNEL, ALLOWED_GUILD);
+        AtomicInteger calls = new AtomicInteger();
+        ToolCallback exposed = only(policy(jda, ALLOWED_GUILD, "send_message", "")
+                .apply(ToolCallbackProvider.from(countingCallback(
+                        "send_message", schema("channelId", "message"), calls))));
+
+        String arguments = "{\"channelId\":\""
+                + "1".repeat(McpAccessPolicy.MAX_ORDINARY_ARGUMENT_STRING_CHARACTERS + 1)
+                + "\",\"message\":\"hello\"}";
+        assertThatThrownBy(() -> exposed.call(arguments))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("maximum supported size");
+        assertThat(calls).hasValue(0);
+    }
+
+    @Test
     void guildScopeRejectsDuplicateTargetKeysBeforeDelegation() {
         JDA jda = mock(JDA.class);
         stubChannel(jda, CHANNEL, ALLOWED_GUILD);
