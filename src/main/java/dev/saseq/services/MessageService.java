@@ -403,10 +403,7 @@ public class MessageService {
 
     private boolean isMessageContentAvailable(Message message) {
         return !message.getContentRaw().isEmpty()
-                || jda.getGatewayIntents().contains(GatewayIntent.MESSAGE_CONTENT)
-                || message.getAuthor().getId().equals(jda.getSelfUser().getId())
-                || message.getMentions().isMentioned(
-                        jda.getSelfUser(), Message.MentionType.USER);
+                || jda.getGatewayIntents().contains(GatewayIntent.MESSAGE_CONTENT);
     }
 
     private record MessageSnapshot(String guildId, String channelId, String messageId,
@@ -454,7 +451,7 @@ public class MessageService {
      * @param around    Optional message ID to fetch messages around this message.
      * @return A formatted string containing the retrieved messages.
      */
-    @Tool(name = "read_messages", description = "Read message history from a specific channel, optionally paginated with before/after/around; unavailable message content is labeled rather than shown as blank")
+    @Tool(name = "read_messages", description = "Read message history from a specific channel, optionally paginated with before/after/around; absent or unavailable text is labeled rather than shown as blank")
     public String readMessages(@ToolParam(description = "Discord channel ID") String channelId,
                                @ToolParam(description = "Number of messages to retrieve (1-100)", required = false) String count,
                                @ToolParam(description = "Message ID to fetch messages before this message", required = false) String before,
@@ -1088,7 +1085,7 @@ public class MessageService {
                     if (contentAvailable) {
                         sb.append("```").append(content).append("```");
                     } else {
-                        sb.append("[message content unavailable]");
+                        sb.append("[no text content, or content unavailable]");
                     }
 
                     List<Message.Attachment> attachments = m.getAttachments();

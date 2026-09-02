@@ -349,6 +349,19 @@ class McpAccessPolicyTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("unreviewed Discord ID targets")
                 .hasMessageContaining("destinationIds");
+
+        assertThatThrownBy(() -> policy.apply(ToolCallbackProvider.from(
+                callback("future_target_tool", schema("guildId", "id", "parent_id"),
+                        new AtomicReference<>()))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("unreviewed Discord ID targets")
+                .hasMessageContaining("id")
+                .hasMessageContaining("parent_id");
+
+        assertThat(policy(mock(JDA.class), ALLOWED_GUILD,
+                "future_status_tool", ALLOWED_GUILD).apply(ToolCallbackProvider.from(
+                callback("future_status_tool", schema("guildId", "valid"),
+                        new AtomicReference<>()))).getToolCallbacks()).hasSize(1);
     }
 
     @Test

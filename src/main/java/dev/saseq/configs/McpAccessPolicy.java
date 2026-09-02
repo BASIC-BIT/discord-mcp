@@ -360,12 +360,20 @@ public final class McpAccessPolicy {
 
     private static Set<String> unreviewedIdArguments(String toolName, Set<String> declared) {
         return declared.stream()
-                .filter(field -> field.endsWith("Id") || field.endsWith("Ids"))
+                .filter(McpAccessPolicy::isIdShapedArgument)
                 .filter(field -> !"guildId".equals(field))
                 .filter(field -> !isGuildChannelArgument(field))
                 .filter(field -> !REVIEWED_NON_CHANNEL_ID_ARGUMENTS.contains(
                         toolName + "." + field))
                 .collect(Collectors.toCollection(LinkedHashSet::new));
+    }
+
+    private static boolean isIdShapedArgument(String field) {
+        String lowercase = field.toLowerCase(Locale.ROOT);
+        return lowercase.equals("id") || lowercase.equals("ids")
+                || lowercase.endsWith("_id") || lowercase.endsWith("_ids")
+                || field.endsWith("Id") || field.endsWith("Ids")
+                || field.endsWith("ID") || field.endsWith("IDs");
     }
 
     private static String requireSnowflakeText(TargetArgument value, String name) {
