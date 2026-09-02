@@ -1,5 +1,7 @@
 package dev.saseq.services;
 
+import dev.saseq.DiscordSnowflake;
+
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.Member;
@@ -389,7 +391,7 @@ public class UserService {
     }
 
     private boolean isDiscordSnowflake(String value) {
-        return value.matches("\\d{17,20}");
+        return DiscordSnowflake.isValid(value);
     }
 
     private boolean memberMatches(Member member, String query) {

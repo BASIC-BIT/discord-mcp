@@ -214,10 +214,18 @@ that share one bot across multiple Discord servers can add narrow, application-e
   surface. If
   `DISCORD_MCP_ALLOWED_TOOLS` explicitly requests an unresolvable tool, startup fails instead of
   silently weakening the guild boundary. Under guild scoping, Discord IDs must be JSON strings so
-  17-20 digit snowflakes cannot be rounded by numeric JSON parsers.
+  17-20 digit snowflakes cannot be rounded by numeric JSON parsers. The policy reads only target
+  fields from the argument stream, so a large upload is not copied into a second JSON tree merely
+  to establish its guild. New singular `*Id` tool arguments must be explicitly classified for
+  that exact tool before a guild-scoped deployment will export it.
 - `DISCORD_MCP_ALLOWED_TOOLS`: comma-separated exact tool names. Unknown names fail startup and
-  tools not named here are not exported to MCP clients.
+  tools not named here are not exported to MCP clients. A whitespace-only value is invalid rather
+  than being treated as an unset allowlist.
 - `DISCORD_EXPECTED_BOT_ID`: refuses startup when a valid token authenticates a different bot.
+
+The allowlists and default guild are validated before the bot connects to Discord. Configuration
+and connection failures are also written to stderr so stdio MCP clients can show an actionable
+startup error without contaminating the JSON-RPC stream on stdout.
 
 The bot configuration always enables privileged `GUILD_MEMBERS` because member lookup depends on
 it. Exact message content is opt-in for upgrade compatibility: set

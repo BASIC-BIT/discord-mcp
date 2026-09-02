@@ -1,5 +1,6 @@
 package dev.saseq.configs;
 
+import dev.saseq.DiscordSnowflake;
 import dev.saseq.services.DiscordService;
 import dev.saseq.services.MessageService;
 import dev.saseq.services.UserService;
@@ -24,6 +25,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.util.EnumSet;
 import java.util.Set;
 
 @Configuration
@@ -69,8 +71,12 @@ public class DiscordMcpConfig {
     public JDA jda(@Value("${DISCORD_TOKEN:}") String token,
                    @Value("${DISCORD_EXPECTED_BOT_ID:}") String expectedBotId,
                    @Value("${DISCORD_MCP_ENABLE_MESSAGE_CONTENT:false}")
-                   boolean enableMessageContent)
+                   boolean enableMessageContent,
+                   @Value("${DISCORD_MCP_ALLOWED_GUILDS:}") String allowedGuilds,
+                   @Value("${DISCORD_MCP_ALLOWED_TOOLS:}") String allowedTools,
+                   @Value("${DISCORD_GUILD_ID:}") String defaultGuildId)
             throws InterruptedException {
+        McpAccessPolicy.validateConfiguration(allowedGuilds, allowedTools, defaultGuildId);
         if (token == null || token.isEmpty()) {
             System.err.println("ERROR: The environment variable DISCORD_TOKEN is not set. Please set it to run the application properly.");
             System.exit(1);
@@ -141,8 +147,7 @@ public class DiscordMcpConfig {
             return null;
         }
         String normalized = expectedBotId.trim();
-        if (!normalized.matches("\\d{17,20}")
-                || normalized.chars().allMatch(character -> character == '0')) {
+        if (!DiscordSnowflake.isValid(normalized)) {
             throw new IllegalArgumentException(
                     "DISCORD_EXPECTED_BOT_ID must be a nonzero 17-20 digit Discord snowflake");
         }
@@ -150,10 +155,10 @@ public class DiscordMcpConfig {
     }
 
     static Set<GatewayIntent> requiredGatewayIntents(boolean enableMessageContent) {
-        Set<GatewayIntent> intents = new java.util.HashSet<>(Set.of(
+        Set<GatewayIntent> intents = EnumSet.of(
                 GatewayIntent.GUILD_MEMBERS,
                 GatewayIntent.GUILD_VOICE_STATES,
-                GatewayIntent.SCHEDULED_EVENTS));
+                GatewayIntent.SCHEDULED_EVENTS);
         if (enableMessageContent) {
             intents.add(GatewayIntent.MESSAGE_CONTENT);
         }

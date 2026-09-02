@@ -19,6 +19,7 @@ import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.channel.middleman.GuildChannel;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.ai.tool.definition.ToolDefinition;
@@ -26,6 +27,7 @@ import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import tools.jackson.databind.ObjectMapper;
 
 import java.util.Arrays;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
@@ -122,6 +124,23 @@ class McpAccessPolicyTest {
     }
 
     @Test
+    void toolContextOverloadEnforcesScopeBeforeDelegation() {
+        JDA jda = mock(JDA.class);
+        stubChannel(jda, OTHER_CHANNEL, DENIED_GUILD);
+        AtomicInteger calls = new AtomicInteger();
+        ToolCallback exposed = only(policy(jda, ALLOWED_GUILD, "send_message", "")
+                .apply(ToolCallbackProvider.from(countingCallback(
+                        "send_message", schema("channelId", "message"), calls))));
+
+        assertThatThrownBy(() -> exposed.call(
+                "{\"channelId\":\"" + OTHER_CHANNEL + "\",\"message\":\"hello\"}",
+                new ToolContext(Map.of())))
+                .isInstanceOf(SecurityException.class)
+                .hasMessageContaining("outside the allowed guild scope");
+        assertThat(calls).hasValue(0);
+    }
+
+    @Test
     void everySuppliedDeclaredTargetMustStayInsideTheAllowlist() {
         JDA jda = mock(JDA.class);
         stubChannel(jda, CHANNEL, ALLOWED_GUILD);
@@ -206,6 +225,12 @@ class McpAccessPolicyTest {
         assertThatThrownBy(() -> policy(mock(JDA.class), "00000000000000000", "", ""))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("17-20 digit");
+        assertThatThrownBy(() -> policy(mock(JDA.class), "99999999999999999999", "", ""))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("17-20 digit");
+        assertThatThrownBy(() -> policy(mock(JDA.class), "", "   ", ""))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("empty entry");
         assertThatThrownBy(() -> policy(mock(JDA.class), ALLOWED_GUILD, "", DENIED_GUILD))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("must be in DISCORD_MCP_ALLOWED_GUILDS");
@@ -232,6 +257,26 @@ class McpAccessPolicyTest {
 
         assertThat(exposed.call("{\"destinationForumPostId\":\"" + CHANNEL + "\"}"))
                 .isEqualTo("called");
+    }
+
+    @Test
+    void futureUnclassifiedIdArgumentsFailStartupReviewClosed() {
+        McpAccessPolicy policy = policy(mock(JDA.class), ALLOWED_GUILD,
+                "future_target_tool", ALLOWED_GUILD);
+
+        assertThatThrownBy(() -> policy.apply(ToolCallbackProvider.from(
+                callback("future_target_tool", schema("guildId", "parentId"),
+                        new AtomicReference<>()))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("unreviewed Discord ID targets")
+                .hasMessageContaining("parentId");
+
+        assertThatThrownBy(() -> policy.apply(ToolCallbackProvider.from(
+                callback("future_target_tool", schema("guildId", "targetId"),
+                        new AtomicReference<>()))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("unreviewed Discord ID targets")
+                .hasMessageContaining("targetId");
     }
 
     @Test

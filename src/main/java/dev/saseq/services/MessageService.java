@@ -384,7 +384,8 @@ public class MessageService {
         }
         boolean contentAvailable = jda.getGatewayIntents().contains(GatewayIntent.MESSAGE_CONTENT)
                 || message.getAuthor().getId().equals(jda.getSelfUser().getId())
-                || message.getMentions().isMentioned(jda.getSelfUser());
+                || message.getMentions().isMentioned(
+                        jda.getSelfUser(), Message.MentionType.USER);
         return JSON.writeValueAsString(new MessageSnapshot(
                 guildChannel.getGuild().getId(),
                 channelId,

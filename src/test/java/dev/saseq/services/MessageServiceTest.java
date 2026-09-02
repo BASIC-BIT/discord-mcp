@@ -134,7 +134,7 @@ class MessageServiceTest {
     }
 
     @Test
-    void getMessageMarksContentUnavailableWithoutIntentForAnotherAuthor() {
+    void getMessageDoesNotTreatEveryoneAsAUserMentionWithoutContentIntent() {
         TextChannel channel = mock(TextChannel.class);
         Guild guild = mock(Guild.class);
         Message message = mock(Message.class);
@@ -159,6 +159,8 @@ class MessageServiceTest {
         when(jda.getGatewayIntents()).thenReturn(EnumSet.noneOf(GatewayIntent.class));
         when(jda.getSelfUser()).thenReturn(self);
         when(self.getId()).thenReturn("999999999999999999");
+        when(mentions.isMentioned(self)).thenReturn(true);
+        when(mentions.isMentioned(self, Message.MentionType.USER)).thenReturn(false);
 
         assertThat(messageService.getMessage(CHANNEL_ID, MESSAGE_ID))
                 .contains("\"content\":null,\"contentAvailable\":false");
@@ -190,7 +192,7 @@ class MessageServiceTest {
         when(jda.getGatewayIntents()).thenReturn(EnumSet.noneOf(GatewayIntent.class));
         when(jda.getSelfUser()).thenReturn(self);
         when(self.getId()).thenReturn("999999999999999999");
-        when(mentions.isMentioned(self)).thenReturn(true);
+        when(mentions.isMentioned(self, Message.MentionType.USER)).thenReturn(true);
 
         assertThat(messageService.getMessage(CHANNEL_ID, MESSAGE_ID))
                 .contains("\"contentAvailable\":true");

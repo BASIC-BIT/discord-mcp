@@ -1,5 +1,6 @@
 package dev.saseq.configs;
 
+import dev.saseq.DiscordSnowflake;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.channel.middleman.GuildChannel;
 import org.springframework.ai.chat.model.ToolContext;
@@ -9,14 +10,19 @@ import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.ai.tool.metadata.ToolMetadata;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import tools.jackson.core.JsonParser;
+import tools.jackson.core.JsonToken;
 import tools.jackson.core.StreamReadConstraints;
 import tools.jackson.core.StreamReadFeature;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -36,6 +42,43 @@ public final class McpAccessPolicy {
     static final long MAX_ARGUMENT_DOCUMENT_CHARACTERS = 70_100_000L;
     private static final String TARGET_ACCESS_DENIED =
             "Discord target is unavailable or outside the allowed guild scope";
+    private static final Set<String> REVIEWED_NON_CHANNEL_ID_ARGUMENTS = Set.of(
+            "add_reaction.messageId",
+            "assign_role.roleId", "assign_role.userId",
+            "ban_member.userId",
+            "delete_channel_permission_overwrite.targetId",
+            "delete_emoji.emojiId",
+            "delete_guild_scheduled_event.eventId",
+            "delete_message.messageId",
+            "delete_private_message.messageId", "delete_private_message.userId",
+            "delete_role.roleId",
+            "delete_webhook.webhookId",
+            "disconnect_member.userId",
+            "download_attachment.attachmentId", "download_attachment.messageId",
+            "edit_emoji.emojiId",
+            "edit_guild_scheduled_event.eventId",
+            "edit_message.messageId",
+            "edit_private_message.messageId", "edit_private_message.userId",
+            "edit_role.roleId",
+            "get_attachment.attachmentId", "get_attachment.messageId",
+            "get_emoji_details.emojiId",
+            "get_guild_scheduled_event_users.eventId",
+            "get_member_by_id.userId",
+            "get_message.messageId",
+            "kick_member.userId",
+            "modify_voice_state.userId",
+            "move_member.userId",
+            "read_private_messages.userId",
+            "remove_reaction.messageId",
+            "remove_role.roleId", "remove_role.userId",
+            "remove_timeout.userId",
+            "send_private_message.userId",
+            "set_guild_scheduled_event_image.eventId",
+            "set_nickname.userId",
+            "timeout_member.userId",
+            "unban_member.userId",
+            "upsert_member_channel_permissions.userId",
+            "upsert_role_channel_permissions.roleId");
 
     private final JDA jda;
     private final ObjectMapper objectMapper;
@@ -56,26 +99,25 @@ public final class McpAccessPolicy {
         this.allowedGuilds = parseCsv(allowedGuilds, "DISCORD_MCP_ALLOWED_GUILDS");
         this.allowedTools = parseCsv(allowedTools, "DISCORD_MCP_ALLOWED_TOOLS");
         this.defaultGuildId = trimToNull(defaultGuildId);
+        validateParsedConfiguration(this.allowedGuilds, this.defaultGuildId);
+    }
 
-        this.allowedGuilds.forEach(id -> requireSnowflake(id, "DISCORD_MCP_ALLOWED_GUILDS"));
-        if (!this.allowedGuilds.isEmpty() && this.defaultGuildId != null) {
-            requireSnowflake(this.defaultGuildId, "DISCORD_GUILD_ID");
-            if (!this.allowedGuilds.contains(this.defaultGuildId)) {
-                throw startupError("DISCORD_GUILD_ID must be in DISCORD_MCP_ALLOWED_GUILDS");
-            }
-        }
+    static void validateConfiguration(String allowedGuilds, String allowedTools,
+                                      String defaultGuildId) {
+        Set<String> parsedGuilds = parseCsv(allowedGuilds, "DISCORD_MCP_ALLOWED_GUILDS");
+        parseCsv(allowedTools, "DISCORD_MCP_ALLOWED_TOOLS");
+        validateParsedConfiguration(parsedGuilds, trimToNull(defaultGuildId));
     }
 
     static ObjectMapper createArgumentObjectMapper(ObjectMapper objectMapper) {
         var argumentFactory = objectMapper.tokenStreamFactory().rebuild()
+                .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
                 .streamReadConstraints(StreamReadConstraints.builder()
                         .maxStringLength(MAX_ARGUMENT_STRING_CHARACTERS)
                         .maxDocumentLength(MAX_ARGUMENT_DOCUMENT_CHARACTERS)
                         .build())
                 .build();
-        return new ObjectMapper(argumentFactory).rebuild()
-                .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
-                .build();
+        return new ObjectMapper(argumentFactory);
     }
 
     ToolCallbackProvider apply(ToolCallbackProvider rawProvider) {
@@ -102,7 +144,7 @@ public final class McpAccessPolicy {
         Set<String> omitted = new LinkedHashSet<>();
         ToolCallback[] scoped = Arrays.stream(selected)
                 .map(callback -> scopeIfResolvable(callback, omitted))
-                .filter(callback -> callback != null)
+                .filter(Objects::nonNull)
                 .toArray(ToolCallback[]::new);
         if (!omitted.isEmpty()) {
             System.err.println("Discord guild scope omitted tools with no guild-resolvable target: "
@@ -113,6 +155,7 @@ public final class McpAccessPolicy {
 
     private ToolCallback scopeIfResolvable(ToolCallback delegate, Set<String> omitted) {
         Set<String> declared = schemaProperties(delegate.getToolDefinition());
+        requireReviewedIdArguments(delegate.getToolDefinition().name(), declared);
         boolean resolvable = declared.contains("guildId")
                 || declared.stream().anyMatch(McpAccessPolicy::isGuildChannelArgument);
         if (resolvable) {
@@ -159,7 +202,7 @@ public final class McpAccessPolicy {
         }
 
         private void enforceGuildScope(String arguments) {
-            JsonNode parsed = parseArguments(arguments);
+            Map<String, TargetArgument> parsed = parseTargetArguments(arguments, declaredArguments);
             Set<String> guildIds = resolveGuildIds(parsed, declaredArguments);
             if (guildIds.isEmpty() || !allowedGuilds.containsAll(guildIds)) {
                 throw new SecurityException(TARGET_ACCESS_DENIED);
@@ -167,12 +210,14 @@ public final class McpAccessPolicy {
         }
     }
 
-    private Set<String> resolveGuildIds(JsonNode arguments, Set<String> declaredArguments) {
+    private Set<String> resolveGuildIds(Map<String, TargetArgument> arguments,
+                                        Set<String> declaredArguments) {
         Set<String> guildIds = new LinkedHashSet<>();
         if (declaredArguments.contains("guildId")) {
-            JsonNode guildValue = arguments.get("guildId");
-            boolean absent = guildValue == null || guildValue.isNull()
-                    || (guildValue.isTextual() && guildValue.asText().isEmpty());
+            TargetArgument guildValue = arguments.get("guildId");
+            boolean absent = guildValue == null || guildValue.token() == JsonToken.VALUE_NULL
+                    || (guildValue.token() == JsonToken.VALUE_STRING
+                        && guildValue.text().isEmpty());
             if (!absent) {
                 guildIds.add(requireSnowflakeText(guildValue, "guildId"));
             } else if (defaultGuildId != null) {
@@ -184,13 +229,13 @@ public final class McpAccessPolicy {
             if (!isGuildChannelArgument(field)) {
                 continue;
             }
-            JsonNode value = arguments.get(field);
-            if (value == null || value.isNull()) {
+            TargetArgument value = arguments.get(field);
+            if (value == null || value.token() == JsonToken.VALUE_NULL) {
                 continue;
             }
             // Discord edit tools use an empty optional category ID to detach a channel.
             // It contributes no guild evidence; another declared target must still establish scope.
-            if (value.isTextual() && value.asText().isEmpty()) {
+            if (value.token() == JsonToken.VALUE_STRING && value.text().isEmpty()) {
                 continue;
             }
             String channelId = requireSnowflakeText(value, field);
@@ -211,14 +256,39 @@ public final class McpAccessPolicy {
         return guildIds;
     }
 
-    private JsonNode parseArguments(String arguments) {
+    private Map<String, TargetArgument> parseTargetArguments(
+            String arguments, Set<String> declaredArguments) {
         if (arguments == null || arguments.isBlank() || "null".equals(arguments.strip())) {
-            return objectMapper.createObjectNode();
+            return Map.of();
         }
         try {
-            JsonNode parsed = argumentObjectMapper.readTree(arguments);
-            if (parsed == null || !parsed.isObject()) {
-                throw new IllegalArgumentException("Tool arguments must be a JSON object");
+            Set<String> targetArguments = declaredArguments.stream()
+                    .filter(field -> "guildId".equals(field) || isGuildChannelArgument(field))
+                    .collect(Collectors.toSet());
+            Map<String, TargetArgument> parsed = new LinkedHashMap<>();
+            try (JsonParser parser = argumentObjectMapper.tokenStreamFactory()
+                    .createParser(arguments)) {
+                if (parser.nextToken() != JsonToken.START_OBJECT) {
+                    throw new IllegalArgumentException("Tool arguments must be a JSON object");
+                }
+                while (parser.nextToken() != JsonToken.END_OBJECT) {
+                    if (parser.currentToken() != JsonToken.PROPERTY_NAME) {
+                        throw new IllegalArgumentException("Tool arguments are not valid JSON");
+                    }
+                    String field = parser.currentName();
+                    JsonToken valueToken = parser.nextToken();
+                    if (valueToken == null) {
+                        throw new IllegalArgumentException("Tool arguments are not valid JSON");
+                    }
+                    if (targetArguments.contains(field)) {
+                        String text = valueToken == JsonToken.VALUE_STRING ? parser.getText() : null;
+                        parsed.put(field, new TargetArgument(valueToken, text));
+                    }
+                    parser.skipChildren();
+                }
+                if (parser.nextToken() != null) {
+                    throw new IllegalArgumentException("Tool arguments must contain one JSON object");
+                }
             }
             return parsed;
         } catch (IllegalArgumentException error) {
@@ -226,6 +296,9 @@ public final class McpAccessPolicy {
         } catch (RuntimeException error) {
             throw new IllegalArgumentException("Tool arguments are not valid JSON", error);
         }
+    }
+
+    private record TargetArgument(JsonToken token, String text) {
     }
 
     private Set<String> schemaProperties(ToolDefinition definition) {
@@ -257,16 +330,30 @@ public final class McpAccessPolicy {
                 || normalized.contains("thread") || normalized.contains("post"));
     }
 
-    private static String requireSnowflakeText(JsonNode value, String name) {
-        if (!value.isTextual() || !isSnowflake(value.asText())) {
+    private static void requireReviewedIdArguments(String toolName, Set<String> declared) {
+        Set<String> unreviewed = declared.stream()
+                .filter(field -> field.endsWith("Id"))
+                .filter(field -> !"guildId".equals(field))
+                .filter(field -> !isGuildChannelArgument(field))
+                .filter(field -> !REVIEWED_NON_CHANNEL_ID_ARGUMENTS.contains(
+                        toolName + "." + field))
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (!unreviewed.isEmpty()) {
+            throw startupError("Tool " + toolName + " declares unreviewed Discord ID targets: "
+                    + unreviewed);
+        }
+    }
+
+    private static String requireSnowflakeText(TargetArgument value, String name) {
+        if (value.token() != JsonToken.VALUE_STRING || !DiscordSnowflake.isValid(value.text())) {
             throw new IllegalArgumentException(name
                     + " must be a 17-20 digit Discord snowflake encoded as a JSON string");
         }
-        return value.asText();
+        return value.text();
     }
 
     private static Set<String> parseCsv(String raw, String name) {
-        if (raw == null || raw.isBlank()) {
+        if (raw == null || raw.isEmpty()) {
             return Set.of();
         }
         Set<String> values = Arrays.stream(raw.split(",", -1))
@@ -283,16 +370,20 @@ public final class McpAccessPolicy {
     }
 
     private static void requireSnowflake(String value, String name) {
-        if (!isSnowflake(value)) {
+        if (!DiscordSnowflake.isValid(value)) {
             throw startupError(name + " entries must be 17-20 digit Discord snowflakes");
         }
     }
 
-    private static boolean isSnowflake(String value) {
-        if (value == null || !value.matches("\\d{17,20}")) {
-            return false;
+    private static void validateParsedConfiguration(Set<String> allowedGuilds,
+                                                    String defaultGuildId) {
+        allowedGuilds.forEach(id -> requireSnowflake(id, "DISCORD_MCP_ALLOWED_GUILDS"));
+        if (!allowedGuilds.isEmpty() && defaultGuildId != null) {
+            requireSnowflake(defaultGuildId, "DISCORD_GUILD_ID");
+            if (!allowedGuilds.contains(defaultGuildId)) {
+                throw startupError("DISCORD_GUILD_ID must be in DISCORD_MCP_ALLOWED_GUILDS");
+            }
         }
-        return value.chars().anyMatch(character -> character != '0');
     }
 
     private static String normalizeAbsentArguments(String arguments) {
@@ -301,6 +392,7 @@ public final class McpAccessPolicy {
     }
 
     private static IllegalArgumentException startupError(String message) {
+        System.err.println("ERROR: " + message);
         return new IllegalArgumentException(message);
     }
 }

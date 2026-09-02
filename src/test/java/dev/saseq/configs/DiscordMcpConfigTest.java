@@ -24,6 +24,9 @@ class DiscordMcpConfigTest {
         assertThatThrownBy(() -> DiscordMcpConfig.normalizeExpectedBotId("00000000000000000"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("nonzero 17-20 digit");
+        assertThatThrownBy(() -> DiscordMcpConfig.normalizeExpectedBotId("99999999999999999999"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("nonzero 17-20 digit");
     }
 
     @Test
