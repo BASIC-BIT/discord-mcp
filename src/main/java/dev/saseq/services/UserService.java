@@ -442,20 +442,21 @@ public class UserService {
                     String authorId = m.getAuthor().getId();
                     String timestamp = m.getTimeCreated().toString();
                     String content = m.getContentDisplay();
-                    if (content.isEmpty()) {
-                        content = "[no text content]";
-                    }
                     String msgId = m.getId();
 
                     StringBuilder sb = new StringBuilder();
                     sb.append(String.format(
-                            "- (ID: %s) **[%s]** (Author ID: %s) `%s`: ```%s```",
+                            "- (ID: %s) **[%s]** (Author ID: %s) `%s`: ",
                             msgId,
                             authorName,
                             authorId,
-                            timestamp,
-                            content
+                            timestamp
                     ));
+                    if (content.isEmpty()) {
+                        sb.append("[no text content]");
+                    } else {
+                        sb.append("```").append(content).append("```");
+                    }
 
                     List<Message.Attachment> attachments = m.getAttachments();
                     if (!attachments.isEmpty()) {

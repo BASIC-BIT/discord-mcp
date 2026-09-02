@@ -17,6 +17,7 @@ import tools.jackson.core.StreamReadFeature;
 import tools.jackson.core.exc.StreamConstraintsException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -408,13 +409,13 @@ public final class McpAccessPolicy {
         @Override
         public String call(String arguments) {
             enforceGuildScope(arguments);
-            return delegate.call(normalizeAbsentArguments(arguments));
+            return delegate.call(normalizeDelegateArguments(arguments));
         }
 
         @Override
         public String call(String arguments, ToolContext toolContext) {
             enforceGuildScope(arguments);
-            return delegate.call(normalizeAbsentArguments(arguments), toolContext);
+            return delegate.call(normalizeDelegateArguments(arguments), toolContext);
         }
 
         private void enforceGuildScope(String arguments) {
@@ -430,6 +431,25 @@ public final class McpAccessPolicy {
             if ("create_invite".equals(delegate.getToolDefinition().name())) {
                 requirePositiveInviteBound(parsed.get("maxAge"), "maxAge");
                 requirePositiveInviteBound(parsed.get("maxUses"), "maxUses");
+            }
+        }
+
+        private String normalizeDelegateArguments(String arguments) {
+            String normalized = normalizeAbsentArguments(arguments);
+            if (!"create_invite".equals(delegate.getToolDefinition().name())) {
+                return normalized;
+            }
+            try {
+                ObjectNode root = (ObjectNode) ordinaryArgumentObjectMapper.readTree(normalized);
+                for (String name : Set.of("maxAge", "maxUses")) {
+                    JsonNode value = root.get(name);
+                    if (value != null && value.isIntegralNumber()) {
+                        root.put(name, value.asText());
+                    }
+                }
+                return ordinaryArgumentObjectMapper.writeValueAsString(root);
+            } catch (RuntimeException error) {
+                throw new IllegalArgumentException("Tool arguments are not valid JSON", error);
             }
         }
     }
@@ -517,7 +537,9 @@ public final class McpAccessPolicy {
                             throw new IllegalArgumentException(field
                                     + " must be at most 20 characters");
                         }
-                        String text = valueToken == JsonToken.VALUE_STRING ? parser.getText() : null;
+                        String text = valueToken == JsonToken.VALUE_STRING
+                                || valueToken == JsonToken.VALUE_NUMBER_INT
+                                ? parser.getText() : null;
                         parsed.put(field, new TargetArgument(valueToken, text));
                     }
                     parser.skipChildren();
@@ -541,7 +563,8 @@ public final class McpAccessPolicy {
     }
 
     private static void requirePositiveInviteBound(TargetArgument value, String name) {
-        if (value == null || value.token() != JsonToken.VALUE_STRING
+        if (value == null || (value.token() != JsonToken.VALUE_STRING
+                && value.token() != JsonToken.VALUE_NUMBER_INT)
                 || value.text() == null || value.text().isEmpty()) {
             throw new IllegalArgumentException(name
                     + " must be explicitly set to a positive integer for a guild-scoped invite");

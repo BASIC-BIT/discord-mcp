@@ -192,7 +192,8 @@ class UserServiceTest {
         String result = userService.readPrivateMessages(
                 "123456789012345678", "1", null, null, null);
 
-        assertThat(result).contains("```[no text content]```");
+        assertThat(result).contains(": [no text content]")
+                .doesNotContain("```[no text content]```");
     }
 
     @SuppressWarnings("unchecked")

@@ -323,6 +323,13 @@ class McpAccessPolicyTest {
                 + "\",\"maxAge\":\"86400\",\"maxUses\":\"10\"}";
         assertThat(exposed.call(bounded)).isEqualTo("called");
         assertThat(received).hasValue(bounded);
+
+        String numericBounds = "{\"guildId\":\"" + ALLOWED_GUILD
+                + "\",\"channelId\":\"" + CHANNEL
+                + "\",\"maxAge\":86400,\"maxUses\":10}";
+        assertThat(exposed.call(numericBounds)).isEqualTo("called");
+        assertThat(received.get()).contains("\"maxAge\":\"86400\"")
+                .contains("\"maxUses\":\"10\"");
     }
 
     @Test

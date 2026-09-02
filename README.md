@@ -216,7 +216,8 @@ that share one bot across multiple Discord servers can add narrow, application-e
   return durable access credentials. They can be explicitly allowlisted only when the calling
   client is trusted to handle those credentials outside this guild-scoped MCP surface. When
   `create_invite` is explicitly exported, every call must supply positive `maxAge` and `maxUses`
-  values; the policy rejects Discord's never-expiring and unlimited defaults before delegation. A scoped
+  values; the policy rejects a never-expiring age and Discord's unlimited-use default before
+  delegation. A scoped
   deployment still cannot revoke an invite or send through or delete a webhook through this
   server; use Discord directly for those operations. Treat allowing a create tool as a deliberate
   create-without-revoke decision. A trusted calling client should still require human
@@ -508,7 +509,9 @@ Recommended (HTTP singleton mode):
 }
 ```
 
-Legacy mode (stdio, starts a new process/container per client session):
+Legacy mode (stdio, starts a new process/container per client session). Replace the optional
+guild placeholder with a real ID, or remove that `-e` pair entirely; the value is inline because
+MCP clients do not all forward the invoking shell's environment:
 ```json
 {
   "mcpServers": {
@@ -521,7 +524,7 @@ Legacy mode (stdio, starts a new process/container per client session):
         "-e",
         "DISCORD_TOKEN=<YOUR_DISCORD_BOT_TOKEN>",
         "-e",
-        "DISCORD_GUILD_ID",
+        "DISCORD_GUILD_ID=<OPTIONAL_DEFAULT_SERVER_ID>",
         "saseq/discord-mcp:latest"
       ]
     }
@@ -541,7 +544,7 @@ claude mcp add discord-mcp --transport http http://localhost:8085/mcp
 
 Legacy mode (stdio, starts a new process/container per client session):
 ```bash
-claude mcp add discord-mcp -- docker run --rm -i -e DISCORD_TOKEN=<YOUR_DISCORD_BOT_TOKEN> -e DISCORD_GUILD_ID saseq/discord-mcp:latest
+claude mcp add discord-mcp -- docker run --rm -i -e DISCORD_TOKEN=<YOUR_DISCORD_BOT_TOKEN> -e DISCORD_GUILD_ID=<OPTIONAL_DEFAULT_SERVER_ID> saseq/discord-mcp:latest
 ```
 
 </details>
@@ -646,7 +649,7 @@ STDIO local config (Default, legacy):
         "-e",
         "DISCORD_TOKEN=<YOUR_DISCORD_BOT_TOKEN>",
         "-e",
-        "DISCORD_GUILD_ID",
+        "DISCORD_GUILD_ID=<OPTIONAL_DEFAULT_SERVER_ID>",
         "saseq/discord-mcp:latest"
       ]
     }
