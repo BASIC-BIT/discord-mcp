@@ -245,6 +245,19 @@ class McpAccessPolicyTest {
     }
 
     @Test
+    void inviteCreationRequiresExplicitOptInWhenGuildScoped() {
+        ToolCallback createInvite = callback("create_invite", schema("guildId", "channelId"),
+                new AtomicReference<>());
+
+        assertThat(policy(mock(JDA.class), ALLOWED_GUILD, "", "")
+                .apply(ToolCallbackProvider.from(createInvite)).getToolCallbacks()).isEmpty();
+        assertThat(policy(mock(JDA.class), ALLOWED_GUILD, "create_invite", "")
+                .apply(ToolCallbackProvider.from(createInvite)).getToolCallbacks())
+                .extracting(callback -> callback.getToolDefinition().name())
+                .containsExactly("create_invite");
+    }
+
+    @Test
     void guildScopeHidesUnresolvableToolsUnlessTheyWereExplicitlyRequested() {
         ToolCallback global = callback("send_private_message", schema("userId", "message"),
                 new AtomicReference<>());
@@ -282,8 +295,10 @@ class McpAccessPolicyTest {
         assertThatThrownBy(() -> policy(mock(JDA.class), ALLOWED_GUILD, "", DENIED_GUILD))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("must be in DISCORD_MCP_ALLOWED_GUILDS");
-        assertThat(policy(mock(JDA.class), ALLOWED_GUILD, "",
-                " " + ALLOWED_GUILD + " ")).isNotNull();
+        assertThatThrownBy(() -> policy(mock(JDA.class), ALLOWED_GUILD, "",
+                " " + ALLOWED_GUILD + " "))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("surrounding whitespace");
 
         ToolCallback exposed = only(policy(mock(JDA.class), ALLOWED_GUILD,
                 "list_channels", "").apply(ToolCallbackProvider.from(
@@ -316,16 +331,14 @@ class McpAccessPolicyTest {
     }
 
     @Test
-    void futureChannelShapedArgumentsReceiveGuildResolutionWithoutToolNameCatalogs() {
-        JDA jda = mock(JDA.class);
-        stubChannel(jda, CHANNEL, ALLOWED_GUILD);
-        ToolCallback exposed = only(policy(jda, ALLOWED_GUILD,
+    void futureChannelShapedArgumentsFailStartupReviewClosed() {
+        assertThatThrownBy(() -> policy(mock(JDA.class), ALLOWED_GUILD,
                 "future_forum_tool", "").apply(ToolCallbackProvider.from(
                 callback("future_forum_tool", schema("destinationForumPostId"),
-                        new AtomicReference<>()))));
-
-        assertThat(exposed.call("{\"destinationForumPostId\":\"" + CHANNEL + "\"}"))
-                .isEqualTo("called");
+                        new AtomicReference<>()))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("unreviewed Discord channel targets")
+                .hasMessageContaining("destinationForumPostId");
     }
 
     @Test
@@ -408,7 +421,7 @@ class McpAccessPolicyTest {
                 .containsExactly(
                         "add_reaction", "assign_role", "ban_member", "create_category",
                         "create_emoji", "create_forum_channel", "create_forum_post",
-                        "create_guild_scheduled_event", "create_invite", "create_role",
+                        "create_guild_scheduled_event", "create_role",
                         "create_stage_channel", "create_text_channel", "create_voice_channel",
                         "delete_category", "delete_channel",
                         "delete_channel_permission_overwrite", "delete_emoji",

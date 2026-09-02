@@ -44,7 +44,44 @@ public final class McpAccessPolicy {
     private static final String TARGET_ACCESS_DENIED =
             "Discord target is unavailable or outside the allowed guild scope";
     private static final Set<String> EXPLICIT_ONLY_WHEN_GUILD_SCOPED = Set.of(
-            "create_webhook", "list_webhooks");
+            "create_invite", "create_webhook", "list_webhooks");
+    private static final Set<String> REVIEWED_CHANNEL_ID_ARGUMENTS = Set.of(
+            "add_reaction.channelId",
+            "create_forum_channel.categoryId",
+            "create_forum_post.channelId",
+            "create_guild_scheduled_event.channelId",
+            "create_invite.channelId",
+            "create_stage_channel.categoryId",
+            "create_text_channel.categoryId",
+            "create_voice_channel.categoryId",
+            "create_webhook.channelId",
+            "delete_category.categoryId",
+            "delete_channel.channelId",
+            "delete_channel_permission_overwrite.channelId",
+            "delete_message.channelId",
+            "download_attachment.channelId",
+            "edit_category.categoryId",
+            "edit_forum_channel.categoryId", "edit_forum_channel.channelId",
+            "edit_message.channelId",
+            "edit_text_channel.categoryId", "edit_text_channel.channelId",
+            "edit_voice_channel.channelId",
+            "get_attachment.channelId",
+            "get_channel_info.channelId",
+            "get_forum_channel_info.channelId",
+            "get_message.channelId",
+            "list_channel_permission_overwrites.channelId",
+            "list_channels_in_category.categoryId",
+            "list_forum_posts.channelId",
+            "list_forum_tags.channelId",
+            "modify_forum_post.postId",
+            "move_channel.categoryId", "move_channel.channelId",
+            "move_member.channelId",
+            "read_messages.channelId",
+            "remove_reaction.channelId",
+            "send_file.channelId",
+            "send_message.channelId",
+            "upsert_member_channel_permissions.channelId",
+            "upsert_role_channel_permissions.channelId");
     // This list can only classify names that advertise ID semantics. Schema reviews must also
     // inspect aliases such as webhookUrl, inviteCode, before/after/around, and comma-separated roles,
     // plus near-miss names such as crosspostMessageId or threadStarterMessageId that contain a
@@ -169,7 +206,7 @@ public final class McpAccessPolicy {
         }
         if (EXPLICIT_ONLY_WHEN_GUILD_SCOPED.contains(toolName)) {
             System.err.println("Discord guild scope is explicitly exporting " + toolName
-                    + ", which can return a durable webhook credential");
+                    + ", which can return a durable access credential");
         }
         SchemaProperties schema = schemaProperties(delegate.getToolDefinition());
         Set<String> declared = schema.names();
@@ -180,6 +217,20 @@ public final class McpAccessPolicy {
             }
             System.err.println("Discord guild scope omitted tool " + toolName
                     + " because its structured arguments need review: " + schema.structured());
+            return null;
+        }
+        Set<String> unreviewedChannels = declared.stream()
+                .filter(McpAccessPolicy::isGuildChannelArgument)
+                .filter(field -> !REVIEWED_CHANNEL_ID_ARGUMENTS.contains(toolName + "." + field))
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (!unreviewedChannels.isEmpty()) {
+            if (allowedTools.contains(toolName)) {
+                throw startupError("Tool " + toolName
+                        + " declares unreviewed Discord channel targets: "
+                        + unreviewedChannels);
+            }
+            System.err.println("Discord guild scope omitted tool " + toolName
+                    + " because its channel arguments need review: " + unreviewedChannels);
             return null;
         }
         Set<String> unreviewed = unreviewedIdArguments(toolName, declared);
@@ -453,6 +504,10 @@ public final class McpAccessPolicy {
         String normalizedDefaultGuildId = trimToNull(defaultGuildId);
         if (allowedGuilds.isEmpty()) {
             return normalizedDefaultGuildId;
+        }
+        if (normalizedDefaultGuildId != null
+                && !normalizedDefaultGuildId.equals(defaultGuildId)) {
+            throw startupError("DISCORD_GUILD_ID must not contain surrounding whitespace");
         }
         if (normalizedDefaultGuildId != null) {
             requireSnowflake(normalizedDefaultGuildId, "DISCORD_GUILD_ID");

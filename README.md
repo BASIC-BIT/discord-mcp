@@ -212,15 +212,11 @@ that share one bot across multiple Discord servers can add narrow, application-e
   with no guild-resolvable target are omitted with a startup diagnostic. This includes
   direct-message tools, invite-by-ID tools, `delete_webhook`, and `send_webhook_message`.
   Consequently a scoped deployment can list invites, but cannot look one up by code or revoke it
-  through this server. It can create a webhook only when explicitly enabled but cannot later send
-  through or delete it through this server. Use Discord directly for those revocation operations.
-  `create_webhook` and `list_webhooks` are omitted by default too because both can return URLs
-  containing durable webhook tokens. They can be explicitly allowlisted only when the calling
-  client is trusted to handle those credentials outside this guild-scoped MCP surface. The URLs
-  contain tokens in every configuration; guild scoping is simply where this fork begins
-  withholding those tools by default. Invite creation and listing remain available because Discord
-  permission-checks them and invite grants can be configured to expire and remain revocable
-  through Discord. If
+  through this server. `create_invite`, `create_webhook`, and `list_webhooks` are omitted by default
+  because they can return durable access credentials. They can be explicitly allowlisted only when
+  the calling client is trusted to handle those credentials outside this guild-scoped MCP surface.
+  A scoped deployment still cannot revoke an invite or send through or delete a webhook through
+  this server; use Discord directly for those operations. If
   `DISCORD_MCP_ALLOWED_TOOLS` explicitly requests an unresolvable tool, startup fails instead of
   silently weakening the guild boundary. The same hard failure applies if a later jar changes an
   explicitly allowlisted tool's target schema. Review the new schema before restarting the scoped
