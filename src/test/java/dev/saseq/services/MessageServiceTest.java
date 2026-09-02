@@ -3,6 +3,7 @@ package dev.saseq.services;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.MessageHistory;
+import net.dv8tion.jda.api.entities.SelfUser;
 import net.dv8tion.jda.api.entities.User;
 import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
@@ -226,6 +227,55 @@ class MessageServiceTest {
 
         assertThat(messageService.getMessage(CHANNEL_ID, MESSAGE_ID))
                 .contains("\"content\":null,\"contentAvailable\":false");
+    }
+
+    @Test
+    void getMessageTreatsBotAuthoredEmptyContentAsExactWithoutIntent() {
+        TextChannel channel = mock(TextChannel.class);
+        Guild guild = mock(Guild.class);
+        Message message = mock(Message.class);
+        SelfUser bot = mock(SelfUser.class);
+        @SuppressWarnings("unchecked")
+        RestAction<Message> retrieve = mock(RestAction.class);
+
+        when(jda.getTextChannelById(CHANNEL_ID)).thenReturn(channel);
+        when(channel.getGuild()).thenReturn(guild);
+        when(channel.getId()).thenReturn(CHANNEL_ID);
+        when(guild.getId()).thenReturn("123456789012345678");
+        when(channel.retrieveMessageById(MESSAGE_ID)).thenReturn(retrieve);
+        when(retrieve.complete()).thenReturn(message);
+        when(message.getId()).thenReturn(MESSAGE_ID);
+        when(message.getAuthor()).thenReturn(bot);
+        when(bot.getId()).thenReturn("234567890123456789");
+        when(bot.getName()).thenReturn("BASIC bot");
+        when(jda.getSelfUser()).thenReturn(bot);
+        when(message.getContentRaw()).thenReturn("");
+        when(message.getJumpUrl()).thenReturn("https://discord.com/channels/123/456/789");
+        when(jda.getGatewayIntents()).thenReturn(EnumSet.noneOf(GatewayIntent.class));
+
+        assertThat(messageService.getMessage(CHANNEL_ID, MESSAGE_ID))
+                .contains("\"content\":\"\",\"contentAvailable\":true");
+    }
+
+    @Test
+    void readMessagesLabelsBotAuthoredEmptyContentAsExactWithoutIntent() {
+        TextChannel channel = mock(TextChannel.class);
+        MessageHistory history = mock(MessageHistory.class);
+        Message botMessage = message(
+                "111111111111111111", "234567890123456789", "BASIC bot", "");
+        SelfUser bot = mock(SelfUser.class);
+        when(bot.getId()).thenReturn("234567890123456789");
+        RestAction<List<Message>> retrievePast = restAction(List.of(botMessage));
+
+        when(jda.getTextChannelById(CHANNEL_ID)).thenReturn(channel);
+        when(jda.getSelfUser()).thenReturn(bot);
+        when(jda.getGatewayIntents()).thenReturn(EnumSet.noneOf(GatewayIntent.class));
+        when(channel.getHistory()).thenReturn(history);
+        when(history.retrievePast(1)).thenReturn(retrievePast);
+
+        assertThat(messageService.readMessages(CHANNEL_ID, "1", null, null, null))
+                .contains("[no text content]")
+                .doesNotContain("not available to this bot");
     }
 
     @Test

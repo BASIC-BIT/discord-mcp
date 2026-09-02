@@ -2,6 +2,7 @@ package dev.saseq.services;
 
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Message;
+import net.dv8tion.jda.api.entities.User;
 import net.dv8tion.jda.api.requests.GatewayIntent;
 import net.dv8tion.jda.api.entities.channel.concrete.NewsChannel;
 import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
@@ -402,8 +403,13 @@ public class MessageService {
     }
 
     private boolean isMessageContentAvailable(Message message) {
-        return !message.getContentRaw().isEmpty()
-                || jda.getGatewayIntents().contains(GatewayIntent.MESSAGE_CONTENT);
+        if (!message.getContentRaw().isEmpty()
+                || jda.getGatewayIntents().contains(GatewayIntent.MESSAGE_CONTENT)) {
+            return true;
+        }
+        User selfUser = jda.getSelfUser();
+        User author = message.getAuthor();
+        return selfUser != null && author != null && selfUser.getId().equals(author.getId());
     }
 
     private record MessageSnapshot(String guildId, String channelId, String messageId,
