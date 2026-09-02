@@ -211,15 +211,16 @@ that share one bot across multiple Discord servers can add narrow, application-e
   forum posts may be absent from the JDA cache and therefore fail closed under this policy. Tools
   with no guild-resolvable target are omitted with a startup diagnostic. This includes
   direct-message tools, invite-by-ID tools, `delete_webhook`, and `send_webhook_message`.
-  `create_webhook` and `list_webhooks` remain scoped by their channel target, but both can return
-  URLs containing durable webhook tokens. Exclude both from an allowlist unless the calling client
-  is trusted to handle those credentials outside this guild-scoped MCP surface. If
+  `create_webhook` and `list_webhooks` are omitted by default too because both can return URLs
+  containing durable webhook tokens. They can be explicitly allowlisted only when the calling
+  client is trusted to handle those credentials outside this guild-scoped MCP surface. If
   `DISCORD_MCP_ALLOWED_TOOLS` explicitly requests an unresolvable tool, startup fails instead of
   silently weakening the guild boundary. Under guild scoping, Discord IDs must be JSON strings so
   17-20 digit snowflakes cannot be rounded by numeric JSON parsers. The policy reads only target
   fields from the argument stream, so a large upload is not copied into a second JSON tree merely
-  to establish its guild. New `*Id`/`*Ids` tool arguments, plus known ID-valued aliases, must be
-  explicitly classified for that exact tool before a guild-scoped deployment will export it.
+  to establish its guild. New `*Id`/`*Ids` tool arguments must be explicitly classified for that
+  exact tool before a guild-scoped deployment will export it. Arguments with other names cannot be
+  inferred as IDs; reviewers must assess semantic aliases when changing a tool schema.
 - `DISCORD_MCP_ALLOWED_TOOLS`: comma-separated exact tool names. Unknown names fail startup and
   tools not named here are not exported to MCP clients. A whitespace-only value is invalid rather
   than being treated as an unset allowlist.
@@ -235,7 +236,9 @@ it. Exact message content is opt-in for upgrade compatibility: set
 `DISCORD_MCP_ENABLE_MESSAGE_CONTENT=true` and enable Message Content Intent in the Discord
 Developer Portal before using content-dependent tools such as `read_messages` or `get_message`.
 The `get_message` snapshot includes `contentAvailable`; `content` is `null` and cannot be used for
-exact comparison when that field is false.
+exact comparison when that field is false. Discord documents that Message Content controls data
+across its APIs, including HTTP responses, not only Gateway events; see the
+[Message Content Intent documentation](https://docs.discord.com/developers/events/gateway#message-content-intent).
 
 These are capability limits, not an approval workflow. Human confirmation, previews, per-server
 write policy, source-of-truth handling, and post-write readback belong in the calling client or a

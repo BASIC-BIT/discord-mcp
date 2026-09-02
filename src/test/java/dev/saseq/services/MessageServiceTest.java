@@ -120,6 +120,8 @@ class MessageServiceTest {
         when(message.getAuthor()).thenReturn(author);
         when(author.getId()).thenReturn("234567890123456789");
         when(author.getName()).thenReturn("alice");
+        when(message.getTimeCreated()).thenReturn(OffsetDateTime.parse("2026-09-02T14:00:00Z"));
+        when(message.getTimeEdited()).thenReturn(OffsetDateTime.parse("2026-09-02T14:01:00Z"));
         when(message.getContentRaw()).thenReturn("exact `copy`\nwith formatting");
         when(message.getJumpUrl()).thenReturn("https://discord.com/channels/123/456/789");
         when(jda.getGatewayIntents()).thenReturn(EnumSet.of(GatewayIntent.MESSAGE_CONTENT));
@@ -130,6 +132,8 @@ class MessageServiceTest {
                         + "\"messageId\":\"456789012345678901\","
                         + "\"authorId\":\"234567890123456789\","
                         + "\"authorName\":\"alice\","
+                        + "\"timestamp\":\"2026-09-02T14:00Z\","
+                        + "\"editedTimestamp\":\"2026-09-02T14:01Z\","
                         + "\"content\":\"exact `copy`\\nwith formatting\","
                         + "\"contentAvailable\":true,"
                         + "\"jumpUrl\":\"https://discord.com/channels/123/456/789\"}");

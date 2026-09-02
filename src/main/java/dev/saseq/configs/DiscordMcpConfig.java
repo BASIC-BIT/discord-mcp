@@ -70,13 +70,14 @@ public class DiscordMcpConfig {
     @Bean
     public JDA jda(@Value("${DISCORD_TOKEN:}") String token,
                    @Value("${DISCORD_EXPECTED_BOT_ID:}") String expectedBotId,
-                   @Value("${DISCORD_MCP_ENABLE_MESSAGE_CONTENT:false}")
-                   boolean enableMessageContent,
+                   @Value("${DISCORD_MCP_ENABLE_MESSAGE_CONTENT:}")
+                   String enableMessageContent,
                    @Value("${DISCORD_MCP_ALLOWED_GUILDS:}") String allowedGuilds,
                    @Value("${DISCORD_MCP_ALLOWED_TOOLS:}") String allowedTools,
                    @Value("${DISCORD_GUILD_ID:}") String defaultGuildId)
             throws InterruptedException {
         McpAccessPolicy.validateConfiguration(allowedGuilds, allowedTools, defaultGuildId);
+        boolean messageContentEnabled = parseMessageContentOptIn(enableMessageContent);
         if (token == null || token.isEmpty()) {
             System.err.println("ERROR: The environment variable DISCORD_TOKEN is not set. Please set it to run the application properly.");
             System.exit(1);
@@ -92,7 +93,7 @@ public class DiscordMcpConfig {
         JDA jda;
         try {
             jda = JDABuilder.createDefault(token)
-                    .enableIntents(requiredGatewayIntents(enableMessageContent))
+                    .enableIntents(requiredGatewayIntents(messageContentEnabled))
                     .build()
                     .awaitReady();
         } catch (RuntimeException e) {
@@ -163,5 +164,17 @@ public class DiscordMcpConfig {
             intents.add(GatewayIntent.MESSAGE_CONTENT);
         }
         return Set.copyOf(intents);
+    }
+
+    static boolean parseMessageContentOptIn(String value) {
+        if (value == null || value.isBlank() || "false".equalsIgnoreCase(value.trim())) {
+            return false;
+        }
+        if ("true".equalsIgnoreCase(value.trim())) {
+            return true;
+        }
+        String message = "DISCORD_MCP_ENABLE_MESSAGE_CONTENT must be true, false, or empty";
+        System.err.println("ERROR: " + message);
+        throw new IllegalArgumentException(message);
     }
 }

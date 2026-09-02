@@ -31,6 +31,14 @@ class DiscordMcpConfigTest {
 
     @Test
     void gatewayIntentsStayAtTheCapabilitiesTheServerUses() {
+        assertThat(DiscordMcpConfig.parseMessageContentOptIn(null)).isFalse();
+        assertThat(DiscordMcpConfig.parseMessageContentOptIn("   ")).isFalse();
+        assertThat(DiscordMcpConfig.parseMessageContentOptIn("FALSE")).isFalse();
+        assertThat(DiscordMcpConfig.parseMessageContentOptIn(" True ")).isTrue();
+        assertThatThrownBy(() -> DiscordMcpConfig.parseMessageContentOptIn("yes"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("true, false, or empty");
+
         assertThat(DiscordMcpConfig.requiredGatewayIntents(false)).containsExactlyInAnyOrder(
                 GatewayIntent.GUILD_MEMBERS,
                 GatewayIntent.GUILD_VOICE_STATES,

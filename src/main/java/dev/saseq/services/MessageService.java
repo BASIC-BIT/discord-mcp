@@ -24,6 +24,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.time.OffsetDateTime;
 import java.util.Base64;
 import java.util.List;
 
@@ -392,13 +393,20 @@ public class MessageService {
                 message.getId(),
                 message.getAuthor().getId(),
                 message.getAuthor().getName(),
+                timestampOf(message.getTimeCreated()),
+                timestampOf(message.getTimeEdited()),
                 contentAvailable ? message.getContentRaw() : null,
                 contentAvailable,
                 message.getJumpUrl()));
     }
 
+    private static String timestampOf(OffsetDateTime timestamp) {
+        return timestamp == null ? null : timestamp.toString();
+    }
+
     private record MessageSnapshot(String guildId, String channelId, String messageId,
-                                   String authorId, String authorName, String content,
+                                   String authorId, String authorName, String timestamp,
+                                   String editedTimestamp, String content,
                                    boolean contentAvailable, String jumpUrl) {
     }
 

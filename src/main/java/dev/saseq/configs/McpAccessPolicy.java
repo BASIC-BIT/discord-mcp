@@ -42,6 +42,8 @@ public final class McpAccessPolicy {
     static final long MAX_ARGUMENT_DOCUMENT_CHARACTERS = 70_100_000L;
     private static final String TARGET_ACCESS_DENIED =
             "Discord target is unavailable or outside the allowed guild scope";
+    private static final Set<String> EXPLICIT_ONLY_WHEN_GUILD_SCOPED = Set.of(
+            "create_webhook", "list_webhooks");
     private static final Set<String> REVIEWED_NON_CHANNEL_ID_ARGUMENTS = Set.of(
             "add_reaction.messageId",
             "assign_role.roleId", "assign_role.userId",
@@ -68,12 +70,8 @@ public final class McpAccessPolicy {
             "kick_member.userId",
             "modify_voice_state.userId",
             "move_member.userId",
-            "create_emoji.roles", "edit_emoji.roles",
             "create_forum_post.tagIds", "modify_forum_post.tagIds",
-            "read_messages.after", "read_messages.around", "read_messages.before",
             "read_private_messages.userId",
-            "read_private_messages.after", "read_private_messages.around",
-            "read_private_messages.before",
             "remove_reaction.messageId",
             "remove_role.roleId", "remove_role.userId",
             "remove_timeout.userId",
@@ -152,26 +150,32 @@ public final class McpAccessPolicy {
                 .filter(Objects::nonNull)
                 .toArray(ToolCallback[]::new);
         if (!omitted.isEmpty()) {
-            System.err.println("Discord guild scope omitted tools with no guild-resolvable target: "
+            System.err.println("Discord guild scope omitted tools by default: "
                     + omitted);
         }
         return ToolCallbackProvider.from(scoped);
     }
 
     private ToolCallback scopeIfResolvable(ToolCallback delegate, Set<String> omitted) {
+        String toolName = delegate.getToolDefinition().name();
+        if (EXPLICIT_ONLY_WHEN_GUILD_SCOPED.contains(toolName)
+                && !allowedTools.contains(toolName)) {
+            omitted.add(toolName);
+            return null;
+        }
         Set<String> declared = schemaProperties(delegate.getToolDefinition());
-        requireReviewedIdArguments(delegate.getToolDefinition().name(), declared);
+        requireReviewedIdArguments(toolName, declared);
         boolean resolvable = declared.contains("guildId")
                 || declared.stream().anyMatch(McpAccessPolicy::isGuildChannelArgument);
         if (resolvable) {
             return new GuildScopedToolCallback(delegate, declared);
         }
-        if (allowedTools.contains(delegate.getToolDefinition().name())) {
-            throw startupError("Tool " + delegate.getToolDefinition().name()
+        if (allowedTools.contains(toolName)) {
+            throw startupError("Tool " + toolName
                     + " has no guild-resolvable target and cannot be explicitly exported under "
                     + "DISCORD_MCP_ALLOWED_GUILDS");
         }
-        omitted.add(delegate.getToolDefinition().name());
+        omitted.add(toolName);
         return null;
     }
 
@@ -209,7 +213,10 @@ public final class McpAccessPolicy {
         private void enforceGuildScope(String arguments) {
             Map<String, TargetArgument> parsed = parseTargetArguments(arguments, declaredArguments);
             Set<String> guildIds = resolveGuildIds(parsed, declaredArguments);
-            if (guildIds.isEmpty() || !allowedGuilds.containsAll(guildIds)) {
+            if (guildIds.isEmpty()) {
+                throw new IllegalArgumentException("A Discord guild or channel target is required");
+            }
+            if (!allowedGuilds.containsAll(guildIds)) {
                 throw new SecurityException(TARGET_ACCESS_DENIED);
             }
         }
@@ -337,8 +344,7 @@ public final class McpAccessPolicy {
 
     private static void requireReviewedIdArguments(String toolName, Set<String> declared) {
         Set<String> unreviewed = declared.stream()
-                .filter(field -> field.endsWith("Id") || field.endsWith("Ids")
-                        || REVIEWED_NON_CHANNEL_ID_ARGUMENTS.contains(toolName + "." + field))
+                .filter(field -> field.endsWith("Id") || field.endsWith("Ids"))
                 .filter(field -> !"guildId".equals(field))
                 .filter(field -> !isGuildChannelArgument(field))
                 .filter(field -> !REVIEWED_NON_CHANNEL_ID_ARGUMENTS.contains(

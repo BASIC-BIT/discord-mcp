@@ -171,8 +171,8 @@ class McpAccessPolicyTest {
         assertThat(received).hasValue(detachArguments);
 
         assertThatThrownBy(() -> exposed.call("{\"categoryId\":\"\"}"))
-                .isInstanceOf(SecurityException.class)
-                .hasMessageContaining("outside the allowed guild scope");
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("target is required");
     }
 
     @Test
@@ -193,7 +193,26 @@ class McpAccessPolicyTest {
         ToolCallback channelTool = only(channelPolicy.apply(ToolCallbackProvider.from(
                 countingCallback("read_messages", schema("channelId"), calls))));
         assertThatThrownBy(() -> channelTool.call("{}"))
-                .isInstanceOf(SecurityException.class);
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("target is required");
+    }
+
+    @Test
+    void credentialReturningWebhookToolsRequireExplicitOptInWhenGuildScoped() {
+        ToolCallback createWebhook = callback("create_webhook", schema("channelId"),
+                new AtomicReference<>());
+        ToolCallback listWebhooks = callback("list_webhooks", schema("channelId"),
+                new AtomicReference<>());
+
+        ToolCallbackProvider defaultScoped = policy(mock(JDA.class), ALLOWED_GUILD, "", "")
+                .apply(ToolCallbackProvider.from(createWebhook, listWebhooks));
+        assertThat(defaultScoped.getToolCallbacks()).isEmpty();
+
+        ToolCallbackProvider explicitScoped = policy(mock(JDA.class), ALLOWED_GUILD,
+                "create_webhook", "").apply(ToolCallbackProvider.from(createWebhook));
+        assertThat(explicitScoped.getToolCallbacks())
+                .extracting(callback -> callback.getToolDefinition().name())
+                .containsExactly("create_webhook");
     }
 
     @Test
@@ -313,7 +332,7 @@ class McpAccessPolicyTest {
                         "create_emoji", "create_forum_channel", "create_forum_post",
                         "create_guild_scheduled_event", "create_invite", "create_role",
                         "create_stage_channel", "create_text_channel", "create_voice_channel",
-                        "create_webhook", "delete_category", "delete_channel",
+                        "delete_category", "delete_channel",
                         "delete_channel_permission_overwrite", "delete_emoji",
                         "delete_guild_scheduled_event", "delete_message", "delete_role",
                         "disconnect_member", "download_attachment", "edit_category", "edit_emoji",
@@ -327,7 +346,7 @@ class McpAccessPolicyTest {
                         "list_channels", "list_channels_in_category", "list_emojis",
                         "list_forum_channels", "list_forum_posts", "list_forum_tags",
                         "list_guild_scheduled_events", "list_invites", "list_roles",
-                        "list_webhooks", "modify_forum_post", "modify_voice_state", "move_channel",
+                        "modify_forum_post", "modify_voice_state", "move_channel",
                         "move_member", "read_messages", "remove_reaction", "remove_role",
                         "remove_timeout", "search_members", "send_file", "send_message",
                         "set_guild_scheduled_event_image", "set_nickname", "timeout_member",
