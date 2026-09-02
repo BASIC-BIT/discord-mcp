@@ -187,6 +187,7 @@ Run the JAR as a long-running server:
 
 ```bash
 DISCORD_TOKEN=<YOUR_DISCORD_BOT_TOKEN> \
+DISCORD_GUILD_ID="${DISCORD_GUILD_ID:-}" \
 SPRING_PROFILES_ACTIVE=http \
 java -jar /absolute/path/to/discord-mcp-1.0.0.jar
 ```
@@ -266,7 +267,10 @@ across its APIs, including HTTP responses, not only Gateway events; see the
 
 These are capability limits, not an approval workflow. Human confirmation, previews, per-server
 write policy, source-of-truth handling, and post-write readback belong in the calling client or a
-separate policy facade. Discord permissions remain the final platform boundary.
+separate policy facade. Discord permissions remain the final platform boundary. The bot token
+still carries every permission Discord grants it in every guild the bot has joined;
+`DISCORD_MCP_ALLOWED_GUILDS` is a defense-in-depth filter, so keeping the bot out of unrelated
+guilds remains the strongest isolation boundary.
 
 ```bash
 export DISCORD_MCP_ALLOWED_GUILDS=123456789012345678,234567890123456789
@@ -514,6 +518,8 @@ Legacy mode (stdio, starts a new process/container per client session):
         "-i",
         "-e",
         "DISCORD_TOKEN=<YOUR_DISCORD_BOT_TOKEN>",
+        "-e",
+        "DISCORD_GUILD_ID",
         "saseq/discord-mcp:latest"
       ]
     }
@@ -533,7 +539,7 @@ claude mcp add discord-mcp --transport http http://localhost:8085/mcp
 
 Legacy mode (stdio, starts a new process/container per client session):
 ```bash
-claude mcp add discord-mcp -- docker run --rm -i -e DISCORD_TOKEN=<YOUR_DISCORD_BOT_TOKEN> saseq/discord-mcp:latest
+claude mcp add discord-mcp -- docker run --rm -i -e DISCORD_TOKEN=<YOUR_DISCORD_BOT_TOKEN> -e DISCORD_GUILD_ID saseq/discord-mcp:latest
 ```
 
 </details>
@@ -637,6 +643,8 @@ STDIO local config (Default, legacy):
         "-i",
         "-e",
         "DISCORD_TOKEN=<YOUR_DISCORD_BOT_TOKEN>",
+        "-e",
+        "DISCORD_GUILD_ID",
         "saseq/discord-mcp:latest"
       ]
     }
@@ -685,8 +693,8 @@ mvn -Dtest=DiscordLiveIntegrationTest test
 #### Server Information
 - [`get_server_info`](): Get detailed discord server information
 - [`get_bot_info`](): Get the authenticated Discord bot identity for a server as structured JSON.
-  Under guild scoping it requires a supplied `guildId` or configured `DISCORD_GUILD_ID` so the
-  identity read retains a guild-resolvable policy anchor.
+  It always requires a supplied `guildId` or configured `DISCORD_GUILD_ID`; guild-scoped
+  deployments additionally require that anchor to be in `DISCORD_MCP_ALLOWED_GUILDS`.
 
 #### User Management
 - [`get_user_id_by_name`](): Get a Discord user's ID by username in a guild for ping usage `<@id>`
