@@ -1084,11 +1084,16 @@ public class MessageService {
                     String authorName = m.getAuthor().getName();
                     String authorId = m.getAuthor().getId();
                     String timestamp = m.getTimeCreated().toString();
+                    String rawContent = m.getContentRaw();
                     String displayContent = m.getContentDisplay();
                     // Use raw content for the availability decision so list and single-message
-                    // reads report the same contract. Display content remains the rendered output.
+                    // reads report the same contract. Prefer display content, but fall back to raw
+                    // rather than falsely labelling a raw-text message as empty.
                     boolean contentAvailable = isMessageContentAvailable(m);
-                    String content = contentAvailable ? displayContent : null;
+                    String content = contentAvailable
+                            ? (!displayContent.isEmpty() || rawContent.isEmpty()
+                                    ? displayContent : rawContent)
+                            : null;
                     String msgId = m.getId();
 
                     StringBuilder sb = new StringBuilder();

@@ -28,6 +28,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * Optional deployment guardrails for the generic Discord tool surface.
@@ -408,7 +409,7 @@ public final class McpAccessPolicy {
             return null;
         }
         if ("create_invite".equals(toolName)) {
-            Set<String> missingBounds = java.util.List.of("maxAge", "maxUses").stream()
+            Set<String> missingBounds = Stream.of("maxAge", "maxUses")
                     .filter(bound -> !declared.contains(bound))
                     .collect(Collectors.toCollection(LinkedHashSet::new));
             if (!missingBounds.isEmpty()) {

@@ -162,7 +162,7 @@ class MessageServiceTest {
         when(history.retrievePast(1)).thenReturn(retrievePast);
 
         assertThat(messageService.readMessages(CHANNEL_ID, "1", null, null, null))
-                .contains("[no text content]")
+                .contains("```raw token```")
                 .doesNotContain("content not available to this bot");
     }
 
@@ -251,6 +251,7 @@ class MessageServiceTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
     void getMessageKeepsNullContentAndFalseAvailabilityUnderNonDefaultInclusion() {
         ObjectMapper nonDefaultMapper = new ObjectMapper().rebuild()
                 .changeDefaultPropertyInclusion(ignored -> JsonInclude.Value.construct(

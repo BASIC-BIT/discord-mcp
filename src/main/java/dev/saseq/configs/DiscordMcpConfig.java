@@ -123,11 +123,7 @@ public class DiscordMcpConfig {
             reportJdaStartupFailure(e);
             throw e;
         }
-        if (!botIdMatches(normalizedExpectedBotId, jda.getSelfUser().getId())) {
-            jda.shutdownNow();
-            System.err.println("ERROR: DISCORD_EXPECTED_BOT_ID does not match the authenticated bot.");
-            throw new IllegalStateException("DISCORD_EXPECTED_BOT_ID mismatch");
-        }
+        verifyBotIdentity(jda, normalizedExpectedBotId, jda.getSelfUser().getId());
         return jda;
     }
 
@@ -167,6 +163,15 @@ public class DiscordMcpConfig {
 
     static boolean botIdMatches(String expectedBotId, String actualBotId) {
         return expectedBotId == null || actualBotId.equals(expectedBotId);
+    }
+
+    static void verifyBotIdentity(JDA jda, String expectedBotId, String actualBotId) {
+        if (botIdMatches(expectedBotId, actualBotId)) {
+            return;
+        }
+        jda.shutdownNow();
+        System.err.println("ERROR: DISCORD_EXPECTED_BOT_ID does not match the authenticated bot.");
+        throw new IllegalStateException("DISCORD_EXPECTED_BOT_ID mismatch");
     }
 
     static String normalizeExpectedBotId(String expectedBotId) {

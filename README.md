@@ -202,7 +202,7 @@ Default MCP endpoint URL (HTTP profile): `http://localhost:8085/mcp`
 ### Optional deployment access guardrails
 
 The server exposes its original tool surface when these variables are unset. For the common
-one-guild deployment, set all three:
+one-guild deployment, set a default guild and both allowlists:
 
 ```bash
 export DISCORD_GUILD_ID=123456789012345678

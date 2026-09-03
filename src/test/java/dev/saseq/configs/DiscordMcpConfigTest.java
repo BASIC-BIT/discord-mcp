@@ -29,6 +29,17 @@ class DiscordMcpConfigTest {
     }
 
     @Test
+    void botIdentityMismatchShutsDownTheReadyClient() {
+        JDA jda = mock(JDA.class);
+
+        assertThatThrownBy(() -> DiscordMcpConfig.verifyBotIdentity(
+                jda, "12345678901234567", "22345678901234567"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("mismatch");
+        verify(jda).shutdownNow();
+    }
+
+    @Test
     void lateAccessPolicyValidationUsesSpringBootsNormalFailurePath() {
         ToolCallbackProvider rawProvider = mock(ToolCallbackProvider.class);
         when(rawProvider.getToolCallbacks()).thenReturn(new org.springframework.ai.tool.ToolCallback[0]);
