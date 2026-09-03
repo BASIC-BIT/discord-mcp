@@ -151,6 +151,21 @@ class McpAccessPolicyTest {
     }
 
     @Test
+    void emojiPayloadRejectsMateriallyMoreThanTheDelegateContract() {
+        AtomicInteger calls = new AtomicInteger();
+        ToolCallback exposed = only(policy(mock(JDA.class), ALLOWED_GUILD, "create_emoji", "")
+                .apply(ToolCallbackProvider.from(countingCallback(
+                        "create_emoji", schema("guildId", "name", "image"), calls))));
+
+        String arguments = "{\"guildId\":\"" + ALLOWED_GUILD
+                + "\",\"name\":\"test\",\"image\":\"" + "x".repeat(600_000) + "\"}";
+        assertThatThrownBy(() -> exposed.call(arguments))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("maximum supported size");
+        assertThat(calls).hasValue(0);
+    }
+
+    @Test
     void largePayloadToolStillRejectsAnOversizedNonPayloadString() {
         JDA jda = mock(JDA.class);
         stubChannel(jda, CHANNEL, ALLOWED_GUILD);

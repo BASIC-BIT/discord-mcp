@@ -44,7 +44,9 @@ public final class McpAccessPolicy {
     // limiting layer for that documented tool contract; transport and delegate limits are separate.
     static final int MAX_ARGUMENT_STRING_CHARACTERS = 70_000_000;
     static final long MAX_ARGUMENT_DOCUMENT_CHARACTERS = 70_100_000L;
-    static final int MAX_EMOJI_PAYLOAD_CHARACTERS = 12_000_000;
+    // A 256 KiB emoji becomes at most 349,528 base64 characters. Leave room for a data-URL
+    // prefix and encoding variance without allowing multi-megabyte strings the delegate rejects.
+    static final int MAX_EMOJI_PAYLOAD_CHARACTERS = 512_000;
     static final int MAX_ORDINARY_ARGUMENT_STRING_CHARACTERS = 16_384;
     static final long MAX_ORDINARY_ARGUMENT_DOCUMENT_CHARACTERS = 1_000_000L;
     private static final String TARGET_ACCESS_DENIED =

@@ -111,10 +111,10 @@ public class DiscordMcpConfig {
         }
         JDA jda;
         try {
-            jda = JDABuilder.createDefault(token)
+            JDA built = JDABuilder.createDefault(token)
                     .enableIntents(requiredGatewayIntents(messageContentEnabled))
-                    .build()
-                    .awaitReady();
+                    .build();
+            jda = awaitReady(built);
         } catch (RuntimeException e) {
             // In the default stdio transport, logback writes only to a file so stdout stays a clean
             // MCP channel. That makes a startup failure here invisible to the MCP client, which just
@@ -129,6 +129,15 @@ public class DiscordMcpConfig {
             throw new IllegalStateException("DISCORD_EXPECTED_BOT_ID mismatch");
         }
         return jda;
+    }
+
+    static JDA awaitReady(JDA built) throws InterruptedException {
+        try {
+            return built.awaitReady();
+        } catch (RuntimeException | InterruptedException error) {
+            built.shutdownNow();
+            throw error;
+        }
     }
 
     private static void reportJdaStartupFailure(Throwable error) {

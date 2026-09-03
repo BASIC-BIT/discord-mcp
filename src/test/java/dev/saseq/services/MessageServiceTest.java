@@ -148,7 +148,7 @@ class MessageServiceTest {
     }
 
     @Test
-    void readMessagesDerivesAvailabilityFromTheRenderedContentSource() {
+    void readMessagesUsesRawContentToDetermineAvailability() {
         TextChannel channel = mock(TextChannel.class);
         MessageHistory history = mock(MessageHistory.class);
         Message guildMessage = message(
@@ -162,8 +162,8 @@ class MessageServiceTest {
         when(history.retrievePast(1)).thenReturn(retrievePast);
 
         assertThat(messageService.readMessages(CHANNEL_ID, "1", null, null, null))
-                .contains("[no text content, or content not available to this bot]")
-                .doesNotContain("[no text content]");
+                .contains("[no text content]")
+                .doesNotContain("content not available to this bot");
     }
 
     @Test

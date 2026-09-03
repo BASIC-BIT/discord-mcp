@@ -13,9 +13,21 @@ import java.nio.charset.StandardCharsets;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class DiscordMcpConfigTest {
+    @Test
+    void awaitReadyFailureShutsDownTheBuiltClient() throws InterruptedException {
+        JDA jda = mock(JDA.class);
+        RuntimeException failure = new IllegalStateException("login failed");
+        when(jda.awaitReady()).thenThrow(failure);
+
+        assertThatThrownBy(() -> DiscordMcpConfig.awaitReady(jda))
+                .isSameAs(failure);
+        verify(jda).shutdownNow();
+    }
+
     @Test
     void lateAccessPolicyValidationUsesSpringBootsNormalFailurePath() {
         ToolCallbackProvider rawProvider = mock(ToolCallbackProvider.class);

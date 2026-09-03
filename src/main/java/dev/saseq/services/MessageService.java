@@ -1084,11 +1084,10 @@ public class MessageService {
                     String authorName = m.getAuthor().getName();
                     String authorId = m.getAuthor().getId();
                     String timestamp = m.getTimeCreated().toString();
-                    // Availability follows the same rendered representation returned below. This
-                    // deliberately errs on the side of reporting unavailable when raw content is
-                    // present but Discord/JDA renders no display content for this list response.
                     String displayContent = m.getContentDisplay();
-                    boolean contentAvailable = isMessageContentAvailable(m, displayContent);
+                    // Use raw content for the availability decision so list and single-message
+                    // reads report the same contract. Display content remains the rendered output.
+                    boolean contentAvailable = isMessageContentAvailable(m);
                     String content = contentAvailable ? displayContent : null;
                     String msgId = m.getId();
 

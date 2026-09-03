@@ -221,7 +221,9 @@ Important guild-scope behavior:
 - Malformed, uncached, or out-of-scope targets fail closed. Archived threads and forum posts may
   be absent from JDA's cache, so they can be denied even when they belong to an allowed guild.
 - Tools without a guild-resolvable target are omitted. This includes direct-message tools,
-  invite-by-ID tools, `delete_webhook`, and `send_webhook_message`.
+  invite-by-ID tools, `delete_webhook`, and `send_webhook_message`. Explicitly naming one of these
+  tools in `DISCORD_MCP_ALLOWED_TOOLS` while guild scoping is enabled hard-fails startup instead of
+  silently ignoring the operator's request.
 - `create_invite`, `list_invites`, `create_webhook`, and `list_webhooks` are omitted unless they
   are explicitly allowlisted because they can return durable access credentials. Scoped
   `create_invite` also requires positive `maxAge` and `maxUses`. Keep a manual Discord revocation
