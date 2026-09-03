@@ -16,6 +16,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.MockedStatic;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import tools.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
@@ -247,6 +248,37 @@ class MessageServiceTest {
 
         assertThat(messageService.getMessage(CHANNEL_ID, MESSAGE_ID))
                 .contains("\"content\":null,\"contentAvailable\":false");
+    }
+
+    @Test
+    void getMessageKeepsNullContentAndFalseAvailabilityUnderNonDefaultInclusion() {
+        ObjectMapper nonDefaultMapper = new ObjectMapper().rebuild()
+                .changeDefaultPropertyInclusion(ignored -> JsonInclude.Value.construct(
+                        JsonInclude.Include.NON_DEFAULT, JsonInclude.Include.NON_DEFAULT))
+                .build();
+        messageService = new MessageService(jda, nonDefaultMapper);
+        TextChannel channel = mock(TextChannel.class);
+        Guild guild = mock(Guild.class);
+        Message message = mock(Message.class);
+        User author = mock(User.class);
+        RestAction<Message> retrieve = mock(RestAction.class);
+        when(jda.getTextChannelById(CHANNEL_ID)).thenReturn(channel);
+        when(channel.getGuild()).thenReturn(guild);
+        when(guild.getId()).thenReturn("123456789012345678");
+        when(channel.getId()).thenReturn(CHANNEL_ID);
+        when(channel.retrieveMessageById(MESSAGE_ID)).thenReturn(retrieve);
+        when(retrieve.complete()).thenReturn(message);
+        when(message.getId()).thenReturn(MESSAGE_ID);
+        when(message.getAuthor()).thenReturn(author);
+        when(author.getId()).thenReturn("234567890123456789");
+        when(author.getName()).thenReturn("alice");
+        when(message.getContentRaw()).thenReturn("");
+        when(message.getJumpUrl()).thenReturn("https://discord.com/channels/123/456/789");
+        when(jda.getGatewayIntents()).thenReturn(EnumSet.noneOf(GatewayIntent.class));
+
+        assertThat(messageService.getMessage(CHANNEL_ID, MESSAGE_ID))
+                .contains("\"content\":null")
+                .contains("\"contentAvailable\":false");
     }
 
     @Test

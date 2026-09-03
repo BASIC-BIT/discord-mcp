@@ -135,6 +135,22 @@ class McpAccessPolicyTest {
     }
 
     @Test
+    void emojiPayloadUsesItsSmallerReviewedBudget() {
+        AtomicInteger calls = new AtomicInteger();
+        ToolCallback exposed = only(policy(mock(JDA.class), ALLOWED_GUILD, "create_emoji", "")
+                .apply(ToolCallbackProvider.from(countingCallback(
+                        "create_emoji", schema("guildId", "name", "image"), calls))));
+
+        String arguments = "{\"guildId\":\"" + ALLOWED_GUILD
+                + "\",\"name\":\"test\",\"image\":\""
+                + "x".repeat(McpAccessPolicy.MAX_EMOJI_PAYLOAD_CHARACTERS + 1) + "\"}";
+        assertThatThrownBy(() -> exposed.call(arguments))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("maximum supported size");
+        assertThat(calls).hasValue(0);
+    }
+
+    @Test
     void largePayloadToolStillRejectsAnOversizedNonPayloadString() {
         JDA jda = mock(JDA.class);
         stubChannel(jda, CHANNEL, ALLOWED_GUILD);
@@ -147,6 +163,26 @@ class McpAccessPolicyTest {
                 + "\",\"fileData\":\"small\",\"fileName\":\""
                 + "x".repeat(McpAccessPolicy.MAX_ORDINARY_ARGUMENT_STRING_CHARACTERS + 1)
                 + "\"}";
+        assertThatThrownBy(() -> exposed.call(arguments))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("fileName")
+                .hasMessageContaining("maximum supported size");
+        assertThat(calls).hasValue(0);
+    }
+
+    @Test
+    void largePayloadToolRejectsAnOversizedNestedPropertyName() {
+        JDA jda = mock(JDA.class);
+        stubChannel(jda, CHANNEL, ALLOWED_GUILD);
+        AtomicInteger calls = new AtomicInteger();
+        ToolCallback exposed = only(policy(jda, ALLOWED_GUILD, "send_file", "")
+                .apply(ToolCallbackProvider.from(countingCallback(
+                        "send_file", schema("channelId", "fileData", "fileName"), calls))));
+
+        String arguments = "{\"channelId\":\"" + CHANNEL
+                + "\",\"fileData\":\"small\",\"fileName\":{\""
+                + "x".repeat(McpAccessPolicy.MAX_ORDINARY_ARGUMENT_STRING_CHARACTERS + 1)
+                + "\":1}}";
         assertThatThrownBy(() -> exposed.call(arguments))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("fileName")
@@ -431,6 +467,24 @@ class McpAccessPolicyTest {
         assertThat(scopedSchema.get("properties").get("maxUses").get("description").asText())
                 .contains("positive integer")
                 .contains("0 is rejected");
+    }
+
+    @Test
+    void guildOnlyToolSchemaRequiresGuildWhenNoDefaultExists() {
+        ToolCallback listChannels = callback("list_channels", schema("guildId"),
+                new AtomicReference<>());
+
+        ToolCallback withoutDefault = only(policy(mock(JDA.class), ALLOWED_GUILD,
+                "list_channels", "").apply(ToolCallbackProvider.from(listChannels)));
+        ToolCallback withDefault = only(policy(mock(JDA.class), ALLOWED_GUILD,
+                "list_channels", ALLOWED_GUILD).apply(ToolCallbackProvider.from(listChannels)));
+
+        JsonNode withoutDefaultSchema = new ObjectMapper().readTree(
+                withoutDefault.getToolDefinition().inputSchema());
+        JsonNode withDefaultSchema = new ObjectMapper().readTree(
+                withDefault.getToolDefinition().inputSchema());
+        assertThat(withoutDefaultSchema.get("required").toString()).contains("guildId");
+        assertThat(withDefaultSchema.get("required")).isNull();
     }
 
     @Test

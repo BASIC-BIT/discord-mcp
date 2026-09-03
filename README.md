@@ -248,9 +248,10 @@ startup warns when an allowlisted guild is not currently visible to the bot, and
 exported tool set so operators can verify the effective surface. A missing guild is a warning rather
 than a hard failure because the bot may legitimately be invited after startup.
 
-Guild scoping resolves channel targets from the bot's JDA cache. Archived threads and forum posts
-can be absent, so `modify_forum_post` may be unable to perform its documented unarchive action and
-message tools may deny those targets until Discord places them in cache.
+Guild scoping shares the delegates' existing JDA-cache constraint for channel targets. Archived
+threads and forum posts can be absent, so `modify_forum_post` may be unable to perform its
+documented unarchive action and message tools may deny those targets until Discord places them in
+cache. Disabling guild scoping does not remove that underlying delegate limitation.
 
 For a one-guild scoped deployment, set `DISCORD_GUILD_ID` to that guild as well as listing it in
 `DISCORD_MCP_ALLOWED_GUILDS`; otherwise callers must supply `guildId` on every tool that permits it.

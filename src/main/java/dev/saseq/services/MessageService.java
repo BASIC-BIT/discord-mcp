@@ -1,5 +1,6 @@
 package dev.saseq.services;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.User;
@@ -416,6 +417,7 @@ public class MessageService {
         return selfUser != null && author != null && selfUser.getId().equals(author.getId());
     }
 
+    @JsonInclude(JsonInclude.Include.ALWAYS)
     private record MessageSnapshot(String guildId, String channelId, String messageId,
                                    String authorId, String authorName, String timestamp,
                                    String editedTimestamp, String content,

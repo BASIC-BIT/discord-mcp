@@ -44,6 +44,7 @@ public final class McpAccessPolicy {
     // limiting layer for that documented tool contract; transport and delegate limits are separate.
     static final int MAX_ARGUMENT_STRING_CHARACTERS = 70_000_000;
     static final long MAX_ARGUMENT_DOCUMENT_CHARACTERS = 70_100_000L;
+    static final int MAX_EMOJI_PAYLOAD_CHARACTERS = 12_000_000;
     static final int MAX_ORDINARY_ARGUMENT_STRING_CHARACTERS = 16_384;
     static final long MAX_ORDINARY_ARGUMENT_DOCUMENT_CHARACTERS = 1_000_000L;
     private static final String TARGET_ACCESS_DENIED =
@@ -53,8 +54,9 @@ public final class McpAccessPolicy {
             "create_invite", "list_invites", "create_webhook", "list_webhooks");
     private static final Set<String> SCALAR_SCHEMA_TYPES = Set.of(
             "string", "number", "integer", "boolean");
-    private static final Set<String> LARGE_PAYLOAD_ARGUMENTS = Set.of(
-            "create_emoji.image", "send_file.fileData");
+    private static final Map<String, Integer> LARGE_PAYLOAD_ARGUMENT_LIMITS = Map.of(
+            "create_emoji.image", MAX_EMOJI_PAYLOAD_CHARACTERS,
+            "send_file.fileData", MAX_ARGUMENT_STRING_CHARACTERS);
     private static final Set<String> REVIEWED_CHANNEL_ID_ARGUMENTS = Set.of(
             "add_reaction.channelId",
             "create_forum_channel.categoryId",
@@ -277,11 +279,16 @@ public final class McpAccessPolicy {
         return !largePayloadArguments(toolName, declaredArguments).isEmpty();
     }
 
-    private static Set<String> largePayloadArguments(String toolName,
-                                                     Set<String> declaredArguments) {
-        return declaredArguments.stream()
-                .filter(argument -> LARGE_PAYLOAD_ARGUMENTS.contains(toolName + "." + argument))
-                .collect(Collectors.toUnmodifiableSet());
+    private static Map<String, Integer> largePayloadArguments(String toolName,
+                                                              Set<String> declaredArguments) {
+        Map<String, Integer> limits = new LinkedHashMap<>();
+        for (String argument : declaredArguments) {
+            Integer limit = LARGE_PAYLOAD_ARGUMENT_LIMITS.get(toolName + "." + argument);
+            if (limit != null) {
+                limits.put(argument, limit);
+            }
+        }
+        return Map.copyOf(limits);
     }
 
     ToolCallbackProvider apply(ToolCallbackProvider rawProvider) {
@@ -427,13 +434,12 @@ public final class McpAccessPolicy {
         private final Set<String> declaredArguments;
         private final Set<String> policyArguments;
         private final ObjectMapper policyArgumentObjectMapper;
-        private final Set<String> largePayloadArguments;
+        private final Map<String, Integer> largePayloadArguments;
         private final boolean ordinaryArguments;
 
         private GuildScopedToolCallback(ToolCallback delegate, Set<String> declaredArguments) {
             this.delegate = delegate;
             ToolDefinition delegateDefinition = delegate.getToolDefinition();
-            this.scopedDefinition = createScopedDefinition(delegateDefinition);
             this.declaredArguments = declaredArguments;
             Set<String> selected = declaredArguments.stream()
                     .filter(field -> "guildId".equals(field) || isGuildChannelArgument(field))
@@ -447,7 +453,14 @@ public final class McpAccessPolicy {
             this.largePayloadArguments = largePayloadArguments(toolName, declaredArguments);
             this.ordinaryArguments = largePayloadArguments.isEmpty();
             this.policyArgumentObjectMapper = ordinaryArguments
-                    ? ordinaryArgumentObjectMapper : argumentObjectMapper;
+                    ? ordinaryArgumentObjectMapper
+                    : createArgumentObjectMapper(objectMapper,
+                        largePayloadArguments.values().stream().mapToInt(Integer::intValue)
+                                .max().orElseThrow(),
+                        largePayloadArguments.values().stream().mapToLong(Integer::longValue)
+                                .max().orElseThrow() + 100_000L);
+            this.scopedDefinition = createScopedDefinition(delegateDefinition,
+                    defaultGuildId == null && policyArguments.equals(Set.of("guildId")));
         }
 
         @Override
@@ -515,8 +528,10 @@ public final class McpAccessPolicy {
         }
     }
 
-    private ToolDefinition createScopedDefinition(ToolDefinition delegateDefinition) {
-        if (!"create_invite".equals(delegateDefinition.name())) {
+    private ToolDefinition createScopedDefinition(ToolDefinition delegateDefinition,
+                                                  boolean requireGuildId) {
+        boolean scopedInvite = "create_invite".equals(delegateDefinition.name());
+        if (!scopedInvite && !requireGuildId) {
             return delegateDefinition;
         }
         try {
@@ -526,27 +541,35 @@ public final class McpAccessPolicy {
             if (existingRequired != null && existingRequired.isArray()) {
                 existingRequired.forEach(value -> requiredNames.add(value.asText()));
             }
-            requiredNames.add("maxAge");
-            requiredNames.add("maxUses");
+            if (requireGuildId) {
+                requiredNames.add("guildId");
+            }
+            if (scopedInvite) {
+                requiredNames.add("maxAge");
+                requiredNames.add("maxUses");
+            }
             ArrayNode required = schema.putArray("required");
             requiredNames.forEach(required::add);
 
-            ObjectNode properties = (ObjectNode) schema.get("properties");
-            ((ObjectNode) properties.get("maxAge")).put("description",
-                    "Duration in seconds before expiry. Required as a positive integer in a "
-                            + "guild-scoped deployment; 0 is rejected.");
-            ((ObjectNode) properties.get("maxUses")).put("description",
-                    "Maximum number of uses. Required as a positive integer in a guild-scoped "
-                            + "deployment; 0 is rejected.");
+            if (scopedInvite) {
+                ObjectNode properties = (ObjectNode) schema.get("properties");
+                ((ObjectNode) properties.get("maxAge")).put("description",
+                        "Duration in seconds before expiry. Required as a positive integer in a "
+                                + "guild-scoped deployment; 0 is rejected.");
+                ((ObjectNode) properties.get("maxUses")).put("description",
+                        "Maximum number of uses. Required as a positive integer in a guild-scoped "
+                                + "deployment; 0 is rejected.");
+            }
             return ToolDefinition.builder()
                     .name(delegateDefinition.name())
-                    .description(delegateDefinition.description()
+                    .description(scopedInvite ? delegateDefinition.description()
                             + " In a guild-scoped deployment, maxAge and maxUses are required "
-                            + "positive integers.")
+                            + "positive integers." : delegateDefinition.description())
                     .inputSchema(objectMapper.writeValueAsString(schema))
                     .build();
         } catch (RuntimeException error) {
-            throw startupError("Tool create_invite scoped schema could not be generated");
+            throw startupError("Tool " + delegateDefinition.name()
+                    + " scoped schema could not be generated");
         }
     }
 
@@ -599,7 +622,7 @@ public final class McpAccessPolicy {
     private ParsedPolicyArguments parsePolicyArguments(
             String arguments, Set<String> declaredArguments, Set<String> policyArguments,
             ObjectMapper parserObjectMapper, boolean ordinaryArguments,
-            Set<String> largePayloadArguments) {
+            Map<String, Integer> largePayloadArguments) {
         if (arguments == null || arguments.isBlank() || "null".equals(arguments.strip())) {
             return new ParsedPolicyArguments(Map.of(), "{}");
         }
@@ -648,7 +671,7 @@ public final class McpAccessPolicy {
                                 ? parser.getText() : null;
                         parsed.put(field, new TargetArgument(valueToken, text));
                     }
-                    consumeArgumentValue(parser, field, largePayloadArguments.contains(field));
+                    consumeArgumentValue(parser, field, largePayloadArguments.get(field));
                 }
                 if (parser.nextToken() != null) {
                     throw new IllegalArgumentException("Tool arguments must contain one JSON object");
@@ -670,18 +693,17 @@ public final class McpAccessPolicy {
     }
 
     private static void consumeArgumentValue(JsonParser parser, String field,
-                                             boolean largePayload) {
-        if (largePayload) {
-            parser.skipChildren();
-            return;
-        }
+                                             Integer payloadStringLimit) {
         JsonToken token = parser.currentToken();
         int depth = token == JsonToken.START_OBJECT || token == JsonToken.START_ARRAY ? 1 : 0;
         while (true) {
-            if (token == JsonToken.VALUE_STRING
-                    && parser.getTextLength() > MAX_ORDINARY_ARGUMENT_STRING_CHARACTERS) {
+            int stringLimit = payloadStringLimit != null
+                    ? payloadStringLimit : MAX_ORDINARY_ARGUMENT_STRING_CHARACTERS;
+            if ((token == JsonToken.VALUE_STRING && parser.getTextLength() > stringLimit)
+                    || (token == JsonToken.PROPERTY_NAME
+                        && parser.getTextLength() > MAX_ORDINARY_ARGUMENT_STRING_CHARACTERS)) {
                 throw new IllegalArgumentException(field
-                        + " exceeds the maximum supported size for a non-payload argument");
+                        + " exceeds the maximum supported size");
             }
             if (depth == 0) {
                 return;
