@@ -98,6 +98,25 @@ class McpAccessPolicyTest {
     }
 
     @Test
+    void scheduledEventImageUsesTheOrdinaryArgumentLimit() {
+        AtomicInteger calls = new AtomicInteger();
+        ToolCallback exposed = only(policy(mock(JDA.class), ALLOWED_GUILD,
+                "set_guild_scheduled_event_image", "")
+                .apply(ToolCallbackProvider.from(countingCallback(
+                        "set_guild_scheduled_event_image",
+                        schema("guildId", "eventId", "imageUrl", "filePath"), calls))));
+
+        String arguments = "{\"guildId\":\"" + ALLOWED_GUILD
+                + "\",\"eventId\":\"52345678901234567\",\"imageUrl\":\""
+                + "x".repeat(McpAccessPolicy.MAX_ORDINARY_ARGUMENT_STRING_CHARACTERS + 1)
+                + "\"}";
+        assertThatThrownBy(() -> exposed.call(arguments))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("maximum supported size");
+        assertThat(calls).hasValue(0);
+    }
+
+    @Test
     void guildScopeRejectsDuplicateTargetKeysBeforeDelegation() {
         JDA jda = mock(JDA.class);
         stubChannel(jda, CHANNEL, ALLOWED_GUILD);
@@ -110,6 +129,23 @@ class McpAccessPolicyTest {
                 + "\",\"channelId\":\"" + OTHER_CHANNEL + "\",\"message\":\"hello\"}"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("not valid JSON");
+        assertThat(received.get()).isNull();
+    }
+
+    @Test
+    void guildScopeRejectsUndeclaredTopLevelArgumentsBeforeDelegation() {
+        JDA jda = mock(JDA.class);
+        stubChannel(jda, CHANNEL, ALLOWED_GUILD);
+        AtomicReference<String> received = new AtomicReference<>();
+        ToolCallback exposed = only(policy(jda, ALLOWED_GUILD, "send_message", "")
+                .apply(ToolCallbackProvider.from(callback("send_message",
+                        schema("channelId", "message"), received))));
+
+        assertThatThrownBy(() -> exposed.call("{\"channelId\":\"" + CHANNEL
+                + "\",\"message\":\"hello\",\"unexpected\":true}"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("undeclared")
+                .hasMessageContaining("unexpected");
         assertThat(received.get()).isNull();
     }
 
@@ -277,7 +313,8 @@ class McpAccessPolicyTest {
 
     @Test
     void inviteCreationRequiresExplicitOptInWhenGuildScoped() {
-        ToolCallback createInvite = callback("create_invite", schema("guildId", "channelId"),
+        ToolCallback createInvite = callback("create_invite",
+                schema("guildId", "channelId", "maxAge", "maxUses", "temporary", "unique"),
                 new AtomicReference<>());
         ToolCallback listInvites = callback("list_invites", schema("guildId"),
                 new AtomicReference<>());
@@ -290,6 +327,34 @@ class McpAccessPolicyTest {
                 .apply(ToolCallbackProvider.from(createInvite, listInvites)).getToolCallbacks())
                 .extracting(callback -> callback.getToolDefinition().name())
                 .containsExactly("create_invite", "list_invites");
+    }
+
+    @Test
+    void explicitlyScopedInviteSchemaMustDeclarePolicyRequiredBounds() {
+        ToolCallback createInvite = callback("create_invite", schema("guildId", "channelId"),
+                new AtomicReference<>());
+
+        assertThatThrownBy(() -> policy(mock(JDA.class), ALLOWED_GUILD,
+                "create_invite", "").apply(ToolCallbackProvider.from(createInvite)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("create_invite")
+                .hasMessageContaining("maxAge")
+                .hasMessageContaining("maxUses");
+    }
+
+    @Test
+    void scopedInviteDefinitionAdvertisesPolicyRequiredBounds() {
+        ToolCallback createInvite = callback("create_invite",
+                schema("guildId", "channelId", "maxAge", "maxUses", "temporary", "unique"),
+                new AtomicReference<>());
+
+        ToolCallback exposed = only(policy(mock(JDA.class), ALLOWED_GUILD,
+                "create_invite", "").apply(ToolCallbackProvider.from(createInvite)));
+
+        assertThat(exposed.getToolDefinition().description())
+                .contains("guild-scoped")
+                .contains("maxAge")
+                .contains("maxUses");
     }
 
     @Test
@@ -320,6 +385,13 @@ class McpAccessPolicyTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("maxUses")
                 .hasMessageContaining("positive integer");
+        assertThatThrownBy(() -> exposed.call("{\"guildId\":\"" + ALLOWED_GUILD
+                + "\",\"channelId\":\"" + CHANNEL
+                + "\",\"maxAge\":\"999999999999999999999\",\"maxUses\":\"10\"}"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("maxAge")
+                .hasMessageContaining("positive integer")
+                .hasMessageNotContaining("at most 20 characters");
 
         String bounded = "{\"guildId\":\"" + ALLOWED_GUILD
                 + "\",\"channelId\":\"" + CHANNEL

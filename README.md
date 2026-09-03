@@ -187,7 +187,6 @@ Run the JAR as a long-running server:
 
 ```bash
 DISCORD_TOKEN=<YOUR_DISCORD_BOT_TOKEN> \
-DISCORD_GUILD_ID="${DISCORD_GUILD_ID:-}" \
 SPRING_PROFILES_ACTIVE=http \
 java -jar /absolute/path/to/discord-mcp-1.0.0.jar
 ```
@@ -236,9 +235,11 @@ that share one bot across multiple Discord servers can add narrow, application-e
   Every argument name is pinned for its exact tool before a guild-scoped deployment will export
   it, including aliases such as `inviteCode`, `webhookUrl`, and `filePath` that do not advertise ID
   semantics. A tool with a new or unreviewed argument is omitted by default; startup fails if the
-  exact tool allowlist requests it. Channel-shaped names such as `crosspostMessageId` or
-  `threadStarterMessageId` receive an additional classification review because their substrings
-  would otherwise make the policy treat them as channel IDs.
+  exact tool allowlist requests it. Guild-scoped calls also reject top-level arguments that are not
+  declared by the exported schema. The channel-target classifier is intentionally conservative:
+  channel-shaped names such as `crosspostMessageId` or `threadStarterMessageId` are treated as
+  channel IDs and will fail closed unless the argument is renamed or the classifier and review map
+  are deliberately extended for that tool.
 - `DISCORD_MCP_ALLOWED_TOOLS`: comma-separated exact tool names. Unknown names fail startup and
   tools not named here are not exported to MCP clients. A whitespace-only value is invalid rather
   than being treated as an unset allowlist.

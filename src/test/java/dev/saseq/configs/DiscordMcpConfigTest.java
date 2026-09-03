@@ -1,12 +1,34 @@
 package dev.saseq.configs;
 
+import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.requests.GatewayIntent;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.tool.ToolCallbackProvider;
+import tools.jackson.databind.ObjectMapper;
+
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class DiscordMcpConfigTest {
+    @Test
+    void lateAccessPolicyValidationUsesTheCleanStartupExitPath() {
+        ToolCallbackProvider rawProvider = mock(ToolCallbackProvider.class);
+        when(rawProvider.getToolCallbacks()).thenReturn(new org.springframework.ai.tool.ToolCallback[0]);
+        McpAccessPolicy policy = new McpAccessPolicy(mock(JDA.class), new ObjectMapper(),
+                "12345678901234567", "missing_tool", "");
+        AtomicInteger exitCode = new AtomicInteger();
+
+        assertThatThrownBy(() -> DiscordMcpConfig.applyAccessPolicy(
+                policy, rawProvider, exitCode::set))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("unknown tools");
+        assertThat(exitCode).hasValue(1);
+    }
+
     @Test
     void expectedBotIdentityIsOptionalButExactWhenConfigured() {
         assertThat(DiscordMcpConfig.normalizeExpectedBotId(null)).isNull();

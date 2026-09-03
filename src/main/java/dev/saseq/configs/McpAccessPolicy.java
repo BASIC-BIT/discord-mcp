@@ -46,14 +46,14 @@ public final class McpAccessPolicy {
     static final int MAX_ORDINARY_ARGUMENT_STRING_CHARACTERS = 16_384;
     static final long MAX_ORDINARY_ARGUMENT_DOCUMENT_CHARACTERS = 1_000_000L;
     private static final String TARGET_ACCESS_DENIED =
-            "Discord target is not in the bot's channel cache (archived threads and forum posts "
-                    + "may be absent) or is outside the allowed guild scope";
+            "Discord target is unavailable to the bot or is outside the allowed guild scope "
+                    + "(archived threads and forum posts may be absent from the channel cache)";
     private static final Set<String> EXPLICIT_ONLY_WHEN_GUILD_SCOPED = Set.of(
             "create_invite", "list_invites", "create_webhook", "list_webhooks");
     private static final Set<String> SCALAR_SCHEMA_TYPES = Set.of(
             "string", "number", "integer", "boolean");
     private static final Set<String> LARGE_ARGUMENT_TOOLS = Set.of(
-            "create_emoji", "send_file", "set_guild_scheduled_event_image");
+            "create_emoji", "send_file");
     private static final Set<String> REVIEWED_CHANNEL_ID_ARGUMENTS = Set.of(
             "add_reaction.channelId",
             "create_forum_channel.categoryId",
@@ -386,6 +386,15 @@ public final class McpAccessPolicy {
                     + " because its arguments need review: " + unreviewed);
             return null;
         }
+        if ("create_invite".equals(toolName)) {
+            Set<String> missingBounds = Set.of("maxAge", "maxUses").stream()
+                    .filter(bound -> !declared.contains(bound))
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
+            if (!missingBounds.isEmpty()) {
+                throw startupError("Tool create_invite must declare policy-required arguments: "
+                        + missingBounds);
+            }
+        }
         boolean resolvable = declared.contains("guildId")
                 || declared.stream().anyMatch(McpAccessPolicy::isGuildChannelArgument);
         if (resolvable) {
@@ -402,12 +411,23 @@ public final class McpAccessPolicy {
 
     private final class GuildScopedToolCallback implements ToolCallback {
         private final ToolCallback delegate;
+        private final ToolDefinition scopedDefinition;
         private final Set<String> declaredArguments;
         private final Set<String> policyArguments;
         private final ObjectMapper policyArgumentObjectMapper;
 
         private GuildScopedToolCallback(ToolCallback delegate, Set<String> declaredArguments) {
             this.delegate = delegate;
+            ToolDefinition delegateDefinition = delegate.getToolDefinition();
+            this.scopedDefinition = "create_invite".equals(delegateDefinition.name())
+                    ? ToolDefinition.builder()
+                        .name(delegateDefinition.name())
+                        .description(delegateDefinition.description()
+                                + " In a guild-scoped deployment, maxAge and maxUses are required "
+                                + "positive integers.")
+                        .inputSchema(delegateDefinition.inputSchema())
+                        .build()
+                    : delegateDefinition;
             this.declaredArguments = declaredArguments;
             Set<String> selected = declaredArguments.stream()
                     .filter(field -> "guildId".equals(field) || isGuildChannelArgument(field))
@@ -424,7 +444,7 @@ public final class McpAccessPolicy {
 
         @Override
         public ToolDefinition getToolDefinition() {
-            return delegate.getToolDefinition();
+            return scopedDefinition;
         }
 
         @Override
@@ -446,7 +466,7 @@ public final class McpAccessPolicy {
 
         private void enforceGuildScope(String arguments) {
             Map<String, TargetArgument> parsed = parsePolicyArguments(
-                    arguments, policyArguments, policyArgumentObjectMapper);
+                    arguments, declaredArguments, policyArguments, policyArgumentObjectMapper);
             Set<String> guildIds = resolveGuildIds(parsed, declaredArguments);
             if (guildIds.isEmpty()) {
                 throw new IllegalArgumentException("A Discord guild or channel target is required");
@@ -527,7 +547,8 @@ public final class McpAccessPolicy {
     }
 
     private Map<String, TargetArgument> parsePolicyArguments(
-            String arguments, Set<String> policyArguments, ObjectMapper parserObjectMapper) {
+            String arguments, Set<String> declaredArguments, Set<String> policyArguments,
+            ObjectMapper parserObjectMapper) {
         if (arguments == null || arguments.isBlank() || "null".equals(arguments.strip())) {
             return Map.of();
         }
@@ -542,6 +563,7 @@ public final class McpAccessPolicy {
                 }
             }
             Map<String, TargetArgument> parsed = new LinkedHashMap<>();
+            Set<String> undeclared = new LinkedHashSet<>();
             try (JsonParser parser = parserObjectMapper.tokenStreamFactory()
                     .createParser(arguments)) {
                 if (parser.nextToken() != JsonToken.START_OBJECT) {
@@ -556,10 +578,15 @@ public final class McpAccessPolicy {
                     if (valueToken == null) {
                         throw new IllegalArgumentException("Tool arguments are not valid JSON");
                     }
+                    if (!declaredArguments.contains(field)) {
+                        undeclared.add(field);
+                    }
                     if (policyArguments.contains(field)) {
                         // Jackson must decode a string token to report its length. The global read
                         // constraint still bounds that allocation before this target-specific cap.
-                        if (valueToken == JsonToken.VALUE_STRING && parser.getTextLength() > 20) {
+                        if (("guildId".equals(field) || isGuildChannelArgument(field))
+                                && valueToken == JsonToken.VALUE_STRING
+                                && parser.getTextLength() > 20) {
                             throw new IllegalArgumentException(field
                                     + " must be at most 20 characters");
                         }
@@ -573,6 +600,10 @@ public final class McpAccessPolicy {
                 if (parser.nextToken() != null) {
                     throw new IllegalArgumentException("Tool arguments must contain one JSON object");
                 }
+            }
+            if (!undeclared.isEmpty()) {
+                throw new IllegalArgumentException(
+                        "Tool arguments contain undeclared properties: " + undeclared);
             }
             return parsed;
         } catch (IllegalArgumentException error) {

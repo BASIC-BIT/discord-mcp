@@ -27,6 +27,7 @@ import org.springframework.context.annotation.Configuration;
 
 import java.util.EnumSet;
 import java.util.Set;
+import java.util.function.IntConsumer;
 
 @Configuration
 public class DiscordMcpConfig {
@@ -64,7 +65,18 @@ public class DiscordMcpConfig {
                 emojiService,
                 forumService
         ).build();
-        return accessPolicy.apply(rawProvider);
+        return applyAccessPolicy(accessPolicy, rawProvider, System::exit);
+    }
+
+    static ToolCallbackProvider applyAccessPolicy(McpAccessPolicy accessPolicy,
+                                                   ToolCallbackProvider rawProvider,
+                                                   IntConsumer exit) {
+        try {
+            return accessPolicy.apply(rawProvider);
+        } catch (IllegalArgumentException error) {
+            exit.accept(1);
+            throw error;
+        }
     }
 
     @Bean
@@ -76,7 +88,12 @@ public class DiscordMcpConfig {
                    @Value("${DISCORD_MCP_ALLOWED_TOOLS:}") String allowedTools,
                    @Value("${DISCORD_GUILD_ID:}") String defaultGuildId)
             throws InterruptedException {
-        McpAccessPolicy.validateConfiguration(allowedGuilds, allowedTools, defaultGuildId);
+        try {
+            McpAccessPolicy.validateConfiguration(allowedGuilds, allowedTools, defaultGuildId);
+        } catch (IllegalArgumentException error) {
+            System.exit(1);
+            throw error;
+        }
         boolean messageContentEnabled;
         try {
             messageContentEnabled = parseMessageContentOptIn(enableMessageContent);
