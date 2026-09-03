@@ -466,6 +466,24 @@ class McpAccessPolicyTest {
     }
 
     @Test
+    void filesystemToolsRequireExplicitOptInWhenGuildScoped() {
+        ToolCallback sendFile = callback("send_file",
+                schema("channelId", "fileData", "fileName"), new AtomicReference<>());
+        ToolCallback download = callback("download_attachment",
+                schema("channelId", "messageId", "attachmentId"),
+                new AtomicReference<>());
+
+        assertThat(policy(mock(JDA.class), ALLOWED_GUILD, "", "")
+                .apply(ToolCallbackProvider.from(sendFile, download))
+                .getToolCallbacks()).isEmpty();
+        assertThat(policy(mock(JDA.class), ALLOWED_GUILD,
+                "send_file,download_attachment", "")
+                .apply(ToolCallbackProvider.from(sendFile, download)).getToolCallbacks())
+                .extracting(callback -> callback.getToolDefinition().name())
+                .containsExactly("send_file", "download_attachment");
+    }
+
+    @Test
     void inviteCreationRequiresExplicitOptInWhenGuildScoped() {
         ToolCallback createInvite = callback("create_invite",
                 schema("guildId", "channelId", "maxAge", "maxUses", "temporary", "unique"),
@@ -820,7 +838,7 @@ class McpAccessPolicyTest {
                         "delete_category", "delete_channel",
                         "delete_channel_permission_overwrite", "delete_emoji",
                         "delete_guild_scheduled_event", "delete_message", "delete_role",
-                        "disconnect_member", "download_attachment", "edit_category", "edit_emoji",
+                        "disconnect_member", "edit_category", "edit_emoji",
                         "edit_forum_channel", "edit_guild_scheduled_event", "edit_message",
                         "edit_role", "edit_text_channel", "edit_voice_channel", "find_category",
                         "find_channel", "get_attachment", "get_bans", "get_bot_info", "get_channel_info",
@@ -833,7 +851,7 @@ class McpAccessPolicyTest {
                         "list_guild_scheduled_events", "list_roles",
                         "modify_forum_post", "modify_voice_state", "move_channel",
                         "move_member", "read_messages", "remove_reaction", "remove_role",
-                        "remove_timeout", "search_members", "send_file", "send_message",
+                        "remove_timeout", "search_members", "send_message",
                         "set_guild_scheduled_event_image", "set_nickname", "timeout_member",
                         "unban_member", "upsert_member_channel_permissions",
                         "upsert_role_channel_permissions");

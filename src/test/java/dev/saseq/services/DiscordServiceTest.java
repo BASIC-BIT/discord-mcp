@@ -5,6 +5,7 @@ import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.SelfUser;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.PropertyNamingStrategies;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -29,5 +30,25 @@ class DiscordServiceTest {
         assertThat(result).isEqualTo(
                 "{\"botUserId\":\"123456789012345678\",\"botName\":\"BASIC Ops\","
                         + "\"guildId\":\"987654321098765432\"}");
+    }
+
+    @Test
+    void getBotInfoKeepsStableKeysUnderGlobalSnakeCaseNaming() {
+        JDA jda = mock(JDA.class);
+        SelfUser self = mock(SelfUser.class);
+        Guild guild = mock(Guild.class);
+        when(jda.getSelfUser()).thenReturn(self);
+        when(jda.getGuildById("987654321098765432")).thenReturn(guild);
+        when(guild.getId()).thenReturn("987654321098765432");
+        when(self.getId()).thenReturn("123456789012345678");
+        when(self.getName()).thenReturn("BASIC Ops");
+        ObjectMapper snakeCaseMapper = new ObjectMapper().rebuild()
+                .propertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE)
+                .build();
+
+        assertThat(new DiscordService(jda, snakeCaseMapper)
+                .getBotInfo("987654321098765432"))
+                .contains("\"botUserId\"")
+                .doesNotContain("\"bot_user_id\"");
     }
 }

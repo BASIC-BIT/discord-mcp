@@ -1,6 +1,7 @@
 package dev.saseq.services;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.User;
@@ -385,7 +386,8 @@ public class MessageService {
         if (message == null) {
             throw new IllegalArgumentException("Message not found by messageId");
         }
-        boolean contentAvailable = isMessageContentAvailable(message);
+        String rawContent = message.getContentRaw();
+        boolean contentAvailable = isMessageContentAvailable(message, rawContent);
         return json.writeValueAsString(new MessageSnapshot(
                 guildChannel.getGuild().getId(),
                 guildChannel.getId(),
@@ -394,7 +396,7 @@ public class MessageService {
                 message.getAuthor().getName(),
                 timestampOf(message.getTimeCreated()),
                 timestampOf(message.getTimeEdited()),
-                contentAvailable ? message.getContentRaw() : null,
+                contentAvailable ? rawContent : null,
                 contentAvailable,
                 message.getJumpUrl()));
     }
@@ -403,12 +405,8 @@ public class MessageService {
         return timestamp == null ? null : timestamp.toString();
     }
 
-    private boolean isMessageContentAvailable(Message message) {
-        return isMessageContentAvailable(message, message.getContentRaw());
-    }
-
-    private boolean isMessageContentAvailable(Message message, String renderedContent) {
-        if (!renderedContent.isEmpty()
+    private boolean isMessageContentAvailable(Message message, String rawContent) {
+        if (!rawContent.isEmpty()
                 || jda.getGatewayIntents().contains(GatewayIntent.MESSAGE_CONTENT)) {
             return true;
         }
@@ -418,10 +416,16 @@ public class MessageService {
     }
 
     @JsonInclude(JsonInclude.Include.ALWAYS)
-    private record MessageSnapshot(String guildId, String channelId, String messageId,
-                                   String authorId, String authorName, String timestamp,
-                                   String editedTimestamp, String content,
-                                   boolean contentAvailable, String jumpUrl) {
+    private record MessageSnapshot(@JsonProperty("guildId") String guildId,
+                                   @JsonProperty("channelId") String channelId,
+                                   @JsonProperty("messageId") String messageId,
+                                   @JsonProperty("authorId") String authorId,
+                                   @JsonProperty("authorName") String authorName,
+                                   @JsonProperty("timestamp") String timestamp,
+                                   @JsonProperty("editedTimestamp") String editedTimestamp,
+                                   @JsonProperty("content") String content,
+                                   @JsonProperty("contentAvailable") boolean contentAvailable,
+                                   @JsonProperty("jumpUrl") String jumpUrl) {
     }
 
     /**
@@ -1089,7 +1093,7 @@ public class MessageService {
                     // Use raw content for the availability decision so list and single-message
                     // reads report the same contract. Prefer display content, but fall back to raw
                     // rather than falsely labelling a raw-text message as empty.
-                    boolean contentAvailable = isMessageContentAvailable(m);
+                    boolean contentAvailable = isMessageContentAvailable(m, rawContent);
                     String content = contentAvailable
                             ? (!displayContent.isEmpty() || rawContent.isEmpty()
                                     ? displayContent : rawContent)

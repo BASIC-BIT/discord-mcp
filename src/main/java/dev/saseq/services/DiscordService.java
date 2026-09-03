@@ -1,6 +1,7 @@
 package dev.saseq.services;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.Member;
@@ -48,7 +49,9 @@ public class DiscordService {
     }
 
     @JsonInclude(JsonInclude.Include.ALWAYS)
-    private record BotSnapshot(String botUserId, String botName, String guildId) {
+    private record BotSnapshot(@JsonProperty("botUserId") String botUserId,
+                               @JsonProperty("botName") String botName,
+                               @JsonProperty("guildId") String guildId) {
     }
 
     private String resolveGuildId(String guildId) {

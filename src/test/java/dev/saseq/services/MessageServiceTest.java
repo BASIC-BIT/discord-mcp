@@ -18,6 +18,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.mockito.MockedStatic;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.PropertyNamingStrategies;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -256,6 +257,7 @@ class MessageServiceTest {
         ObjectMapper nonDefaultMapper = new ObjectMapper().rebuild()
                 .changeDefaultPropertyInclusion(ignored -> JsonInclude.Value.construct(
                         JsonInclude.Include.NON_DEFAULT, JsonInclude.Include.NON_DEFAULT))
+                .propertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE)
                 .build();
         messageService = new MessageService(jda, nonDefaultMapper);
         TextChannel channel = mock(TextChannel.class);
