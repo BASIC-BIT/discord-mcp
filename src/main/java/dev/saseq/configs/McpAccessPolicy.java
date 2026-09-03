@@ -50,6 +50,8 @@ public final class McpAccessPolicy {
     static final int MAX_EMOJI_PAYLOAD_CHARACTERS = 512_000;
     static final int MAX_ORDINARY_ARGUMENT_STRING_CHARACTERS = 16_384;
     static final long MAX_ORDINARY_ARGUMENT_DOCUMENT_CHARACTERS = 1_000_000L;
+    private static final int MAX_UNDECLARED_ARGUMENTS_REPORTED = 8;
+    private static final int MAX_REPORTED_ARGUMENT_NAME_CHARACTERS = 128;
     private static final String TARGET_ACCESS_DENIED =
             "Discord target is unavailable to the bot or is outside the allowed guild scope "
                     + "(archived threads and forum posts may be absent from the channel cache)";
@@ -643,6 +645,7 @@ public final class McpAccessPolicy {
             }
             Map<String, TargetArgument> parsed = new LinkedHashMap<>();
             Set<String> undeclared = new LinkedHashSet<>();
+            int undeclaredCount = 0;
             try (JsonParser parser = parserObjectMapper.tokenStreamFactory()
                     .createParser(arguments)) {
                 if (parser.nextToken() != JsonToken.START_OBJECT) {
@@ -652,13 +655,20 @@ public final class McpAccessPolicy {
                     if (parser.currentToken() != JsonToken.PROPERTY_NAME) {
                         throw new IllegalArgumentException("Tool arguments are not valid JSON");
                     }
+                    if (parser.getTextLength() > MAX_ORDINARY_ARGUMENT_STRING_CHARACTERS) {
+                        throw new IllegalArgumentException(
+                                "Tool argument name exceeds the maximum supported size");
+                    }
                     String field = parser.currentName();
                     JsonToken valueToken = parser.nextToken();
                     if (valueToken == null) {
                         throw new IllegalArgumentException("Tool arguments are not valid JSON");
                     }
                     if (!declaredArguments.contains(field)) {
-                        undeclared.add(field);
+                        undeclaredCount++;
+                        if (undeclared.size() < MAX_UNDECLARED_ARGUMENTS_REPORTED) {
+                            undeclared.add(abbreviateArgumentName(field));
+                        }
                     }
                     if (policyArguments.contains(field)) {
                         // Jackson must decode a string token to report its length. The global read
@@ -681,8 +691,10 @@ public final class McpAccessPolicy {
                 }
             }
             if (!undeclared.isEmpty()) {
+                String remainder = undeclaredCount > undeclared.size()
+                        ? " (and " + (undeclaredCount - undeclared.size()) + " more)" : "";
                 throw new IllegalArgumentException(
-                        "Tool arguments contain undeclared properties: " + undeclared);
+                        "Tool arguments contain undeclared properties: " + undeclared + remainder);
             }
             return new ParsedPolicyArguments(Map.copyOf(parsed), validatedJson);
         } catch (IllegalArgumentException error) {
@@ -695,6 +707,13 @@ public final class McpAccessPolicy {
         }
     }
 
+    private static String abbreviateArgumentName(String field) {
+        if (field.length() <= MAX_REPORTED_ARGUMENT_NAME_CHARACTERS) {
+            return field;
+        }
+        return field.substring(0, MAX_REPORTED_ARGUMENT_NAME_CHARACTERS) + "...";
+    }
+
     private static void consumeArgumentValue(JsonParser parser, String field,
                                              Integer payloadStringLimit) {
         JsonToken token = parser.currentToken();
@@ -705,7 +724,7 @@ public final class McpAccessPolicy {
             if ((token == JsonToken.VALUE_STRING && parser.getTextLength() > stringLimit)
                     || (token == JsonToken.PROPERTY_NAME
                         && parser.getTextLength() > MAX_ORDINARY_ARGUMENT_STRING_CHARACTERS)) {
-                throw new IllegalArgumentException(field
+                throw new IllegalArgumentException(abbreviateArgumentName(field)
                         + " exceeds the maximum supported size");
             }
             if (depth == 0) {

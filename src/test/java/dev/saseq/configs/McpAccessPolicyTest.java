@@ -206,6 +206,44 @@ class McpAccessPolicyTest {
     }
 
     @Test
+    void largePayloadToolBoundsTopLevelPropertyNamesBeforeReportingThem() {
+        JDA jda = mock(JDA.class);
+        stubChannel(jda, CHANNEL, ALLOWED_GUILD);
+        AtomicInteger calls = new AtomicInteger();
+        ToolCallback exposed = only(policy(jda, ALLOWED_GUILD, "send_file", "")
+                .apply(ToolCallbackProvider.from(countingCallback(
+                        "send_file", schema("channelId", "fileData", "fileName"), calls))));
+
+        String arguments = "{\"channelId\":\"" + CHANNEL + "\",\""
+                + "x".repeat(McpAccessPolicy.MAX_ORDINARY_ARGUMENT_STRING_CHARACTERS + 1)
+                + "\":1}";
+        assertThatThrownBy(() -> exposed.call(arguments))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("maximum supported size")
+                .satisfies(error -> assertThat(error.getMessage()).hasSizeLessThan(2_000));
+        assertThat(calls).hasValue(0);
+    }
+
+    @Test
+    void valueSizeErrorsAbbreviateLongTopLevelPropertyNames() {
+        JDA jda = mock(JDA.class);
+        stubChannel(jda, CHANNEL, ALLOWED_GUILD);
+        ToolCallback exposed = only(policy(jda, ALLOWED_GUILD, "send_file", "")
+                .apply(ToolCallbackProvider.from(callback(
+                        "send_file", schema("channelId", "fileData", "fileName"),
+                        new AtomicReference<>()))));
+
+        String arguments = "{\"channelId\":\"" + CHANNEL + "\",\""
+                + "x".repeat(McpAccessPolicy.MAX_ORDINARY_ARGUMENT_STRING_CHARACTERS)
+                + "\":\"" + "y".repeat(McpAccessPolicy.MAX_ORDINARY_ARGUMENT_STRING_CHARACTERS + 1)
+                + "\"}";
+        assertThatThrownBy(() -> exposed.call(arguments))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("maximum supported size")
+                .satisfies(error -> assertThat(error.getMessage()).hasSizeLessThan(2_000));
+    }
+
+    @Test
     void largeArgumentBudgetRequiresAReviewedToolQualifiedPayload() {
         assertThat(McpAccessPolicy.usesLargeArgumentBudget(
                 "send_file", Set.of("channelId", "fileData", "fileName"))).isTrue();
