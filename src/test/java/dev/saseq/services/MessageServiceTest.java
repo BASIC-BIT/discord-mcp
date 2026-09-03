@@ -146,6 +146,25 @@ class MessageServiceTest {
     }
 
     @Test
+    void readMessagesDerivesAvailabilityFromTheRenderedContentSource() {
+        TextChannel channel = mock(TextChannel.class);
+        MessageHistory history = mock(MessageHistory.class);
+        Message guildMessage = message(
+                "111111111111111111", "123456789012345678", "alice", "raw token");
+        when(guildMessage.getContentDisplay()).thenReturn("");
+        RestAction<List<Message>> retrievePast = restAction(List.of(guildMessage));
+
+        when(jda.getTextChannelById(CHANNEL_ID)).thenReturn(channel);
+        when(jda.getGatewayIntents()).thenReturn(EnumSet.noneOf(GatewayIntent.class));
+        when(channel.getHistory()).thenReturn(history);
+        when(history.retrievePast(1)).thenReturn(retrievePast);
+
+        assertThat(messageService.readMessages(CHANNEL_ID, "1", null, null, null))
+                .contains("[no text content, or content not available to this bot]")
+                .doesNotContain("[no text content]");
+    }
+
+    @Test
     void readMessagesLabelsEmptyTextWhenContentIntentIsEnabled() {
         TextChannel channel = mock(TextChannel.class);
         MessageHistory history = mock(MessageHistory.class);

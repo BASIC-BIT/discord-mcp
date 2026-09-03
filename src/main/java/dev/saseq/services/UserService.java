@@ -441,6 +441,9 @@ public class UserService {
                     String authorName = m.getAuthor().getName();
                     String authorId = m.getAuthor().getId();
                     String timestamp = m.getTimeCreated().toString();
+                    // Discord's Message Content privileged-intent restriction does not apply to
+                    // direct messages received by the bot, so an empty value here is genuinely
+                    // empty text rather than the guild-message availability ambiguity.
                     String content = m.getContentDisplay();
                     String msgId = m.getId();
 

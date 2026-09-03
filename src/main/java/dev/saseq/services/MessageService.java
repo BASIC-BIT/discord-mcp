@@ -403,7 +403,11 @@ public class MessageService {
     }
 
     private boolean isMessageContentAvailable(Message message) {
-        if (!message.getContentRaw().isEmpty()
+        return isMessageContentAvailable(message, message.getContentRaw());
+    }
+
+    private boolean isMessageContentAvailable(Message message, String renderedContent) {
+        if (!renderedContent.isEmpty()
                 || jda.getGatewayIntents().contains(GatewayIntent.MESSAGE_CONTENT)) {
             return true;
         }
@@ -1078,8 +1082,9 @@ public class MessageService {
                     String authorName = m.getAuthor().getName();
                     String authorId = m.getAuthor().getId();
                     String timestamp = m.getTimeCreated().toString();
-                    boolean contentAvailable = isMessageContentAvailable(m);
-                    String content = contentAvailable ? m.getContentDisplay() : null;
+                    String displayContent = m.getContentDisplay();
+                    boolean contentAvailable = isMessageContentAvailable(m, displayContent);
+                    String content = contentAvailable ? displayContent : null;
                     String msgId = m.getId();
 
                     StringBuilder sb = new StringBuilder();

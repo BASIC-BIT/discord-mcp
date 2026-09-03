@@ -34,7 +34,8 @@ import java.util.stream.Collectors;
  * <p>This class deliberately knows nothing about operators, approval workflows, read-versus-write
  * policy, or named Discord servers. Those decisions belong in the MCP client or a policy facade.
  * When configured, this layer only limits which tools are exported and which Discord guilds their
- * declared targets may resolve to.</p>
+ * declared targets may resolve to. Adding or changing a tool requires an entry in
+ * {@code REVIEWED_ARGUMENTS}; see the tool-surface pinning test.</p>
  */
 @Component
 public final class McpAccessPolicy {
@@ -292,6 +293,15 @@ public final class McpAccessPolicy {
             return ToolCallbackProvider.from(selected);
         }
 
+        Set<String> unavailableGuilds = allowedGuilds.stream()
+                .filter(guildId -> jda.getGuildById(guildId) == null)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (!unavailableGuilds.isEmpty()) {
+            System.err.println("WARNING: Discord allowed guilds not currently visible to the bot: "
+                    + unavailableGuilds
+                    + ". The bot may be invited later, but calls targeting these guilds will fail.");
+        }
+
         Set<String> omitted = new LinkedHashSet<>();
         ToolCallback[] scoped = Arrays.stream(selected)
                 .map(callback -> scopeIfResolvable(callback, omitted))
@@ -301,6 +311,11 @@ public final class McpAccessPolicy {
             System.err.println("Discord guild scope omitted tools by default: "
                     + omitted);
         }
+        Set<String> exported = Arrays.stream(scoped)
+                .map(callback -> callback.getToolDefinition().name())
+                .sorted()
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        System.err.println("Discord guild scope exported tools: " + exported);
         return ToolCallbackProvider.from(scoped);
     }
 
@@ -327,6 +342,17 @@ public final class McpAccessPolicy {
             return null;
         }
         Set<String> declared = schema.names();
+        if (!schema.nonStringTargets().isEmpty()) {
+            if (allowedTools.contains(toolName)) {
+                throw startupError("Tool " + toolName
+                        + " Discord target arguments must use JSON string schemas: "
+                        + schema.nonStringTargets());
+            }
+            System.err.println("Discord guild scope omitted tool " + toolName
+                    + " because its Discord target arguments are not JSON strings: "
+                    + schema.nonStringTargets());
+            return null;
+        }
         if (!schema.structured().isEmpty()) {
             if (allowedTools.contains(toolName)) {
                 throw startupError("Tool " + toolName
@@ -580,7 +606,8 @@ public final class McpAccessPolicy {
         }
     }
 
-    private record SchemaProperties(Set<String> names, Set<String> structured) {
+    private record SchemaProperties(Set<String> names, Set<String> structured,
+                                    Set<String> nonStringTargets) {
     }
 
     private SchemaProperties schemaProperties(ToolDefinition definition) {
@@ -588,7 +615,7 @@ public final class McpAccessPolicy {
             JsonNode schema = objectMapper.readTree(definition.inputSchema());
             JsonNode properties = schema == null ? null : schema.get("properties");
             if (properties == null || properties.isNull()) {
-                return new SchemaProperties(Set.of(), Set.of());
+                return new SchemaProperties(Set.of(), Set.of(), Set.of());
             }
             if (!properties.isObject()) {
                 throw new IllegalArgumentException("Tool " + definition.name()
@@ -596,6 +623,7 @@ public final class McpAccessPolicy {
             }
             Set<String> names = new LinkedHashSet<>();
             Set<String> structured = new LinkedHashSet<>();
+            Set<String> nonStringTargets = new LinkedHashSet<>();
             properties.propertyNames().forEach(name -> {
                 names.add(name);
                 JsonNode property = properties.get(name);
@@ -603,9 +631,13 @@ public final class McpAccessPolicy {
                 if (type == null || !type.isTextual()
                         || !SCALAR_SCHEMA_TYPES.contains(type.asText())) {
                     structured.add(name);
+                } else if (("guildId".equals(name) || isGuildChannelArgument(name))
+                        && !"string".equals(type.asText())) {
+                    nonStringTargets.add(name);
                 }
             });
-            return new SchemaProperties(Set.copyOf(names), Set.copyOf(structured));
+            return new SchemaProperties(Set.copyOf(names), Set.copyOf(structured),
+                    Set.copyOf(nonStringTargets));
         } catch (RuntimeException error) {
             if (error instanceof IllegalArgumentException) {
                 throw error;

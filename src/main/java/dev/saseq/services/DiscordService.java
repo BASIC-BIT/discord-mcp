@@ -25,7 +25,9 @@ public class DiscordService {
 
     /**
      * Returns the authenticated bot identity so callers can bind policy to the actual token.
-     * The guild is an authorization anchor and is also returned for deployment verification.
+     * The guild is a deliberately required authorization anchor and is also returned for
+     * deployment verification. Do not remove it as an apparently unused lookup: guild-scoped
+     * deployments can export this tool only because the access policy can resolve that anchor.
      *
      * @return machine-readable JSON containing the stable bot user ID and username.
      */

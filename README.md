@@ -227,8 +227,12 @@ that share one bot across multiple Discord servers can add narrow, application-e
   explicitly allowlisted tool's target schema. Review the new schema before restarting the scoped
   deployment; other allowlisted tools remain unavailable until configuration and code agree.
   Under guild scoping, guild and channel target IDs must be JSON strings so 17-20 digit snowflakes
-  cannot be rounded by numeric JSON parsers. The policy reads only target fields from the argument
+  cannot be rounded by numeric JSON parsers; a schema that declares one of those targets as another
+  scalar type fails startup review instead of deferring the mismatch to every call. The policy
+  reads only target fields from the argument
   stream, so a large upload is not copied into a second JSON tree merely to establish its guild.
+  Ordinary non-upload arguments are limited to 16,384 characters per string when guild scoping is
+  enabled. Large upload tools retain their separate documented limits.
   Every argument name is pinned for its exact tool before a guild-scoped deployment will export
   it, including aliases such as `inviteCode`, `webhookUrl`, and `filePath` that do not advertise ID
   semantics. A tool with a new or unreviewed argument is omitted by default; startup fails if the
@@ -248,7 +252,10 @@ guild-boundary review.
 The allowlist syntax and default guild are validated before the bot connects to Discord. Exact tool
 names and target schemas are validated after the tool surface is built, after a successful Discord
 login. Configuration and connection failures are also written to stderr so stdio MCP clients can
-show an actionable startup error without contaminating the JSON-RPC stream on stdout.
+show an actionable startup error without contaminating the JSON-RPC stream on stdout. Scoped
+startup warns when an allowlisted guild is not currently visible to the bot, and prints the final
+exported tool set so operators can verify the effective surface. A missing guild is a warning rather
+than a hard failure because the bot may legitimately be invited after startup.
 
 Guild scoping resolves channel targets from the bot's JDA cache. Archived threads and forum posts
 can be absent, so `modify_forum_post` may be unable to perform its documented unarchive action and

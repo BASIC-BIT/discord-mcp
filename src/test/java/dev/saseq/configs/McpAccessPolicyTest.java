@@ -27,6 +27,9 @@ import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import tools.jackson.databind.ObjectMapper;
 
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -493,6 +496,43 @@ class McpAccessPolicyTest {
     }
 
     @Test
+    void guildTargetsMustDeclareStringSchemaTypesAtStartup() {
+        McpAccessPolicy policy = policy(mock(JDA.class), ALLOWED_GUILD,
+                "send_message", ALLOWED_GUILD);
+
+        assertThatThrownBy(() -> policy.apply(ToolCallbackProvider.from(callback(
+                "send_message",
+                schemaWithTypes("channelId", "integer", "message", "string"),
+                new AtomicReference<>()))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Discord target arguments must use JSON string schemas")
+                .hasMessageContaining("channelId");
+    }
+
+    @Test
+    void scopedStartupWarnsForMissingGuildsAndSummarizesExports() {
+        JDA jda = mock(JDA.class);
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        PrintStream original = System.err;
+        try {
+            System.setErr(new PrintStream(output, true, StandardCharsets.UTF_8));
+            ToolCallbackProvider scoped = policy(jda, ALLOWED_GUILD,
+                    "get_server_info", ALLOWED_GUILD).apply(ToolCallbackProvider.from(
+                            callback("get_server_info", schema("guildId"),
+                                    new AtomicReference<>())));
+
+            assertThat(scoped.getToolCallbacks()).hasSize(1);
+        } finally {
+            System.setErr(original);
+        }
+
+        assertThat(output.toString(StandardCharsets.UTF_8))
+                .contains("WARNING: Discord allowed guilds not currently visible to the bot: ["
+                        + ALLOWED_GUILD + "]")
+                .contains("Discord guild scope exported tools: [get_server_info]");
+    }
+
+    @Test
     void channelArgumentClassifierIgnoresUnrelatedObjectIds() {
         assertThat(McpAccessPolicy.isGuildChannelArgument("channelId")).isTrue();
         assertThat(McpAccessPolicy.isGuildChannelArgument("parentCategoryId")).isTrue();
@@ -615,5 +655,17 @@ class McpAccessPolicyTest {
         return "{\"type\":\"object\",\"properties\":{"
                 + "\"guildId\":{\"type\":\"string\"},"
                 + "\"" + name + "\":{\"type\":\"" + type + "\"}}}";
+    }
+
+    private static String schemaWithTypes(String... namesAndTypes) {
+        StringBuilder body = new StringBuilder();
+        for (int index = 0; index < namesAndTypes.length; index += 2) {
+            if (body.length() > 0) {
+                body.append(',');
+            }
+            body.append('"').append(namesAndTypes[index]).append("\":{\"type\":\"")
+                    .append(namesAndTypes[index + 1]).append("\"}");
+        }
+        return "{\"type\":\"object\",\"properties\":{" + body + "}}";
     }
 }
