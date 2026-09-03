@@ -31,9 +31,8 @@ import java.util.List;
 
 @Service
 public class MessageService {
-    private static final ObjectMapper JSON = new ObjectMapper();
-
     private final JDA jda;
+    private final ObjectMapper json;
 
     /**
      * The only directory {@code send_file} may read local paths from. Unset disables local
@@ -60,8 +59,9 @@ public class MessageService {
     @Value("${DISCORD_MCP_DOWNLOAD_ROOT:}")
     String downloadRoot;
 
-    public MessageService(JDA jda) {
+    public MessageService(JDA jda, ObjectMapper json) {
         this.jda = jda;
+        this.json = json;
     }
 
     /**
@@ -385,7 +385,7 @@ public class MessageService {
             throw new IllegalArgumentException("Message not found by messageId");
         }
         boolean contentAvailable = isMessageContentAvailable(message);
-        return JSON.writeValueAsString(new MessageSnapshot(
+        return json.writeValueAsString(new MessageSnapshot(
                 guildChannel.getGuild().getId(),
                 guildChannel.getId(),
                 message.getId(),
@@ -1082,6 +1082,9 @@ public class MessageService {
                     String authorName = m.getAuthor().getName();
                     String authorId = m.getAuthor().getId();
                     String timestamp = m.getTimeCreated().toString();
+                    // Availability follows the same rendered representation returned below. This
+                    // deliberately errs on the side of reporting unavailable when raw content is
+                    // present but Discord/JDA renders no display content for this list response.
                     String displayContent = m.getContentDisplay();
                     boolean contentAvailable = isMessageContentAvailable(m, displayContent);
                     String content = contentAvailable ? displayContent : null;

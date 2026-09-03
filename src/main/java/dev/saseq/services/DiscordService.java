@@ -12,15 +12,15 @@ import tools.jackson.databind.ObjectMapper;
 @Service
 public class DiscordService {
 
-    private static final ObjectMapper JSON = new ObjectMapper();
-
     private final JDA jda;
+    private final ObjectMapper json;
 
     @Value("${DISCORD_GUILD_ID:}")
     private String defaultGuildId;
 
-    public DiscordService(JDA jda) {
+    public DiscordService(JDA jda, ObjectMapper json) {
         this.jda = jda;
+        this.json = json;
     }
 
     /**
@@ -43,7 +43,7 @@ public class DiscordService {
             throw new IllegalArgumentException("Discord server not found by guildId");
         }
         var self = jda.getSelfUser();
-        return JSON.writeValueAsString(new BotSnapshot(self.getId(), self.getName(), guild.getId()));
+        return json.writeValueAsString(new BotSnapshot(self.getId(), self.getName(), guild.getId()));
     }
 
     private record BotSnapshot(String botUserId, String botName, String guildId) {

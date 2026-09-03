@@ -8,6 +8,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import tools.jackson.databind.ObjectMapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -33,7 +34,7 @@ class DiscordLiveIntegrationTest {
                 "DISCORD_GUILD_ID must identify a guild visible to the bot");
 
         userService = new UserService(jda);
-        messageService = new MessageService(jda);
+        messageService = new MessageService(jda, new ObjectMapper());
     }
 
     @AfterAll

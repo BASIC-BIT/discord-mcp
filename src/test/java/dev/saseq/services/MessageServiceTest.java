@@ -16,6 +16,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.MockedStatic;
+import tools.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -48,7 +49,7 @@ class MessageServiceTest {
     @BeforeEach
     void setUp() {
         jda = mock(JDA.class);
-        messageService = new MessageService(jda);
+        messageService = new MessageService(jda, new ObjectMapper());
     }
 
     @Test

@@ -274,9 +274,14 @@ public final class McpAccessPolicy {
     }
 
     static boolean usesLargeArgumentBudget(String toolName, Set<String> declaredArguments) {
+        return !largePayloadArguments(toolName, declaredArguments).isEmpty();
+    }
+
+    private static Set<String> largePayloadArguments(String toolName,
+                                                     Set<String> declaredArguments) {
         return declaredArguments.stream()
-                .map(argument -> toolName + "." + argument)
-                .anyMatch(LARGE_PAYLOAD_ARGUMENTS::contains);
+                .filter(argument -> LARGE_PAYLOAD_ARGUMENTS.contains(toolName + "." + argument))
+                .collect(Collectors.toUnmodifiableSet());
     }
 
     ToolCallbackProvider apply(ToolCallbackProvider rawProvider) {
@@ -422,6 +427,8 @@ public final class McpAccessPolicy {
         private final Set<String> declaredArguments;
         private final Set<String> policyArguments;
         private final ObjectMapper policyArgumentObjectMapper;
+        private final Set<String> largePayloadArguments;
+        private final boolean ordinaryArguments;
 
         private GuildScopedToolCallback(ToolCallback delegate, Set<String> declaredArguments) {
             this.delegate = delegate;
@@ -436,9 +443,11 @@ public final class McpAccessPolicy {
                 selected.add("maxUses");
             }
             this.policyArguments = Set.copyOf(selected);
-            this.policyArgumentObjectMapper = usesLargeArgumentBudget(
-                    delegate.getToolDefinition().name(), declaredArguments)
-                    ? argumentObjectMapper : ordinaryArgumentObjectMapper;
+            String toolName = delegateDefinition.name();
+            this.largePayloadArguments = largePayloadArguments(toolName, declaredArguments);
+            this.ordinaryArguments = largePayloadArguments.isEmpty();
+            this.policyArgumentObjectMapper = ordinaryArguments
+                    ? ordinaryArgumentObjectMapper : argumentObjectMapper;
         }
 
         @Override
@@ -463,7 +472,8 @@ public final class McpAccessPolicy {
 
         private String enforceGuildScope(String arguments) {
             ParsedPolicyArguments parsedPolicy = parsePolicyArguments(
-                    arguments, declaredArguments, policyArguments, policyArgumentObjectMapper);
+                    arguments, declaredArguments, policyArguments, policyArgumentObjectMapper,
+                    ordinaryArguments, largePayloadArguments);
             Map<String, TargetArgument> parsed = parsedPolicy.arguments();
             Set<String> guildIds = resolveGuildIds(parsed, declaredArguments);
             if (guildIds.isEmpty()) {
@@ -588,7 +598,8 @@ public final class McpAccessPolicy {
 
     private ParsedPolicyArguments parsePolicyArguments(
             String arguments, Set<String> declaredArguments, Set<String> policyArguments,
-            ObjectMapper parserObjectMapper) {
+            ObjectMapper parserObjectMapper, boolean ordinaryArguments,
+            Set<String> largePayloadArguments) {
         if (arguments == null || arguments.isBlank() || "null".equals(arguments.strip())) {
             return new ParsedPolicyArguments(Map.of(), "{}");
         }
@@ -597,7 +608,7 @@ public final class McpAccessPolicy {
             // copied into a tree. Ordinary tools have no large-string contract, so force a
             // bounded validation pass before decoding any target value.
             String validatedJson = arguments;
-            if (parserObjectMapper == ordinaryArgumentObjectMapper) {
+            if (ordinaryArguments) {
                 JsonNode validated = parserObjectMapper.readTree(arguments);
                 if (validated == null || !validated.isObject()) {
                     throw new IllegalArgumentException("Tool arguments must be a JSON object");
@@ -637,7 +648,7 @@ public final class McpAccessPolicy {
                                 ? parser.getText() : null;
                         parsed.put(field, new TargetArgument(valueToken, text));
                     }
-                    parser.skipChildren();
+                    consumeArgumentValue(parser, field, largePayloadArguments.contains(field));
                 }
                 if (parser.nextToken() != null) {
                     throw new IllegalArgumentException("Tool arguments must contain one JSON object");
@@ -655,6 +666,35 @@ public final class McpAccessPolicy {
                     "Tool arguments exceed the maximum supported size", error);
         } catch (RuntimeException error) {
             throw new IllegalArgumentException("Tool arguments are not valid JSON", error);
+        }
+    }
+
+    private static void consumeArgumentValue(JsonParser parser, String field,
+                                             boolean largePayload) {
+        if (largePayload) {
+            parser.skipChildren();
+            return;
+        }
+        JsonToken token = parser.currentToken();
+        int depth = token == JsonToken.START_OBJECT || token == JsonToken.START_ARRAY ? 1 : 0;
+        while (true) {
+            if (token == JsonToken.VALUE_STRING
+                    && parser.getTextLength() > MAX_ORDINARY_ARGUMENT_STRING_CHARACTERS) {
+                throw new IllegalArgumentException(field
+                        + " exceeds the maximum supported size for a non-payload argument");
+            }
+            if (depth == 0) {
+                return;
+            }
+            token = parser.nextToken();
+            if (token == null) {
+                throw new IllegalArgumentException("Tool arguments are not valid JSON");
+            }
+            if (token == JsonToken.START_OBJECT || token == JsonToken.START_ARRAY) {
+                depth++;
+            } else if (token == JsonToken.END_OBJECT || token == JsonToken.END_ARRAY) {
+                depth--;
+            }
         }
     }
 

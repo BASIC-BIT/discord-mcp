@@ -27,7 +27,6 @@ import org.springframework.context.annotation.Configuration;
 
 import java.util.EnumSet;
 import java.util.Set;
-import java.util.function.IntConsumer;
 
 @Configuration
 public class DiscordMcpConfig {
@@ -65,22 +64,19 @@ public class DiscordMcpConfig {
                 emojiService,
                 forumService
         ).build();
-        return applyAccessPolicy(accessPolicy, rawProvider, System::exit);
+        return applyAccessPolicy(accessPolicy, rawProvider);
     }
 
     static ToolCallbackProvider applyAccessPolicy(McpAccessPolicy accessPolicy,
-                                                   ToolCallbackProvider rawProvider,
-                                                   IntConsumer exit) {
+                                                   ToolCallbackProvider rawProvider) {
         try {
             return accessPolicy.apply(rawProvider);
         } catch (McpAccessPolicy.PolicyStartupException error) {
-            exit.accept(1);
             throw error;
         } catch (RuntimeException error) {
             System.err.println("ERROR: Discord tool access policy could not initialize: "
                     + (error.getMessage() != null
                         ? error.getMessage() : error.getClass().getSimpleName()));
-            exit.accept(1);
             throw error;
         }
     }
@@ -94,30 +90,23 @@ public class DiscordMcpConfig {
                    @Value("${DISCORD_MCP_ALLOWED_TOOLS:}") String allowedTools,
                    @Value("${DISCORD_GUILD_ID:}") String defaultGuildId)
             throws InterruptedException {
-        try {
-            McpAccessPolicy.validateConfiguration(allowedGuilds, allowedTools, defaultGuildId);
-        } catch (IllegalArgumentException error) {
-            System.exit(1);
-            throw error;
-        }
+        McpAccessPolicy.validateConfiguration(allowedGuilds, allowedTools, defaultGuildId);
         boolean messageContentEnabled;
         try {
             messageContentEnabled = parseMessageContentOptIn(enableMessageContent);
         } catch (IllegalArgumentException error) {
             System.err.println("ERROR: " + error.getMessage());
-            System.exit(1);
             throw error;
         }
         if (token == null || token.isEmpty()) {
             System.err.println("ERROR: The environment variable DISCORD_TOKEN is not set. Please set it to run the application properly.");
-            System.exit(1);
+            throw new IllegalStateException("DISCORD_TOKEN is not set");
         }
         String normalizedExpectedBotId;
         try {
             normalizedExpectedBotId = normalizeExpectedBotId(expectedBotId);
         } catch (IllegalArgumentException error) {
             System.err.println("ERROR: " + error.getMessage());
-            System.exit(1);
             throw error;
         }
         JDA jda;
@@ -132,13 +121,11 @@ public class DiscordMcpConfig {
             // sees the process exit and reports an opaque transport error (-32000). Echo an actionable
             // summary to stderr, which MCP clients capture and surface in their logs.
             reportJdaStartupFailure(e);
-            System.exit(1);
-            throw e; // unreachable (System.exit does not return), but required to satisfy the compiler
+            throw e;
         }
         if (!botIdMatches(normalizedExpectedBotId, jda.getSelfUser().getId())) {
             jda.shutdownNow();
             System.err.println("ERROR: DISCORD_EXPECTED_BOT_ID does not match the authenticated bot.");
-            System.exit(1);
             throw new IllegalStateException("DISCORD_EXPECTED_BOT_ID mismatch");
         }
         return jda;

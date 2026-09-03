@@ -201,51 +201,39 @@ Default MCP endpoint URL (HTTP profile): `http://localhost:8085/mcp`
 
 ### Optional deployment access guardrails
 
-The server exposes its original tool surface when the following variables are unset. Deployments
-that share one bot across multiple Discord servers can add narrow, application-enforced limits:
+The server exposes its original tool surface when these variables are unset. For the common
+one-guild deployment, set all three:
 
-- `DISCORD_MCP_ALLOWED_GUILDS`: comma-separated guild IDs. Exported tools must declare a `guildId`
-  or a channel-like target that the JDA cache resolves to an allowed guild. Calls fail closed when
-  a supplied target is uncached, malformed, or belongs to another guild. Archived threads and
-  forum posts may be absent from the JDA cache and therefore fail closed under this policy. Tools
-  with no guild-resolvable target are omitted with a startup diagnostic. This includes
-  direct-message tools, invite-by-ID tools, `delete_webhook`, and `send_webhook_message`.
-  Consequently a scoped deployment cannot inspect or revoke invites by default. `create_invite`,
-  `list_invites`, `create_webhook`, and `list_webhooks` are omitted by default because they can
-  return durable access credentials. They can be explicitly allowlisted only when the calling
-  client is trusted to handle those credentials outside this guild-scoped MCP surface. When
-  `create_invite` is explicitly exported, every call must supply positive `maxAge` and `maxUses`
-  values; the policy rejects a never-expiring age and Discord's unlimited-use default before
-  delegation. A scoped
-  deployment still cannot revoke an invite or send through or delete a webhook through this
-  server; use Discord directly for those operations. Treat allowing a create tool as a deliberate
-  create-without-revoke decision. A trusted calling client should still require human
-  confirmation and retain a manual Discord revocation path. If
-  `DISCORD_MCP_ALLOWED_TOOLS` explicitly requests an unresolvable tool, startup fails instead of
-  silently weakening the guild boundary. The same hard failure applies if a later jar changes an
-  explicitly allowlisted tool's target schema. Review the new schema before restarting the scoped
-  deployment; other allowlisted tools remain unavailable until configuration and code agree.
-  Under guild scoping, guild and channel target IDs must be JSON strings so 17-20 digit snowflakes
-  cannot be rounded by numeric JSON parsers; a schema that declares one of those targets as another
-  scalar type fails startup review instead of deferring the mismatch to every call. The policy
-  reads only target fields from the argument
-  stream, so a large upload is not copied into a second JSON tree merely to establish its guild.
-  Ordinary non-upload arguments are limited to 16,384 characters per string when guild scoping is
-  enabled. Large upload tools retain their separate documented limits.
-  Every argument name is pinned for its exact tool before a guild-scoped deployment will export
-  it, including aliases such as `inviteCode`, `webhookUrl`, and `filePath` that do not advertise ID
-  semantics. A tool with a new or unreviewed argument is omitted by default; startup fails if the
-  exact tool allowlist requests it. Guild-scoped calls also reject top-level arguments that are not
-  declared by the exported schema. The channel-target classifier is intentionally conservative:
-  channel-shaped names such as `crosspostMessageId` or `threadStarterMessageId` are treated as
-  channel IDs and will fail closed unless the argument is renamed or the classifier and review map
-  are deliberately extended for that tool.
-- `DISCORD_MCP_ALLOWED_TOOLS`: comma-separated exact tool names. Unknown names fail startup and
-  tools not named here are not exported to MCP clients. A whitespace-only value is invalid rather
-  than being treated as an unset allowlist. By itself, this variable only filters the original tool
-  surface; it does not add guild-scoped call rules such as the finite `create_invite` bounds. Set
-  `DISCORD_MCP_ALLOWED_GUILDS` as well when those guild-scoped protections are required.
-- `DISCORD_EXPECTED_BOT_ID`: refuses startup when a valid token authenticates a different bot.
+```bash
+export DISCORD_GUILD_ID=123456789012345678
+export DISCORD_MCP_ALLOWED_GUILDS=123456789012345678
+export DISCORD_MCP_ALLOWED_TOOLS=get_server_info,list_channels,read_messages
+```
+
+| Variable | Effect |
+| --- | --- |
+| `DISCORD_MCP_ALLOWED_GUILDS` | Restricts calls to comma-separated guild IDs. Every exported tool must expose a guild or cache-resolvable channel target. |
+| `DISCORD_MCP_ALLOWED_TOOLS` | Exports only the named tools. Unknown names fail startup. Alone, it filters tools but does not enable guild-scoped call rules. |
+| `DISCORD_EXPECTED_BOT_ID` | Refuses startup when the token authenticates a different bot. |
+
+Important guild-scope behavior:
+
+- Malformed, uncached, or out-of-scope targets fail closed. Archived threads and forum posts may
+  be absent from JDA's cache, so they can be denied even when they belong to an allowed guild.
+- Tools without a guild-resolvable target are omitted. This includes direct-message tools,
+  invite-by-ID tools, `delete_webhook`, and `send_webhook_message`.
+- `create_invite`, `list_invites`, `create_webhook`, and `list_webhooks` are omitted unless they
+  are explicitly allowlisted because they can return durable access credentials. Scoped
+  `create_invite` also requires positive `maxAge` and `maxUses`. Keep a manual Discord revocation
+  path when enabling a create-without-revoke capability.
+- Guild and channel IDs must be JSON strings. Every argument name and supported schema shape is
+  pinned per tool. New, changed, or undeclared arguments fail closed instead of silently widening
+  access.
+- Ordinary strings are limited to 16,384 characters. The reviewed payload fields
+  `send_file.fileData` and `create_emoji.image` retain the larger documented upload budget, while
+  every other argument on those tools keeps the ordinary limit.
+- The channel-target classifier is conservative. A newly introduced channel-shaped argument must
+  receive an explicit review before the tool can be exported.
 
 Guild-scoped schema review currently supports flat scalar tool arguments. A future structured,
 referenced, union, missing-type, or otherwise unknown property shape is omitted by default and

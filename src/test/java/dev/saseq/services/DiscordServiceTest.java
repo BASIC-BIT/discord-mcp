@@ -4,6 +4,7 @@ import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.SelfUser;
 import org.junit.jupiter.api.Test;
+import tools.jackson.databind.ObjectMapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -22,7 +23,8 @@ class DiscordServiceTest {
         when(self.getId()).thenReturn("123456789012345678");
         when(self.getName()).thenReturn("BASIC Ops");
 
-        String result = new DiscordService(jda).getBotInfo("987654321098765432");
+        String result = new DiscordService(jda, new ObjectMapper())
+                .getBotInfo("987654321098765432");
 
         assertThat(result).isEqualTo(
                 "{\"botUserId\":\"123456789012345678\",\"botName\":\"BASIC Ops\","

@@ -9,7 +9,6 @@ import tools.jackson.databind.ObjectMapper;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -18,40 +17,33 @@ import static org.mockito.Mockito.when;
 
 class DiscordMcpConfigTest {
     @Test
-    void lateAccessPolicyValidationUsesTheCleanStartupExitPath() {
+    void lateAccessPolicyValidationUsesSpringBootsNormalFailurePath() {
         ToolCallbackProvider rawProvider = mock(ToolCallbackProvider.class);
         when(rawProvider.getToolCallbacks()).thenReturn(new org.springframework.ai.tool.ToolCallback[0]);
         McpAccessPolicy policy = new McpAccessPolicy(mock(JDA.class), new ObjectMapper(),
                 "12345678901234567", "missing_tool", "");
-        AtomicInteger exitCode = new AtomicInteger();
-
-        assertThatThrownBy(() -> DiscordMcpConfig.applyAccessPolicy(
-                policy, rawProvider, exitCode::set))
+        assertThatThrownBy(() -> DiscordMcpConfig.applyAccessPolicy(policy, rawProvider))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("unknown tools");
-        assertThat(exitCode).hasValue(1);
     }
 
     @Test
-    void unexpectedToolSurfaceFailureUsesTheCleanStartupExitPath() {
+    void unexpectedToolSurfaceFailureUsesSpringBootsNormalFailurePath() {
         ToolCallbackProvider rawProvider = mock(ToolCallbackProvider.class);
         when(rawProvider.getToolCallbacks()).thenThrow(new IllegalArgumentException("broken surface"));
         McpAccessPolicy policy = new McpAccessPolicy(mock(JDA.class), new ObjectMapper(),
                 "12345678901234567", "", "");
-        AtomicInteger exitCode = new AtomicInteger();
         PrintStream original = System.err;
         ByteArrayOutputStream output = new ByteArrayOutputStream();
 
         try {
             System.setErr(new PrintStream(output, true, StandardCharsets.UTF_8));
-            assertThatThrownBy(() -> DiscordMcpConfig.applyAccessPolicy(
-                    policy, rawProvider, exitCode::set))
+            assertThatThrownBy(() -> DiscordMcpConfig.applyAccessPolicy(policy, rawProvider))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("broken surface");
         } finally {
             System.setErr(original);
         }
-        assertThat(exitCode).hasValue(1);
         assertThat(output.toString(StandardCharsets.UTF_8))
                 .contains("ERROR: Discord tool access policy could not initialize: broken surface");
     }
