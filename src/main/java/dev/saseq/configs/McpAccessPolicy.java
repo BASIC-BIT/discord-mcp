@@ -17,6 +17,7 @@ import tools.jackson.core.StreamReadFeature;
 import tools.jackson.core.exc.StreamConstraintsException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
 import java.util.Arrays;
@@ -52,7 +53,8 @@ public final class McpAccessPolicy {
             "create_invite", "list_invites", "create_webhook", "list_webhooks");
     private static final Set<String> SCALAR_SCHEMA_TYPES = Set.of(
             "string", "number", "integer", "boolean");
-    private static final Set<String> LARGE_PAYLOAD_ARGUMENTS = Set.of("image", "fileData");
+    private static final Set<String> LARGE_PAYLOAD_ARGUMENTS = Set.of(
+            "create_emoji.image", "send_file.fileData");
     private static final Set<String> REVIEWED_CHANNEL_ID_ARGUMENTS = Set.of(
             "add_reaction.channelId",
             "create_forum_channel.categoryId",
@@ -271,6 +273,12 @@ public final class McpAccessPolicy {
         return REVIEWED_ARGUMENTS.keySet();
     }
 
+    static boolean usesLargeArgumentBudget(String toolName, Set<String> declaredArguments) {
+        return declaredArguments.stream()
+                .map(argument -> toolName + "." + argument)
+                .anyMatch(LARGE_PAYLOAD_ARGUMENTS::contains);
+    }
+
     ToolCallbackProvider apply(ToolCallbackProvider rawProvider) {
         ToolCallback[] raw = rawProvider.getToolCallbacks();
         Set<String> available = Arrays.stream(raw)
@@ -386,7 +394,7 @@ public final class McpAccessPolicy {
             return null;
         }
         if ("create_invite".equals(toolName)) {
-            Set<String> missingBounds = Set.of("maxAge", "maxUses").stream()
+            Set<String> missingBounds = java.util.List.of("maxAge", "maxUses").stream()
                     .filter(bound -> !declared.contains(bound))
                     .collect(Collectors.toCollection(LinkedHashSet::new));
             if (!missingBounds.isEmpty()) {
@@ -418,15 +426,7 @@ public final class McpAccessPolicy {
         private GuildScopedToolCallback(ToolCallback delegate, Set<String> declaredArguments) {
             this.delegate = delegate;
             ToolDefinition delegateDefinition = delegate.getToolDefinition();
-            this.scopedDefinition = "create_invite".equals(delegateDefinition.name())
-                    ? ToolDefinition.builder()
-                        .name(delegateDefinition.name())
-                        .description(delegateDefinition.description()
-                                + " In a guild-scoped deployment, maxAge and maxUses are required "
-                                + "positive integers.")
-                        .inputSchema(delegateDefinition.inputSchema())
-                        .build()
-                    : delegateDefinition;
+            this.scopedDefinition = createScopedDefinition(delegateDefinition);
             this.declaredArguments = declaredArguments;
             Set<String> selected = declaredArguments.stream()
                     .filter(field -> "guildId".equals(field) || isGuildChannelArgument(field))
@@ -436,8 +436,8 @@ public final class McpAccessPolicy {
                 selected.add("maxUses");
             }
             this.policyArguments = Set.copyOf(selected);
-            this.policyArgumentObjectMapper = declaredArguments.stream()
-                    .anyMatch(LARGE_PAYLOAD_ARGUMENTS::contains)
+            this.policyArgumentObjectMapper = usesLargeArgumentBudget(
+                    delegate.getToolDefinition().name(), declaredArguments)
                     ? argumentObjectMapper : ordinaryArgumentObjectMapper;
         }
 
@@ -453,19 +453,18 @@ public final class McpAccessPolicy {
 
         @Override
         public String call(String arguments) {
-            enforceGuildScope(arguments);
-            return delegate.call(normalizeDelegateArguments(arguments));
+            return delegate.call(enforceGuildScope(arguments));
         }
 
         @Override
         public String call(String arguments, ToolContext toolContext) {
-            enforceGuildScope(arguments);
-            return delegate.call(normalizeDelegateArguments(arguments), toolContext);
+            return delegate.call(enforceGuildScope(arguments), toolContext);
         }
 
-        private void enforceGuildScope(String arguments) {
-            Map<String, TargetArgument> parsed = parsePolicyArguments(
+        private String enforceGuildScope(String arguments) {
+            ParsedPolicyArguments parsedPolicy = parsePolicyArguments(
                     arguments, declaredArguments, policyArguments, policyArgumentObjectMapper);
+            Map<String, TargetArgument> parsed = parsedPolicy.arguments();
             Set<String> guildIds = resolveGuildIds(parsed, declaredArguments);
             if (guildIds.isEmpty()) {
                 throw new IllegalArgumentException("A Discord guild or channel target is required");
@@ -477,15 +476,22 @@ public final class McpAccessPolicy {
                 requirePositiveInviteBound(parsed.get("maxAge"), "maxAge");
                 requirePositiveInviteBound(parsed.get("maxUses"), "maxUses");
             }
+            return normalizeDelegateArguments(parsedPolicy.validatedJson(), guildIds);
         }
 
-        private String normalizeDelegateArguments(String arguments) {
+        private String normalizeDelegateArguments(String arguments, Set<String> guildIds) {
             String normalized = normalizeAbsentArguments(arguments);
             if (!"create_invite".equals(delegate.getToolDefinition().name())) {
                 return normalized;
             }
             try {
                 ObjectNode root = (ObjectNode) ordinaryArgumentObjectMapper.readTree(normalized);
+                JsonNode guildId = root.get("guildId");
+                if ((guildId == null || guildId.isNull()
+                        || (guildId.isTextual() && guildId.asText().isEmpty()))
+                        && guildIds.size() == 1) {
+                    root.put("guildId", guildIds.iterator().next());
+                }
                 for (String name : Set.of("maxAge", "maxUses")) {
                     JsonNode value = root.get(name);
                     if (value != null && value.isIntegralNumber()) {
@@ -496,6 +502,41 @@ public final class McpAccessPolicy {
             } catch (RuntimeException error) {
                 throw new IllegalArgumentException("Tool arguments are not valid JSON", error);
             }
+        }
+    }
+
+    private ToolDefinition createScopedDefinition(ToolDefinition delegateDefinition) {
+        if (!"create_invite".equals(delegateDefinition.name())) {
+            return delegateDefinition;
+        }
+        try {
+            ObjectNode schema = (ObjectNode) objectMapper.readTree(delegateDefinition.inputSchema());
+            Set<String> requiredNames = new LinkedHashSet<>();
+            JsonNode existingRequired = schema.get("required");
+            if (existingRequired != null && existingRequired.isArray()) {
+                existingRequired.forEach(value -> requiredNames.add(value.asText()));
+            }
+            requiredNames.add("maxAge");
+            requiredNames.add("maxUses");
+            ArrayNode required = schema.putArray("required");
+            requiredNames.forEach(required::add);
+
+            ObjectNode properties = (ObjectNode) schema.get("properties");
+            ((ObjectNode) properties.get("maxAge")).put("description",
+                    "Duration in seconds before expiry. Required as a positive integer in a "
+                            + "guild-scoped deployment; 0 is rejected.");
+            ((ObjectNode) properties.get("maxUses")).put("description",
+                    "Maximum number of uses. Required as a positive integer in a guild-scoped "
+                            + "deployment; 0 is rejected.");
+            return ToolDefinition.builder()
+                    .name(delegateDefinition.name())
+                    .description(delegateDefinition.description()
+                            + " In a guild-scoped deployment, maxAge and maxUses are required "
+                            + "positive integers.")
+                    .inputSchema(objectMapper.writeValueAsString(schema))
+                    .build();
+        } catch (RuntimeException error) {
+            throw startupError("Tool create_invite scoped schema could not be generated");
         }
     }
 
@@ -545,21 +586,23 @@ public final class McpAccessPolicy {
         return guildIds;
     }
 
-    private Map<String, TargetArgument> parsePolicyArguments(
+    private ParsedPolicyArguments parsePolicyArguments(
             String arguments, Set<String> declaredArguments, Set<String> policyArguments,
             ObjectMapper parserObjectMapper) {
         if (arguments == null || arguments.isBlank() || "null".equals(arguments.strip())) {
-            return Map.of();
+            return new ParsedPolicyArguments(Map.of(), "{}");
         }
         try {
             // Upload-capable tools keep the streaming path so their documented payloads are not
             // copied into a tree. Ordinary tools have no large-string contract, so force a
             // bounded validation pass before decoding any target value.
+            String validatedJson = arguments;
             if (parserObjectMapper == ordinaryArgumentObjectMapper) {
                 JsonNode validated = parserObjectMapper.readTree(arguments);
                 if (validated == null || !validated.isObject()) {
                     throw new IllegalArgumentException("Tool arguments must be a JSON object");
                 }
+                validatedJson = parserObjectMapper.writeValueAsString(validated);
             }
             Map<String, TargetArgument> parsed = new LinkedHashMap<>();
             Set<String> undeclared = new LinkedHashSet<>();
@@ -604,7 +647,7 @@ public final class McpAccessPolicy {
                 throw new IllegalArgumentException(
                         "Tool arguments contain undeclared properties: " + undeclared);
             }
-            return parsed;
+            return new ParsedPolicyArguments(Map.copyOf(parsed), validatedJson);
         } catch (IllegalArgumentException error) {
             throw error;
         } catch (StreamConstraintsException error) {
@@ -616,6 +659,10 @@ public final class McpAccessPolicy {
     }
 
     private record TargetArgument(JsonToken token, String text) {
+    }
+
+    private record ParsedPolicyArguments(Map<String, TargetArgument> arguments,
+                                         String validatedJson) {
     }
 
     private static void requirePositiveInviteBound(TargetArgument value, String name) {

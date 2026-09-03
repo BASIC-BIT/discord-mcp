@@ -25,6 +25,7 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.ai.tool.method.MethodToolCallbackProvider;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 import java.io.ByteArrayOutputStream;
@@ -32,6 +33,7 @@ import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
@@ -133,6 +135,18 @@ class McpAccessPolicyTest {
     }
 
     @Test
+    void largeArgumentBudgetRequiresAReviewedToolQualifiedPayload() {
+        assertThat(McpAccessPolicy.usesLargeArgumentBudget(
+                "send_file", Set.of("channelId", "fileData", "fileName"))).isTrue();
+        assertThat(McpAccessPolicy.usesLargeArgumentBudget(
+                "create_emoji", Set.of("guildId", "image", "name"))).isTrue();
+        assertThat(McpAccessPolicy.usesLargeArgumentBudget(
+                "send_message", Set.of("channelId", "image"))).isFalse();
+        assertThat(McpAccessPolicy.usesLargeArgumentBudget(
+                "send_file", Set.of("channelId", "imageUrl"))).isFalse();
+    }
+
+    @Test
     void guildScopeRejectsDuplicateTargetKeysBeforeDelegation() {
         JDA jda = mock(JDA.class);
         stubChannel(jda, CHANNEL, ALLOWED_GUILD);
@@ -163,6 +177,21 @@ class McpAccessPolicyTest {
                 .hasMessageContaining("undeclared")
                 .hasMessageContaining("unexpected");
         assertThat(received.get()).isNull();
+    }
+
+    @Test
+    void ordinaryScopedCallsDelegateTheValidatedCanonicalDocument() {
+        JDA jda = mock(JDA.class);
+        stubChannel(jda, CHANNEL, ALLOWED_GUILD);
+        AtomicReference<String> received = new AtomicReference<>();
+        ToolCallback exposed = only(policy(jda, ALLOWED_GUILD, "send_message", "")
+                .apply(ToolCallbackProvider.from(callback("send_message",
+                        schema("channelId", "message"), received))));
+
+        assertThat(exposed.call("{ \"channelId\" : \"" + CHANNEL
+                + "\", \"message\" : \"hello\" } ")).isEqualTo("called");
+        assertThat(received).hasValue("{\"channelId\":\"" + CHANNEL
+                + "\",\"message\":\"hello\"}");
     }
 
     @Test
@@ -371,6 +400,17 @@ class McpAccessPolicyTest {
                 .contains("guild-scoped")
                 .contains("maxAge")
                 .contains("maxUses");
+        JsonNode scopedSchema = new ObjectMapper().readTree(
+                exposed.getToolDefinition().inputSchema());
+        assertThat(scopedSchema.get("required").toString())
+                .contains("maxAge")
+                .contains("maxUses");
+        assertThat(scopedSchema.get("properties").get("maxAge").get("description").asText())
+                .contains("positive integer")
+                .contains("0 is rejected");
+        assertThat(scopedSchema.get("properties").get("maxUses").get("description").asText())
+                .contains("positive integer")
+                .contains("0 is rejected");
     }
 
     @Test
@@ -421,6 +461,11 @@ class McpAccessPolicyTest {
         assertThat(exposed.call(numericBounds)).isEqualTo("called");
         assertThat(received.get()).contains("\"maxAge\":\"86400\"")
                 .contains("\"maxUses\":\"10\"");
+
+        String channelOnly = "{\"channelId\":\"" + CHANNEL
+                + "\",\"maxAge\":\"86400\",\"maxUses\":\"10\"}";
+        assertThat(exposed.call(channelOnly)).isEqualTo("called");
+        assertThat(received.get()).contains("\"guildId\":\"" + ALLOWED_GUILD + "\"");
     }
 
     @Test

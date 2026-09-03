@@ -519,9 +519,9 @@ Recommended (HTTP singleton mode):
 }
 ```
 
-Legacy mode (stdio, starts a new process/container per client session). Replace the optional
-guild placeholder with a real ID, or remove that `-e` pair entirely; the value is inline because
-MCP clients do not all forward the invoking shell's environment:
+Legacy mode (stdio, starts a new process/container per client session). Add a
+`DISCORD_GUILD_ID=<REAL_SERVER_ID>` environment pair only when a default guild is wanted; MCP
+clients do not all forward the invoking shell's environment:
 ```json
 {
   "mcpServers": {
@@ -533,8 +533,6 @@ MCP clients do not all forward the invoking shell's environment:
         "-i",
         "-e",
         "DISCORD_TOKEN=<YOUR_DISCORD_BOT_TOKEN>",
-        "-e",
-        "DISCORD_GUILD_ID=<OPTIONAL_DEFAULT_SERVER_ID>",
         "saseq/discord-mcp:latest"
       ]
     }
@@ -554,7 +552,7 @@ claude mcp add discord-mcp --transport http http://localhost:8085/mcp
 
 Legacy mode (stdio, starts a new process/container per client session):
 ```bash
-claude mcp add discord-mcp -- docker run --rm -i -e DISCORD_TOKEN=<YOUR_DISCORD_BOT_TOKEN> -e DISCORD_GUILD_ID=<OPTIONAL_DEFAULT_SERVER_ID> saseq/discord-mcp:latest
+claude mcp add discord-mcp -- docker run --rm -i -e DISCORD_TOKEN=<YOUR_DISCORD_BOT_TOKEN> saseq/discord-mcp:latest
 ```
 
 </details>
@@ -658,8 +656,6 @@ STDIO local config (Default, legacy):
         "-i",
         "-e",
         "DISCORD_TOKEN=<YOUR_DISCORD_BOT_TOKEN>",
-        "-e",
-        "DISCORD_GUILD_ID=<OPTIONAL_DEFAULT_SERVER_ID>",
         "saseq/discord-mcp:latest"
       ]
     }
