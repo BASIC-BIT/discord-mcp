@@ -242,7 +242,9 @@ that share one bot across multiple Discord servers can add narrow, application-e
   are deliberately extended for that tool.
 - `DISCORD_MCP_ALLOWED_TOOLS`: comma-separated exact tool names. Unknown names fail startup and
   tools not named here are not exported to MCP clients. A whitespace-only value is invalid rather
-  than being treated as an unset allowlist.
+  than being treated as an unset allowlist. By itself, this variable only filters the original tool
+  surface; it does not add guild-scoped call rules such as the finite `create_invite` bounds. Set
+  `DISCORD_MCP_ALLOWED_GUILDS` as well when those guild-scoped protections are required.
 - `DISCORD_EXPECTED_BOT_ID`: refuses startup when a valid token authenticates a different bot.
 
 Guild-scoped schema review currently supports flat scalar tool arguments. A future structured,

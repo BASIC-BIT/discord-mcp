@@ -73,7 +73,13 @@ public class DiscordMcpConfig {
                                                    IntConsumer exit) {
         try {
             return accessPolicy.apply(rawProvider);
-        } catch (IllegalArgumentException error) {
+        } catch (McpAccessPolicy.PolicyStartupException error) {
+            exit.accept(1);
+            throw error;
+        } catch (RuntimeException error) {
+            System.err.println("ERROR: Discord tool access policy could not initialize: "
+                    + (error.getMessage() != null
+                        ? error.getMessage() : error.getClass().getSimpleName()));
             exit.accept(1);
             throw error;
         }

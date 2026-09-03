@@ -117,6 +117,22 @@ class McpAccessPolicyTest {
     }
 
     @Test
+    void declaredUploadPayloadUsesTheLargeArgumentBudget() {
+        JDA jda = mock(JDA.class);
+        stubChannel(jda, CHANNEL, ALLOWED_GUILD);
+        AtomicInteger calls = new AtomicInteger();
+        ToolCallback exposed = only(policy(jda, ALLOWED_GUILD, "send_file", "")
+                .apply(ToolCallbackProvider.from(countingCallback(
+                        "send_file", schema("channelId", "fileData", "fileName"), calls))));
+
+        String arguments = "{\"channelId\":\"" + CHANNEL + "\",\"fileData\":\""
+                + "x".repeat(McpAccessPolicy.MAX_ORDINARY_ARGUMENT_STRING_CHARACTERS + 1)
+                + "\",\"fileName\":\"test.bin\"}";
+        assertThat(exposed.call(arguments)).isEqualTo("called");
+        assertThat(calls).hasValue(1);
+    }
+
+    @Test
     void guildScopeRejectsDuplicateTargetKeysBeforeDelegation() {
         JDA jda = mock(JDA.class);
         stubChannel(jda, CHANNEL, ALLOWED_GUILD);

@@ -52,8 +52,7 @@ public final class McpAccessPolicy {
             "create_invite", "list_invites", "create_webhook", "list_webhooks");
     private static final Set<String> SCALAR_SCHEMA_TYPES = Set.of(
             "string", "number", "integer", "boolean");
-    private static final Set<String> LARGE_ARGUMENT_TOOLS = Set.of(
-            "create_emoji", "send_file");
+    private static final Set<String> LARGE_PAYLOAD_ARGUMENTS = Set.of("image", "fileData");
     private static final Set<String> REVIEWED_CHANNEL_ID_ARGUMENTS = Set.of(
             "add_reaction.channelId",
             "create_forum_channel.categoryId",
@@ -437,8 +436,8 @@ public final class McpAccessPolicy {
                 selected.add("maxUses");
             }
             this.policyArguments = Set.copyOf(selected);
-            this.policyArgumentObjectMapper = LARGE_ARGUMENT_TOOLS.contains(
-                    delegate.getToolDefinition().name())
+            this.policyArgumentObjectMapper = declaredArguments.stream()
+                    .anyMatch(LARGE_PAYLOAD_ARGUMENTS::contains)
                     ? argumentObjectMapper : ordinaryArgumentObjectMapper;
         }
 
@@ -758,8 +757,14 @@ public final class McpAccessPolicy {
                 ? "{}" : arguments;
     }
 
-    private static IllegalArgumentException startupError(String message) {
+    private static PolicyStartupException startupError(String message) {
         System.err.println("ERROR: " + message);
-        return new IllegalArgumentException(message);
+        return new PolicyStartupException(message);
+    }
+
+    static final class PolicyStartupException extends IllegalArgumentException {
+        private PolicyStartupException(String message) {
+            super(message);
+        }
     }
 }
