@@ -228,8 +228,9 @@ Important guild-scope behavior:
   are explicitly allowlisted because they can return durable access credentials. Scoped
   `create_invite` also requires positive `maxAge` and `maxUses`. Keep a manual Discord revocation
   path when enabling a create-without-revoke capability.
-- `send_file` and `download_attachment` are also omitted unless explicitly allowlisted because
-  they read from or write to the deployment host when their separate root settings are enabled.
+- `send_file`, `download_attachment`, and `set_guild_scheduled_event_image` are also omitted
+  unless explicitly allowlisted because they read from or write to the deployment host when
+  their separate root settings are enabled.
 - Guild and channel IDs must be JSON strings. Every argument name and supported schema shape is
   pinned per tool. New, changed, or undeclared arguments fail closed instead of silently widening
   access.

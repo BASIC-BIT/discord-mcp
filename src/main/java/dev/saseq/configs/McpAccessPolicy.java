@@ -57,9 +57,9 @@ public final class McpAccessPolicy {
                     + "(archived threads and forum posts may be absent from the channel cache)";
     private static final Set<String> EXPLICIT_ONLY_WHEN_GUILD_SCOPED = Set.of(
             "create_invite", "list_invites", "create_webhook", "list_webhooks",
-            "send_file", "download_attachment");
+            "send_file", "download_attachment", "set_guild_scheduled_event_image");
     private static final Set<String> FILESYSTEM_TOOLS = Set.of(
-            "send_file", "download_attachment");
+            "send_file", "download_attachment", "set_guild_scheduled_event_image");
     private static final Set<String> SCALAR_SCHEMA_TYPES = Set.of(
             "string", "number", "integer", "boolean");
     private static final Map<String, Integer> LARGE_PAYLOAD_ARGUMENT_LIMITS = Map.of(
@@ -470,7 +470,7 @@ public final class McpAccessPolicy {
                         largePayloadArguments.values().stream().mapToLong(Integer::longValue)
                                 .max().orElseThrow() + 100_000L);
             this.scopedDefinition = createScopedDefinition(delegateDefinition,
-                    defaultGuildId == null && policyArguments.equals(Set.of("guildId")));
+                    defaultGuildId == null && policyArguments.contains("guildId"));
         }
 
         @Override
@@ -674,6 +674,12 @@ public final class McpAccessPolicy {
                         if (undeclared.size() < MAX_UNDECLARED_ARGUMENTS_REPORTED) {
                             undeclared.add(abbreviateArgumentName(field));
                         }
+                    } else if (valueToken == JsonToken.START_OBJECT
+                            || valueToken == JsonToken.START_ARRAY) {
+                        // Startup review admits only scalar-typed declared arguments, so a
+                        // structured value here is malformed and must not be streamed through.
+                        throw new IllegalArgumentException(field
+                                + " must be a JSON scalar value");
                     }
                     if (policyArguments.contains(field)) {
                         // Jackson must decode a string token to report its length. The global read

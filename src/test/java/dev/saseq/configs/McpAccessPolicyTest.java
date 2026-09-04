@@ -186,6 +186,28 @@ class McpAccessPolicyTest {
     }
 
     @Test
+    void declaredScalarArgumentRejectsAStructuredValueBeforeDelegation() {
+        JDA jda = mock(JDA.class);
+        stubChannel(jda, CHANNEL, ALLOWED_GUILD);
+        AtomicInteger calls = new AtomicInteger();
+        ToolCallback exposed = only(policy(jda, ALLOWED_GUILD, "send_file", "")
+                .apply(ToolCallbackProvider.from(countingCallback(
+                        "send_file", schema("channelId", "fileData", "fileName"), calls))));
+
+        assertThatThrownBy(() -> exposed.call("{\"channelId\":\"" + CHANNEL
+                + "\",\"fileData\":\"small\",\"fileName\":[\"a\",\"a\"]}"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("fileName")
+                .hasMessageContaining("scalar");
+        assertThatThrownBy(() -> exposed.call("{\"channelId\":\"" + CHANNEL
+                + "\",\"fileData\":\"small\",\"fileName\":{\"a\":\"a\"}}"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("fileName")
+                .hasMessageContaining("scalar");
+        assertThat(calls).hasValue(0);
+    }
+
+    @Test
     void largePayloadToolRejectsAnOversizedNestedPropertyName() {
         JDA jda = mock(JDA.class);
         stubChannel(jda, CHANNEL, ALLOWED_GUILD);
@@ -194,13 +216,15 @@ class McpAccessPolicyTest {
                 .apply(ToolCallbackProvider.from(countingCallback(
                         "send_file", schema("channelId", "fileData", "fileName"), calls))));
 
+        // Declared arguments are scalar-only, so an undeclared field is the only container a
+        // nested property name can arrive in; its size must still be bounded before reporting.
         String arguments = "{\"channelId\":\"" + CHANNEL
-                + "\",\"fileData\":\"small\",\"fileName\":{\""
+                + "\",\"fileData\":\"small\",\"extra\":{\""
                 + "x".repeat(McpAccessPolicy.MAX_ORDINARY_ARGUMENT_STRING_CHARACTERS + 1)
                 + "\":1}}";
         assertThatThrownBy(() -> exposed.call(arguments))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("fileName")
+                .hasMessageContaining("extra")
                 .hasMessageContaining("maximum supported size");
         assertThat(calls).hasValue(0);
     }
@@ -484,6 +508,21 @@ class McpAccessPolicyTest {
     }
 
     @Test
+    void scheduledEventImageRequiresExplicitOptInWhenGuildScoped() {
+        ToolCallback setImage = callback("set_guild_scheduled_event_image",
+                schema("guildId", "eventId", "imageUrl", "filePath"), new AtomicReference<>());
+
+        assertThat(policy(mock(JDA.class), ALLOWED_GUILD, "", "")
+                .apply(ToolCallbackProvider.from(setImage))
+                .getToolCallbacks()).isEmpty();
+        assertThat(policy(mock(JDA.class), ALLOWED_GUILD,
+                "set_guild_scheduled_event_image", "")
+                .apply(ToolCallbackProvider.from(setImage)).getToolCallbacks())
+                .extracting(callback -> callback.getToolDefinition().name())
+                .containsExactly("set_guild_scheduled_event_image");
+    }
+
+    @Test
     void inviteCreationRequiresExplicitOptInWhenGuildScoped() {
         ToolCallback createInvite = callback("create_invite",
                 schema("guildId", "channelId", "maxAge", "maxUses", "temporary", "unique"),
@@ -549,6 +588,24 @@ class McpAccessPolicyTest {
                 "list_channels", "").apply(ToolCallbackProvider.from(listChannels)));
         ToolCallback withDefault = only(policy(mock(JDA.class), ALLOWED_GUILD,
                 "list_channels", ALLOWED_GUILD).apply(ToolCallbackProvider.from(listChannels)));
+
+        JsonNode withoutDefaultSchema = new ObjectMapper().readTree(
+                withoutDefault.getToolDefinition().inputSchema());
+        JsonNode withDefaultSchema = new ObjectMapper().readTree(
+                withDefault.getToolDefinition().inputSchema());
+        assertThat(withoutDefaultSchema.get("required").toString()).contains("guildId");
+        assertThat(withDefaultSchema.get("required")).isNull();
+    }
+
+    @Test
+    void mixedTargetToolSchemaRequiresGuildWhenNoDefaultExists() {
+        ToolCallback deleteChannel = callback("delete_channel",
+                schema("guildId", "channelId", "reason"), new AtomicReference<>());
+
+        ToolCallback withoutDefault = only(policy(mock(JDA.class), ALLOWED_GUILD,
+                "delete_channel", "").apply(ToolCallbackProvider.from(deleteChannel)));
+        ToolCallback withDefault = only(policy(mock(JDA.class), ALLOWED_GUILD,
+                "delete_channel", ALLOWED_GUILD).apply(ToolCallbackProvider.from(deleteChannel)));
 
         JsonNode withoutDefaultSchema = new ObjectMapper().readTree(
                 withoutDefault.getToolDefinition().inputSchema());
@@ -852,7 +909,7 @@ class McpAccessPolicyTest {
                         "modify_forum_post", "modify_voice_state", "move_channel",
                         "move_member", "read_messages", "remove_reaction", "remove_role",
                         "remove_timeout", "search_members", "send_message",
-                        "set_guild_scheduled_event_image", "set_nickname", "timeout_member",
+                        "set_nickname", "timeout_member",
                         "unban_member", "upsert_member_channel_permissions",
                         "upsert_role_channel_permissions");
     }
