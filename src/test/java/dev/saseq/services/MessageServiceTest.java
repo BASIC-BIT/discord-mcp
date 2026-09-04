@@ -3,9 +3,12 @@ package dev.saseq.services;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.MessageHistory;
+import net.dv8tion.jda.api.entities.SelfUser;
 import net.dv8tion.jda.api.entities.User;
+import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
 import net.dv8tion.jda.api.requests.RestAction;
+import net.dv8tion.jda.api.requests.GatewayIntent;
 import net.dv8tion.jda.api.requests.restaction.MessageCreateAction;
 import net.dv8tion.jda.api.utils.FileUpload;
 import org.junit.jupiter.api.Assumptions;
@@ -13,6 +16,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.MockedStatic;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.PropertyNamingStrategies;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -21,6 +27,7 @@ import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.time.OffsetDateTime;
+import java.util.EnumSet;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -44,7 +51,7 @@ class MessageServiceTest {
     @BeforeEach
     void setUp() {
         jda = mock(JDA.class);
-        messageService = new MessageService(jda);
+        messageService = new MessageService(jda, new ObjectMapper());
     }
 
     @Test
@@ -85,6 +92,7 @@ class MessageServiceTest {
         RestAction<List<Message>> retrievePast = restAction(List.of(guildMessage, directAuthorMessage));
 
         when(jda.getTextChannelById("345678901234567890")).thenReturn(channel);
+        when(jda.getGatewayIntents()).thenReturn(EnumSet.of(GatewayIntent.MESSAGE_CONTENT));
         when(channel.getHistory()).thenReturn(history);
         when(history.retrievePast(2)).thenReturn(retrievePast);
 
@@ -93,6 +101,236 @@ class MessageServiceTest {
         assertThat(result).isEqualTo("**Retrieved 2 messages:** \n"
                 + "- (ID: 111111111111111111) **[alice]** (Author ID: 123456789012345678) `2026-05-26T00:00Z`: ```hello```\n"
                 + "- (ID: 222222222222222222) **[bob]** (Author ID: 234567890123456789) `2026-05-26T00:00Z`: ```hi```");
+    }
+
+    @Test
+    void readMessagesLabelsWithheldContentInsteadOfRenderingItAsBlank() {
+        TextChannel channel = mock(TextChannel.class);
+        MessageHistory history = mock(MessageHistory.class);
+        Message guildMessage = message(
+                "111111111111111111",
+                "123456789012345678",
+                "alice",
+                ""
+        );
+        RestAction<List<Message>> retrievePast = restAction(List.of(guildMessage));
+
+        when(jda.getTextChannelById(CHANNEL_ID)).thenReturn(channel);
+        when(jda.getGatewayIntents()).thenReturn(EnumSet.noneOf(GatewayIntent.class));
+        when(channel.getHistory()).thenReturn(history);
+        when(history.retrievePast(1)).thenReturn(retrievePast);
+
+        assertThat(messageService.readMessages(CHANNEL_ID, "1", null, null, null))
+                .contains("[no text content, or content not available to this bot]")
+                .doesNotContain("``````");
+    }
+
+    @Test
+    void readMessagesPreservesContentDiscordActuallyReturnedWithoutTheIntent() {
+        TextChannel channel = mock(TextChannel.class);
+        MessageHistory history = mock(MessageHistory.class);
+        Message guildMessage = message(
+                "111111111111111111",
+                "123456789012345678",
+                "alice",
+                "returned text"
+        );
+        RestAction<List<Message>> retrievePast = restAction(List.of(guildMessage));
+
+        when(jda.getTextChannelById(CHANNEL_ID)).thenReturn(channel);
+        when(jda.getGatewayIntents()).thenReturn(EnumSet.noneOf(GatewayIntent.class));
+        when(guildMessage.getContentRaw()).thenReturn("returned text");
+        when(channel.getHistory()).thenReturn(history);
+        when(history.retrievePast(1)).thenReturn(retrievePast);
+
+        assertThat(messageService.readMessages(CHANNEL_ID, "1", null, null, null))
+                .contains("```returned text```")
+                .doesNotContain("[no text content, or content not available to this bot]");
+    }
+
+    @Test
+    void readMessagesUsesRawContentToDetermineAvailability() {
+        TextChannel channel = mock(TextChannel.class);
+        MessageHistory history = mock(MessageHistory.class);
+        Message guildMessage = message(
+                "111111111111111111", "123456789012345678", "alice", "raw token");
+        when(guildMessage.getContentDisplay()).thenReturn("");
+        RestAction<List<Message>> retrievePast = restAction(List.of(guildMessage));
+
+        when(jda.getTextChannelById(CHANNEL_ID)).thenReturn(channel);
+        when(jda.getGatewayIntents()).thenReturn(EnumSet.noneOf(GatewayIntent.class));
+        when(channel.getHistory()).thenReturn(history);
+        when(history.retrievePast(1)).thenReturn(retrievePast);
+
+        assertThat(messageService.readMessages(CHANNEL_ID, "1", null, null, null))
+                .contains("```raw token```")
+                .doesNotContain("content not available to this bot");
+    }
+
+    @Test
+    void readMessagesLabelsEmptyTextWhenContentIntentIsEnabled() {
+        TextChannel channel = mock(TextChannel.class);
+        MessageHistory history = mock(MessageHistory.class);
+        Message guildMessage = message(
+                "111111111111111111", "123456789012345678", "alice", "");
+        RestAction<List<Message>> retrievePast = restAction(List.of(guildMessage));
+
+        when(jda.getTextChannelById(CHANNEL_ID)).thenReturn(channel);
+        when(jda.getGatewayIntents()).thenReturn(EnumSet.of(GatewayIntent.MESSAGE_CONTENT));
+        when(channel.getHistory()).thenReturn(history);
+        when(history.retrievePast(1)).thenReturn(retrievePast);
+
+        assertThat(messageService.readMessages(CHANNEL_ID, "1", null, null, null))
+                .contains("[no text content]")
+                .doesNotContain("``````");
+    }
+
+    @Test
+    void getMessageReturnsAnExactMachineReadableSnapshot() {
+        String paddedChannelId = "0" + CHANNEL_ID;
+        TextChannel channel = mock(TextChannel.class);
+        Guild guild = mock(Guild.class);
+        Message message = mock(Message.class);
+        User author = mock(User.class);
+        @SuppressWarnings("unchecked")
+        RestAction<Message> retrieve = mock(RestAction.class);
+
+        when(jda.getTextChannelById(paddedChannelId)).thenReturn(channel);
+        when(channel.getGuild()).thenReturn(guild);
+        when(channel.getId()).thenReturn(CHANNEL_ID);
+        when(guild.getId()).thenReturn("123456789012345678");
+        when(channel.retrieveMessageById(MESSAGE_ID)).thenReturn(retrieve);
+        when(retrieve.complete()).thenReturn(message);
+        when(message.getId()).thenReturn(MESSAGE_ID);
+        when(message.getAuthor()).thenReturn(author);
+        when(author.getId()).thenReturn("234567890123456789");
+        when(author.getName()).thenReturn("alice");
+        when(message.getTimeCreated()).thenReturn(OffsetDateTime.parse("2026-09-02T14:00:00Z"));
+        when(message.getTimeEdited()).thenReturn(OffsetDateTime.parse("2026-09-02T14:01:00Z"));
+        when(message.getContentRaw()).thenReturn("exact `copy`\nwith formatting");
+        when(message.getJumpUrl()).thenReturn("https://discord.com/channels/123/456/789");
+        when(jda.getGatewayIntents()).thenReturn(EnumSet.of(GatewayIntent.MESSAGE_CONTENT));
+
+        assertThat(messageService.getMessage(paddedChannelId, MESSAGE_ID)).isEqualTo(
+                "{\"guildId\":\"123456789012345678\","
+                        + "\"channelId\":\"345678901234567890\","
+                        + "\"messageId\":\"456789012345678901\","
+                        + "\"authorId\":\"234567890123456789\","
+                        + "\"authorName\":\"alice\","
+                        + "\"timestamp\":\"2026-09-02T14:00Z\","
+                        + "\"editedTimestamp\":\"2026-09-02T14:01Z\","
+                        + "\"content\":\"exact `copy`\\nwith formatting\","
+                        + "\"contentAvailable\":true,"
+                        + "\"jumpUrl\":\"https://discord.com/channels/123/456/789\"}");
+    }
+
+    @Test
+    void getMessageDoesNotClaimEmptyContentIsExactWithoutIntent() {
+        TextChannel channel = mock(TextChannel.class);
+        Guild guild = mock(Guild.class);
+        Message message = mock(Message.class);
+        User author = mock(User.class);
+        @SuppressWarnings("unchecked")
+        RestAction<Message> retrieve = mock(RestAction.class);
+
+        when(jda.getTextChannelById(CHANNEL_ID)).thenReturn(channel);
+        when(channel.getGuild()).thenReturn(guild);
+        when(channel.getId()).thenReturn(CHANNEL_ID);
+        when(guild.getId()).thenReturn("123456789012345678");
+        when(channel.retrieveMessageById(MESSAGE_ID)).thenReturn(retrieve);
+        when(retrieve.complete()).thenReturn(message);
+        when(message.getId()).thenReturn(MESSAGE_ID);
+        when(message.getAuthor()).thenReturn(author);
+        when(author.getId()).thenReturn("234567890123456789");
+        when(author.getName()).thenReturn("alice");
+        when(message.getContentRaw()).thenReturn("");
+        when(message.getJumpUrl()).thenReturn("https://discord.com/channels/123/456/789");
+        when(jda.getGatewayIntents()).thenReturn(EnumSet.noneOf(GatewayIntent.class));
+
+        assertThat(messageService.getMessage(CHANNEL_ID, MESSAGE_ID))
+                .contains("\"content\":null,\"contentAvailable\":false");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void getMessageKeepsNullContentAndFalseAvailabilityUnderNonDefaultInclusion() {
+        ObjectMapper nonDefaultMapper = new ObjectMapper().rebuild()
+                .changeDefaultPropertyInclusion(ignored -> JsonInclude.Value.construct(
+                        JsonInclude.Include.NON_DEFAULT, JsonInclude.Include.NON_DEFAULT))
+                .propertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE)
+                .build();
+        messageService = new MessageService(jda, nonDefaultMapper);
+        TextChannel channel = mock(TextChannel.class);
+        Guild guild = mock(Guild.class);
+        Message message = mock(Message.class);
+        User author = mock(User.class);
+        RestAction<Message> retrieve = mock(RestAction.class);
+        when(jda.getTextChannelById(CHANNEL_ID)).thenReturn(channel);
+        when(channel.getGuild()).thenReturn(guild);
+        when(guild.getId()).thenReturn("123456789012345678");
+        when(channel.getId()).thenReturn(CHANNEL_ID);
+        when(channel.retrieveMessageById(MESSAGE_ID)).thenReturn(retrieve);
+        when(retrieve.complete()).thenReturn(message);
+        when(message.getId()).thenReturn(MESSAGE_ID);
+        when(message.getAuthor()).thenReturn(author);
+        when(author.getId()).thenReturn("234567890123456789");
+        when(author.getName()).thenReturn("alice");
+        when(message.getContentRaw()).thenReturn("");
+        when(message.getJumpUrl()).thenReturn("https://discord.com/channels/123/456/789");
+        when(jda.getGatewayIntents()).thenReturn(EnumSet.noneOf(GatewayIntent.class));
+
+        assertThat(messageService.getMessage(CHANNEL_ID, MESSAGE_ID))
+                .contains("\"content\":null")
+                .contains("\"contentAvailable\":false");
+    }
+
+    @Test
+    void getMessageTreatsBotAuthoredEmptyContentAsExactWithoutIntent() {
+        TextChannel channel = mock(TextChannel.class);
+        Guild guild = mock(Guild.class);
+        Message message = mock(Message.class);
+        SelfUser bot = mock(SelfUser.class);
+        @SuppressWarnings("unchecked")
+        RestAction<Message> retrieve = mock(RestAction.class);
+
+        when(jda.getTextChannelById(CHANNEL_ID)).thenReturn(channel);
+        when(channel.getGuild()).thenReturn(guild);
+        when(channel.getId()).thenReturn(CHANNEL_ID);
+        when(guild.getId()).thenReturn("123456789012345678");
+        when(channel.retrieveMessageById(MESSAGE_ID)).thenReturn(retrieve);
+        when(retrieve.complete()).thenReturn(message);
+        when(message.getId()).thenReturn(MESSAGE_ID);
+        when(message.getAuthor()).thenReturn(bot);
+        when(bot.getId()).thenReturn("234567890123456789");
+        when(bot.getName()).thenReturn("BASIC bot");
+        when(jda.getSelfUser()).thenReturn(bot);
+        when(message.getContentRaw()).thenReturn("");
+        when(message.getJumpUrl()).thenReturn("https://discord.com/channels/123/456/789");
+        when(jda.getGatewayIntents()).thenReturn(EnumSet.noneOf(GatewayIntent.class));
+
+        assertThat(messageService.getMessage(CHANNEL_ID, MESSAGE_ID))
+                .contains("\"content\":\"\",\"contentAvailable\":true");
+    }
+
+    @Test
+    void readMessagesLabelsBotAuthoredEmptyContentAsExactWithoutIntent() {
+        TextChannel channel = mock(TextChannel.class);
+        MessageHistory history = mock(MessageHistory.class);
+        Message botMessage = message(
+                "111111111111111111", "234567890123456789", "BASIC bot", "");
+        SelfUser bot = mock(SelfUser.class);
+        when(bot.getId()).thenReturn("234567890123456789");
+        RestAction<List<Message>> retrievePast = restAction(List.of(botMessage));
+
+        when(jda.getTextChannelById(CHANNEL_ID)).thenReturn(channel);
+        when(jda.getSelfUser()).thenReturn(bot);
+        when(jda.getGatewayIntents()).thenReturn(EnumSet.noneOf(GatewayIntent.class));
+        when(channel.getHistory()).thenReturn(history);
+        when(history.retrievePast(1)).thenReturn(retrievePast);
+
+        assertThat(messageService.readMessages(CHANNEL_ID, "1", null, null, null))
+                .contains("[no text content]")
+                .doesNotContain("not available to this bot");
     }
 
     @Test
@@ -627,6 +865,7 @@ class MessageServiceTest {
         when(message.getId()).thenReturn(messageId);
         when(message.getAuthor()).thenReturn(author);
         when(message.getTimeCreated()).thenReturn(OffsetDateTime.parse("2026-05-26T00:00:00Z"));
+        when(message.getContentRaw()).thenReturn(content);
         when(message.getContentDisplay()).thenReturn(content);
         when(message.getAttachments()).thenReturn(List.of());
         return message;

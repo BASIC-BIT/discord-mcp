@@ -1,5 +1,7 @@
 package dev.saseq.services;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.Member;
@@ -7,17 +9,49 @@ import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import tools.jackson.databind.ObjectMapper;
 
 @Service
 public class DiscordService {
 
     private final JDA jda;
+    private final ObjectMapper json;
 
     @Value("${DISCORD_GUILD_ID:}")
     private String defaultGuildId;
 
-    public DiscordService(JDA jda) {
+    public DiscordService(JDA jda, ObjectMapper json) {
         this.jda = jda;
+        this.json = json;
+    }
+
+    /**
+     * Returns the authenticated bot identity so callers can bind policy to the actual token.
+     * The guild is a deliberately required authorization anchor and is also returned for
+     * deployment verification. Do not remove it as an apparently unused lookup: guild-scoped
+     * deployments can export this tool only because the access policy can resolve that anchor.
+     *
+     * @return machine-readable JSON containing the stable bot user ID and username.
+     */
+    @Tool(name = "get_bot_info", description = "Get the authenticated Discord bot identity for a server as structured JSON")
+    public String getBotInfo(
+            @ToolParam(description = "Discord server ID", required = false) String guildId) {
+        guildId = resolveGuildId(guildId);
+        if (guildId == null || guildId.isEmpty()) {
+            throw new IllegalArgumentException("Discord server ID cannot be null");
+        }
+        Guild guild = jda.getGuildById(guildId);
+        if (guild == null) {
+            throw new IllegalArgumentException("Discord server not found by guildId");
+        }
+        var self = jda.getSelfUser();
+        return json.writeValueAsString(new BotSnapshot(self.getId(), self.getName(), guild.getId()));
+    }
+
+    @JsonInclude(JsonInclude.Include.ALWAYS)
+    private record BotSnapshot(@JsonProperty("botUserId") String botUserId,
+                               @JsonProperty("botName") String botName,
+                               @JsonProperty("guildId") String guildId) {
     }
 
     private String resolveGuildId(String guildId) {

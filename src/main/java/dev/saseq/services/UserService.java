@@ -1,5 +1,7 @@
 package dev.saseq.services;
 
+import dev.saseq.DiscordSnowflake;
+
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.Member;
@@ -389,7 +391,7 @@ public class UserService {
     }
 
     private boolean isDiscordSnowflake(String value) {
-        return value.matches("\\d{17,20}");
+        return DiscordSnowflake.isValid(value);
     }
 
     private boolean memberMatches(Member member, String query) {
@@ -439,18 +441,25 @@ public class UserService {
                     String authorName = m.getAuthor().getName();
                     String authorId = m.getAuthor().getId();
                     String timestamp = m.getTimeCreated().toString();
+                    // Discord's Message Content privileged-intent restriction does not apply to
+                    // direct messages received by the bot, so an empty value here is genuinely
+                    // empty text rather than the guild-message availability ambiguity.
                     String content = m.getContentDisplay();
                     String msgId = m.getId();
 
                     StringBuilder sb = new StringBuilder();
                     sb.append(String.format(
-                            "- (ID: %s) **[%s]** (Author ID: %s) `%s`: ```%s```",
+                            "- (ID: %s) **[%s]** (Author ID: %s) `%s`: ",
                             msgId,
                             authorName,
                             authorId,
-                            timestamp,
-                            content
+                            timestamp
                     ));
+                    if (content.isEmpty()) {
+                        sb.append("[no text content]");
+                    } else {
+                        sb.append("```").append(content).append("```");
+                    }
 
                     List<Message.Attachment> attachments = m.getAttachments();
                     if (!attachments.isEmpty()) {

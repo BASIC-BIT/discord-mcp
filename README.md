@@ -32,7 +32,7 @@ Discord by managing channels, sending messages, and retrieving server informatio
 #### 1) Set local env variables
 ```bash
 export DISCORD_TOKEN="YOUR_DISCORD_BOT_TOKEN"
-export DISCORD_GUILD_ID="OPTIONAL_DEFAULT_SERVER_ID"
+# Optional: export DISCORD_GUILD_ID="YOUR_SERVER_ID"
 export SPRING_PROFILES_ACTIVE=http
 # Only if you want download_attachment. Must match the container path mounted below,
 # not a host path — see Security notes.
@@ -64,6 +64,10 @@ docker run -d -i \
   -e SPRING_PROFILES_ACTIVE \
   -e DISCORD_TOKEN \
   -e DISCORD_GUILD_ID \
+  -e DISCORD_MCP_ALLOWED_GUILDS \
+  -e DISCORD_MCP_ALLOWED_TOOLS \
+  -e DISCORD_EXPECTED_BOT_ID \
+  -e DISCORD_MCP_ENABLE_MESSAGE_CONTENT \
   -e DISCORD_MCP_DOWNLOAD_ROOT \
   -v discord-mcp-downloads:/var/lib/discord-mcp/downloads \
   saseq/discord-mcp:latest
@@ -115,7 +119,7 @@ cd discord-mcp
 cat > .env <<EOF
 SPRING_PROFILES_ACTIVE=http
 DISCORD_TOKEN=<YOUR_DISCORD_BOT_TOKEN>
-DISCORD_GUILD_ID=<OPTIONAL_DEFAULT_SERVER_ID>
+DISCORD_GUILD_ID=
 # Optional, enables download_attachment. Container path, matching the named volume.
 DISCORD_MCP_DOWNLOAD_ROOT=/var/lib/discord-mcp/downloads
 # Optional, enables local-path uploads. Uncomment to grant it — send_file's filePath and
@@ -183,7 +187,6 @@ Run the JAR as a long-running server:
 
 ```bash
 DISCORD_TOKEN=<YOUR_DISCORD_BOT_TOKEN> \
-DISCORD_GUILD_ID=<OPTIONAL_DEFAULT_SERVER_ID> \
 SPRING_PROFILES_ACTIVE=http \
 java -jar /absolute/path/to/discord-mcp-1.0.0.jar
 ```
@@ -195,6 +198,96 @@ Default MCP endpoint URL (HTTP profile): `http://localhost:8085/mcp`
 </details>
 
 ## 🔒 Security notes
+
+### Optional deployment access guardrails
+
+The server exposes its original tool surface when these variables are unset. For the common
+one-guild deployment, set a default guild and both allowlists:
+
+```bash
+export DISCORD_GUILD_ID=123456789012345678
+export DISCORD_MCP_ALLOWED_GUILDS=123456789012345678
+export DISCORD_MCP_ALLOWED_TOOLS=get_server_info,list_channels,read_messages
+```
+
+| Variable | Effect |
+| --- | --- |
+| `DISCORD_MCP_ALLOWED_GUILDS` | Restricts calls to comma-separated guild IDs. Every exported tool must expose a guild or cache-resolvable channel target. |
+| `DISCORD_MCP_ALLOWED_TOOLS` | Exports only the named tools. Unknown names fail startup. Alone, it filters tools but does not enable guild-scoped call rules. |
+| `DISCORD_EXPECTED_BOT_ID` | Refuses startup when the token authenticates a different bot. |
+
+Important guild-scope behavior:
+
+- Malformed, uncached, or out-of-scope targets fail closed. Archived threads and forum posts may
+  be absent from JDA's cache, so they can be denied even when they belong to an allowed guild.
+- Tools without a guild-resolvable target are omitted. This includes direct-message tools,
+  invite-by-ID tools, `delete_webhook`, and `send_webhook_message`. Explicitly naming one of these
+  tools in `DISCORD_MCP_ALLOWED_TOOLS` while guild scoping is enabled hard-fails startup instead of
+  silently ignoring the operator's request.
+- `create_invite`, `list_invites`, `create_webhook`, and `list_webhooks` are omitted unless they
+  are explicitly allowlisted because they can return durable access credentials. Scoped
+  `create_invite` also requires positive `maxAge` and `maxUses`. Keep a manual Discord revocation
+  path when enabling a create-without-revoke capability.
+- `send_file`, `download_attachment`, and `set_guild_scheduled_event_image` are also omitted
+  unless explicitly allowlisted because they read from or write to the deployment host when
+  their separate root settings are enabled.
+- Guild and channel IDs must be JSON strings. Every argument name and supported schema shape is
+  pinned per tool. New, changed, or undeclared arguments fail closed instead of silently widening
+  access.
+- Ordinary strings are limited to 16,384 characters. The reviewed payload fields
+  `send_file.fileData` and `create_emoji.image` retain the larger documented upload budget, while
+  every other argument on those tools keeps the ordinary limit.
+- The channel-target classifier is conservative. A newly introduced channel-shaped argument must
+  receive an explicit review before the tool can be exported.
+
+Guild-scoped schema review currently supports flat scalar tool arguments. A future structured,
+referenced, union, missing-type, or otherwise unknown property shape is omitted by default and
+hard-fails startup when its tool is explicitly allowlisted until that shape receives an explicit
+guild-boundary review.
+
+The allowlist syntax and default guild are validated before the bot connects to Discord. Exact tool
+names and target schemas are validated after the tool surface is built, after a successful Discord
+login. Configuration and connection failures are also written to stderr so stdio MCP clients can
+show an actionable startup error without contaminating the JSON-RPC stream on stdout. Scoped
+startup warns when an allowlisted guild is not currently visible to the bot, and prints the final
+exported tool set so operators can verify the effective surface. A missing guild is a warning rather
+than a hard failure because the bot may legitimately be invited after startup.
+
+Guild scoping shares the delegates' existing JDA-cache constraint for channel targets. Archived
+threads and forum posts can be absent, so `modify_forum_post` may be unable to perform its
+documented unarchive action and message tools may deny those targets until Discord places them in
+cache. Disabling guild scoping does not remove that underlying delegate limitation.
+
+For a one-guild scoped deployment, set `DISCORD_GUILD_ID` to that guild as well as listing it in
+`DISCORD_MCP_ALLOWED_GUILDS`; otherwise callers must supply `guildId` on every tool that permits it.
+
+The bot configuration always enables privileged `GUILD_MEMBERS` because member lookup depends on
+it. Exact message content is opt-in for upgrade compatibility: set
+`DISCORD_MCP_ENABLE_MESSAGE_CONTENT=true` and enable Message Content Intent in the Discord
+Developer Portal before using content-dependent tools such as `read_messages` or `get_message`.
+The `get_message` snapshot returns raw markdown with mentions unresolved and includes
+`contentAvailable`; `content` is `null` and cannot be used for exact comparison when that field is
+false. A false value can also mean the message genuinely has no text, because Discord does not
+expose a separate withheld-content marker. Discord documents that Message Content controls data
+across its APIs, including HTTP responses, not only Gateway events; see the
+[Message Content Intent documentation](https://docs.discord.com/developers/events/gateway#message-content-intent).
+
+These are capability limits, not an approval workflow. Human confirmation, previews, per-server
+write policy, source-of-truth handling, and post-write readback belong in the calling client or a
+separate policy facade. Discord permissions remain the final platform boundary. The bot token
+still carries every permission Discord grants it in every guild the bot has joined;
+`DISCORD_MCP_ALLOWED_GUILDS` is a defense-in-depth filter, so keeping the bot out of unrelated
+guilds remains the strongest isolation boundary.
+
+```bash
+export DISCORD_MCP_ALLOWED_GUILDS=123456789012345678,234567890123456789
+export DISCORD_MCP_ALLOWED_TOOLS=get_server_info,list_channels,read_messages,send_message,edit_message
+export DISCORD_EXPECTED_BOT_ID=345678901234567890
+export DISCORD_MCP_ENABLE_MESSAGE_CONTENT=true
+```
+
+Docker Compose and the `docker run` example above pass these settings through. Defining them only
+in a host shell or `.env` file is not sufficient unless the container invocation propagates them.
 
 ### `DISCORD_MCP_FILE_ROOT`
 
@@ -420,7 +513,9 @@ Recommended (HTTP singleton mode):
 }
 ```
 
-Legacy mode (stdio, starts a new process/container per client session):
+Legacy mode (stdio, starts a new process/container per client session). Add a
+`DISCORD_GUILD_ID=<REAL_SERVER_ID>` environment pair only when a default guild is wanted; MCP
+clients do not all forward the invoking shell's environment:
 ```json
 {
   "mcpServers": {
@@ -432,8 +527,6 @@ Legacy mode (stdio, starts a new process/container per client session):
         "-i",
         "-e",
         "DISCORD_TOKEN=<YOUR_DISCORD_BOT_TOKEN>",
-        "-e",
-        "DISCORD_GUILD_ID=<OPTIONAL_DEFAULT_SERVER_ID>",
         "saseq/discord-mcp:latest"
       ]
     }
@@ -453,7 +546,7 @@ claude mcp add discord-mcp --transport http http://localhost:8085/mcp
 
 Legacy mode (stdio, starts a new process/container per client session):
 ```bash
-claude mcp add discord-mcp -- docker run --rm -i -e DISCORD_TOKEN=<YOUR_DISCORD_BOT_TOKEN> -e DISCORD_GUILD_ID=<OPTIONAL_DEFAULT_SERVER_ID> saseq/discord-mcp:latest
+claude mcp add discord-mcp -- docker run --rm -i -e DISCORD_TOKEN=<YOUR_DISCORD_BOT_TOKEN> saseq/discord-mcp:latest
 ```
 
 </details>
@@ -557,8 +650,6 @@ STDIO local config (Default, legacy):
         "-i",
         "-e",
         "DISCORD_TOKEN=<YOUR_DISCORD_BOT_TOKEN>",
-        "-e",
-        "DISCORD_GUILD_ID=<OPTIONAL_DEFAULT_SERVER_ID>",
         "saseq/discord-mcp:latest"
       ]
     }
@@ -606,6 +697,9 @@ mvn -Dtest=DiscordLiveIntegrationTest test
 
 #### Server Information
 - [`get_server_info`](): Get detailed discord server information
+- [`get_bot_info`](): Get the authenticated Discord bot identity for a server as structured JSON.
+  It always requires a supplied `guildId` or configured `DISCORD_GUILD_ID`; guild-scoped
+  deployments additionally require that anchor to be in `DISCORD_MCP_ALLOWED_GUILDS`.
 
 #### User Management
 - [`get_user_id_by_name`](): Get a Discord user's ID by username in a guild for ping usage `<@id>`
@@ -618,6 +712,7 @@ mvn -Dtest=DiscordLiveIntegrationTest test
 
 #### Message Management
 - [`send_message`](): Send a message to a specific channel
+- [`get_message`](): Get one guild message as structured JSON, including stable IDs, author, exact content availability, and jump URL
 - [`send_file`](): Send a file (attachment) to a specific channel via local path, URL, or base64, with an optional message (max 50MB, Discord-boost dependent). Local `filePath` uploads require [`DISCORD_MCP_FILE_ROOT`](#-security-notes)
 - [`get_attachment`](): Get attachment metadata (filename, size, content type, URLs) from a specific message, without downloading
 - [`download_attachment`](): Download a message's attachments to disk and return the saved paths (max 50MB each, 100MB per call). Requires [`DISCORD_MCP_DOWNLOAD_ROOT`](#-security-notes)

@@ -1,17 +1,23 @@
 package dev.saseq.services;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Message;
+import net.dv8tion.jda.api.entities.User;
+import net.dv8tion.jda.api.requests.GatewayIntent;
 import net.dv8tion.jda.api.entities.channel.concrete.NewsChannel;
 import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
 import net.dv8tion.jda.api.entities.channel.concrete.ThreadChannel;
 import net.dv8tion.jda.api.entities.channel.middleman.MessageChannel;
+import net.dv8tion.jda.api.entities.channel.middleman.GuildChannel;
 import net.dv8tion.jda.api.entities.emoji.Emoji;
 import net.dv8tion.jda.api.utils.FileUpload;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import tools.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -21,13 +27,14 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.time.OffsetDateTime;
 import java.util.Base64;
 import java.util.List;
 
 @Service
 public class MessageService {
-
     private final JDA jda;
+    private final ObjectMapper json;
 
     /**
      * The only directory {@code send_file} may read local paths from. Unset disables local
@@ -54,8 +61,9 @@ public class MessageService {
     @Value("${DISCORD_MCP_DOWNLOAD_ROOT:}")
     String downloadRoot;
 
-    public MessageService(JDA jda) {
+    public MessageService(JDA jda, ObjectMapper json) {
         this.jda = jda;
+        this.json = json;
     }
 
     /**
@@ -354,6 +362,73 @@ public class MessageService {
     }
 
     /**
+     * Retrieves one message as a machine-readable snapshot.
+     *
+     * @param channelId The ID of the guild channel containing the message.
+     * @param messageId The ID of the message to retrieve.
+     * @return JSON containing stable target, author, content, and jump-link fields.
+     */
+    @Tool(name = "get_message", description = "Get one guild message as structured JSON with raw markdown and unresolved mentions; contentAvailable says whether content is safe for exact comparison")
+    public String getMessage(@ToolParam(description = "Discord channel ID") String channelId,
+                             @ToolParam(description = "Specific message ID") String messageId) {
+        if (channelId == null || channelId.isEmpty()) {
+            throw new IllegalArgumentException("channelId cannot be null");
+        }
+        if (messageId == null || messageId.isEmpty()) {
+            throw new IllegalArgumentException("messageId cannot be null");
+        }
+
+        MessageChannel channel = getMessageChannelById(channelId);
+        if (!(channel instanceof GuildChannel guildChannel)) {
+            throw new IllegalArgumentException("Channel not found by channelId");
+        }
+        Message message = channel.retrieveMessageById(messageId).complete();
+        if (message == null) {
+            throw new IllegalArgumentException("Message not found by messageId");
+        }
+        String rawContent = message.getContentRaw();
+        boolean contentAvailable = isMessageContentAvailable(message, rawContent);
+        return json.writeValueAsString(new MessageSnapshot(
+                guildChannel.getGuild().getId(),
+                guildChannel.getId(),
+                message.getId(),
+                message.getAuthor().getId(),
+                message.getAuthor().getName(),
+                timestampOf(message.getTimeCreated()),
+                timestampOf(message.getTimeEdited()),
+                contentAvailable ? rawContent : null,
+                contentAvailable,
+                message.getJumpUrl()));
+    }
+
+    private static String timestampOf(OffsetDateTime timestamp) {
+        return timestamp == null ? null : timestamp.toString();
+    }
+
+    private boolean isMessageContentAvailable(Message message, String rawContent) {
+        if (!rawContent.isEmpty()
+                || jda.getGatewayIntents().contains(GatewayIntent.MESSAGE_CONTENT)) {
+            return true;
+        }
+        User selfUser = jda.getSelfUser();
+        User author = message.getAuthor();
+        return selfUser != null && author != null && selfUser.getId().equals(author.getId());
+    }
+
+    @JsonInclude(JsonInclude.Include.ALWAYS)
+    private record MessageSnapshot(@JsonProperty("guildId") String guildId,
+                                   @JsonProperty("channelId") String channelId,
+                                   @JsonProperty("messageId") String messageId,
+                                   @JsonProperty("authorId") String authorId,
+                                   @JsonProperty("authorName") String authorName,
+                                   @JsonProperty("timestamp") String timestamp,
+                                   @JsonProperty("editedTimestamp") String editedTimestamp,
+                                   @JsonProperty("content") String content,
+                                   @JsonProperty("contentAvailable") boolean contentAvailable,
+                                   @JsonProperty("jumpUrl") String jumpUrl) {
+    }
+
+    /**
      * Deletes a message from a specified Discord channel.
      *
      * @param channelId The ID of the channel containing the message.
@@ -392,7 +467,7 @@ public class MessageService {
      * @param around    Optional message ID to fetch messages around this message.
      * @return A formatted string containing the retrieved messages.
      */
-    @Tool(name = "read_messages", description = "Read message history from a specific channel, optionally paginated with before/after/around")
+    @Tool(name = "read_messages", description = "Read message history from a specific channel, optionally paginated with before/after/around; absent or unavailable text is labeled rather than shown as blank")
     public String readMessages(@ToolParam(description = "Discord channel ID") String channelId,
                                @ToolParam(description = "Number of messages to retrieve (1-100)", required = false) String count,
                                @ToolParam(description = "Message ID to fetch messages before this message", required = false) String before,
@@ -1013,18 +1088,31 @@ public class MessageService {
                     String authorName = m.getAuthor().getName();
                     String authorId = m.getAuthor().getId();
                     String timestamp = m.getTimeCreated().toString();
-                    String content = m.getContentDisplay();
+                    String rawContent = m.getContentRaw();
+                    String displayContent = m.getContentDisplay();
+                    // Use raw content for the availability decision so list and single-message
+                    // reads report the same contract. Prefer display content, but fall back to raw
+                    // rather than falsely labelling a raw-text message as empty.
+                    boolean contentAvailable = isMessageContentAvailable(m, rawContent);
+                    String content = contentAvailable
+                            ? (!displayContent.isEmpty() || rawContent.isEmpty()
+                                    ? displayContent : rawContent)
+                            : null;
                     String msgId = m.getId();
 
                     StringBuilder sb = new StringBuilder();
-                    sb.append(String.format(
-                            "- (ID: %s) **[%s]** (Author ID: %s) `%s`: ```%s```",
+                    sb.append(String.format("- (ID: %s) **[%s]** (Author ID: %s) `%s`: ",
                             msgId,
                             authorName,
                             authorId,
-                            timestamp,
-                            content
-                    ));
+                            timestamp));
+                    if (contentAvailable && !content.isEmpty()) {
+                        sb.append("```").append(content).append("```");
+                    } else if (contentAvailable) {
+                        sb.append("[no text content]");
+                    } else {
+                        sb.append("[no text content, or content not available to this bot]");
+                    }
 
                     List<Message.Attachment> attachments = m.getAttachments();
                     if (!attachments.isEmpty()) {

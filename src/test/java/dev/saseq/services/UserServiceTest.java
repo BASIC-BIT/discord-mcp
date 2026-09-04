@@ -172,6 +172,30 @@ class UserServiceTest {
                 + "- (ID: 111111111111111111) **[bob]** (Author ID: 234567890123456789) `2026-05-26T00:00Z`: ```hello```");
     }
 
+    @Test
+    void readPrivateMessagesLabelsMessagesWithoutText() {
+        Member targetMember = member("123456789012345678", "alice", "Alice", null, "Alice");
+        User targetUser = targetMember.getUser();
+        PrivateChannel privateChannel = mock(PrivateChannel.class);
+        MessageHistory history = mock(MessageHistory.class);
+        Message message = message("111111111111111111", "234567890123456789", "bob", "");
+        CacheRestAction<Member> memberLookup = memberLookup(targetMember);
+        CacheRestAction<PrivateChannel> privateChannelLookup = privateChannelLookup(privateChannel);
+        RestAction<List<Message>> retrievePast = restAction(List.of(message));
+
+        when(jda.getGuilds()).thenReturn(List.of(guild));
+        when(guild.retrieveMemberById("123456789012345678")).thenReturn(memberLookup);
+        when(targetUser.openPrivateChannel()).thenReturn(privateChannelLookup);
+        when(privateChannel.getHistory()).thenReturn(history);
+        when(history.retrievePast(1)).thenReturn(retrievePast);
+
+        String result = userService.readPrivateMessages(
+                "123456789012345678", "1", null, null, null);
+
+        assertThat(result).contains(": [no text content]")
+                .doesNotContain("```[no text content]```");
+    }
+
     @SuppressWarnings("unchecked")
     private CacheRestAction<Member> memberLookup(Member member) {
         CacheRestAction<Member> lookup = mock(CacheRestAction.class);

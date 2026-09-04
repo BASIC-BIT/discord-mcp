@@ -1,5 +1,6 @@
 package dev.saseq.configs;
 
+import dev.saseq.DiscordSnowflake;
 import dev.saseq.services.DiscordService;
 import dev.saseq.services.MessageService;
 import dev.saseq.services.UserService;
@@ -24,6 +25,9 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.util.EnumSet;
+import java.util.Set;
+
 @Configuration
 public class DiscordMcpConfig {
     @Bean
@@ -41,8 +45,9 @@ public class DiscordMcpConfig {
                                              InviteService inviteService,
                                              ChannelPermissionService channelPermissionService,
                                              EmojiService emojiService,
-                                             ForumService forumService) {
-        return MethodToolCallbackProvider.builder().toolObjects(
+                                             ForumService forumService,
+                                             McpAccessPolicy accessPolicy) {
+        ToolCallbackProvider rawProvider = MethodToolCallbackProvider.builder().toolObjects(
                 discordService,
                 messageService,
                 userService,
@@ -59,27 +64,75 @@ public class DiscordMcpConfig {
                 emojiService,
                 forumService
         ).build();
+        return applyAccessPolicy(accessPolicy, rawProvider);
+    }
+
+    static ToolCallbackProvider applyAccessPolicy(McpAccessPolicy accessPolicy,
+                                                   ToolCallbackProvider rawProvider) {
+        try {
+            return accessPolicy.apply(rawProvider);
+        } catch (McpAccessPolicy.PolicyStartupException error) {
+            throw error;
+        } catch (RuntimeException error) {
+            System.err.println("ERROR: Discord tool access policy could not initialize: "
+                    + (error.getMessage() != null
+                        ? error.getMessage() : error.getClass().getSimpleName()));
+            throw error;
+        }
     }
 
     @Bean
-    public JDA jda(@Value("${DISCORD_TOKEN:}") String token) throws InterruptedException {
+    public JDA jda(@Value("${DISCORD_TOKEN:}") String token,
+                   @Value("${DISCORD_EXPECTED_BOT_ID:}") String expectedBotId,
+                   @Value("${DISCORD_MCP_ENABLE_MESSAGE_CONTENT:}")
+                   String enableMessageContent,
+                   @Value("${DISCORD_MCP_ALLOWED_GUILDS:}") String allowedGuilds,
+                   @Value("${DISCORD_MCP_ALLOWED_TOOLS:}") String allowedTools,
+                   @Value("${DISCORD_GUILD_ID:}") String defaultGuildId)
+            throws InterruptedException {
+        McpAccessPolicy.validateConfiguration(allowedGuilds, allowedTools, defaultGuildId);
+        boolean messageContentEnabled;
+        try {
+            messageContentEnabled = parseMessageContentOptIn(enableMessageContent);
+        } catch (IllegalArgumentException error) {
+            System.err.println("ERROR: " + error.getMessage());
+            throw error;
+        }
         if (token == null || token.isEmpty()) {
             System.err.println("ERROR: The environment variable DISCORD_TOKEN is not set. Please set it to run the application properly.");
-            System.exit(1);
+            throw new IllegalStateException("DISCORD_TOKEN is not set");
         }
+        String normalizedExpectedBotId;
         try {
-            return JDABuilder.createDefault(token)
-                    .enableIntents(GatewayIntent.GUILD_MEMBERS, GatewayIntent.GUILD_VOICE_STATES, GatewayIntent.SCHEDULED_EVENTS)
-                    .build()
-                    .awaitReady();
+            normalizedExpectedBotId = normalizeExpectedBotId(expectedBotId);
+        } catch (IllegalArgumentException error) {
+            System.err.println("ERROR: " + error.getMessage());
+            throw error;
+        }
+        JDA jda;
+        try {
+            JDA built = JDABuilder.createDefault(token)
+                    .enableIntents(requiredGatewayIntents(messageContentEnabled))
+                    .build();
+            jda = awaitReady(built);
         } catch (RuntimeException e) {
             // In the default stdio transport, logback writes only to a file so stdout stays a clean
             // MCP channel. That makes a startup failure here invisible to the MCP client, which just
             // sees the process exit and reports an opaque transport error (-32000). Echo an actionable
             // summary to stderr, which MCP clients capture and surface in their logs.
             reportJdaStartupFailure(e);
-            System.exit(1);
-            throw e; // unreachable (System.exit does not return), but required to satisfy the compiler
+            throw e;
+        }
+        verifyBotIdentity(jda, normalizedExpectedBotId, jda.getSelfUser().getId());
+        return jda;
+    }
+
+    static JDA awaitReady(JDA built) throws InterruptedException {
+        try {
+            return built.awaitReady();
+        } catch (RuntimeException | InterruptedException error) {
+            built.shutdownNow();
+            throw error;
         }
     }
 
@@ -102,8 +155,56 @@ public class DiscordMcpConfig {
         } else if (lower.contains("intent") || lower.contains("4014")) {
             System.err.println("  Likely cause: a privileged gateway intent is not enabled for this bot.");
             System.err.println("  Fix: in the Discord Developer Portal (Bot -> Privileged Gateway Intents), enable");
-            System.err.println("       'Server Members Intent' (GUILD_MEMBERS).");
+            System.err.println("       every privileged intent this deployment requests: Server Members Intent,");
+            System.err.println("       plus Message Content Intent when DISCORD_MCP_ENABLE_MESSAGE_CONTENT=true.");
         }
         System.err.println("  Details: " + details);
+    }
+
+    static boolean botIdMatches(String expectedBotId, String actualBotId) {
+        return expectedBotId == null || actualBotId.equals(expectedBotId);
+    }
+
+    static void verifyBotIdentity(JDA jda, String expectedBotId, String actualBotId) {
+        if (botIdMatches(expectedBotId, actualBotId)) {
+            return;
+        }
+        jda.shutdownNow();
+        System.err.println("ERROR: DISCORD_EXPECTED_BOT_ID does not match the authenticated bot.");
+        throw new IllegalStateException("DISCORD_EXPECTED_BOT_ID mismatch");
+    }
+
+    static String normalizeExpectedBotId(String expectedBotId) {
+        if (expectedBotId == null || expectedBotId.isBlank()) {
+            return null;
+        }
+        String normalized = expectedBotId.trim();
+        if (!DiscordSnowflake.isValid(normalized)) {
+            throw new IllegalArgumentException(
+                    "DISCORD_EXPECTED_BOT_ID must be a nonzero 17-20 digit Discord snowflake");
+        }
+        return DiscordSnowflake.canonicalize(normalized);
+    }
+
+    static Set<GatewayIntent> requiredGatewayIntents(boolean enableMessageContent) {
+        Set<GatewayIntent> intents = EnumSet.of(
+                GatewayIntent.GUILD_MEMBERS,
+                GatewayIntent.GUILD_VOICE_STATES,
+                GatewayIntent.SCHEDULED_EVENTS);
+        if (enableMessageContent) {
+            intents.add(GatewayIntent.MESSAGE_CONTENT);
+        }
+        return Set.copyOf(intents);
+    }
+
+    static boolean parseMessageContentOptIn(String value) {
+        if (value == null || value.isBlank() || "false".equalsIgnoreCase(value.trim())) {
+            return false;
+        }
+        if ("true".equalsIgnoreCase(value.trim())) {
+            return true;
+        }
+        String message = "DISCORD_MCP_ENABLE_MESSAGE_CONTENT must be true, false, or empty";
+        throw new IllegalArgumentException(message);
     }
 }
