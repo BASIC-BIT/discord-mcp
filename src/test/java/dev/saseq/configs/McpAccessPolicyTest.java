@@ -490,6 +490,20 @@ class McpAccessPolicyTest {
     }
 
     @Test
+    void broadcastPublishToolRequiresExplicitOptInWhenGuildScoped() {
+        ToolCallback publish = callback("publish_message", schema("channelId", "messageId"),
+                new AtomicReference<>());
+
+        assertThat(policy(mock(JDA.class), ALLOWED_GUILD, "", "")
+                .apply(ToolCallbackProvider.from(publish))
+                .getToolCallbacks()).isEmpty();
+        assertThat(policy(mock(JDA.class), ALLOWED_GUILD, "publish_message", "")
+                .apply(ToolCallbackProvider.from(publish)).getToolCallbacks())
+                .extracting(callback -> callback.getToolDefinition().name())
+                .containsExactly("publish_message");
+    }
+
+    @Test
     void filesystemToolsRequireExplicitOptInWhenGuildScoped() {
         ToolCallback sendFile = callback("send_file",
                 schema("channelId", "fileData", "fileName"), new AtomicReference<>());

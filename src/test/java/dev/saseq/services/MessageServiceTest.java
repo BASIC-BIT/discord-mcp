@@ -6,7 +6,9 @@ import net.dv8tion.jda.api.entities.MessageHistory;
 import net.dv8tion.jda.api.entities.SelfUser;
 import net.dv8tion.jda.api.entities.User;
 import net.dv8tion.jda.api.entities.Guild;
+import net.dv8tion.jda.api.entities.channel.concrete.NewsChannel;
 import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
+import net.dv8tion.jda.api.exceptions.RateLimitedException;
 import net.dv8tion.jda.api.requests.RestAction;
 import net.dv8tion.jda.api.requests.GatewayIntent;
 import net.dv8tion.jda.api.requests.restaction.MessageCreateAction;
@@ -15,6 +17,8 @@ import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.MockedStatic;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import tools.jackson.databind.ObjectMapper;
@@ -37,13 +41,16 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class MessageServiceTest {
 
     private static final String CHANNEL_ID = "345678901234567890";
     private static final String MESSAGE_ID = "456789012345678901";
+    private static final String JUMP_URL = "https://discord.com/channels/1/345678901234567890/456789012345678901";
 
     private JDA jda;
     private MessageService messageService;
@@ -816,6 +823,98 @@ class MessageServiceTest {
         try (var entries = Files.list(root)) {
             assertThat(entries).as("no .part file left behind").hasSize(2);
         }
+    }
+
+    @Test
+    void publishMessageRequiresChannelIdAndMessageId() {
+        assertThatThrownBy(() -> messageService.publishMessage("", MESSAGE_ID))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("channelId cannot be null");
+        assertThatThrownBy(() -> messageService.publishMessage(CHANNEL_ID, " "))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("messageId cannot be null");
+    }
+
+    @Test
+    void publishMessageRefusesChannelsThatAreNotAnnouncementChannels() {
+        // A text channel with this ID exists, but no announcement channel does.
+        stubChannel();
+
+        assertThatThrownBy(() -> messageService.publishMessage(CHANNEL_ID, MESSAGE_ID))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Channel not found or is not an announcement channel");
+    }
+
+    @Test
+    void publishMessageReportsAnAlreadyPublishedMessageWithoutPublishingAgain() {
+        Message message = stubAnnouncement(EnumSet.of(Message.MessageFlag.CROSSPOSTED));
+
+        assertThat(messageService.publishMessage(CHANNEL_ID, MESSAGE_ID))
+                .isEqualTo("Message was already published. Message link: " + JUMP_URL);
+        verify(message, never()).crosspost();
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void publishMessagePublishesWithoutWaitingOnARateLimit() throws Exception {
+        Message message = stubAnnouncement(EnumSet.noneOf(Message.MessageFlag.class));
+        RestAction<Message> crosspost = mock(RestAction.class);
+        Message published = mock(Message.class);
+        when(published.getJumpUrl()).thenReturn(JUMP_URL);
+        when(crosspost.complete(false)).thenReturn(published);
+        when(message.crosspost()).thenReturn(crosspost);
+
+        assertThat(messageService.publishMessage(CHANNEL_ID, MESSAGE_ID))
+                .isEqualTo("Message published to following servers. Message link: " + JUMP_URL);
+        verify(crosspost).complete(false);
+    }
+
+    @Test
+    void publishMessageRefusesAMissingMessage() {
+        stubAnnouncement((Message) null);
+
+        assertThatThrownBy(() -> messageService.publishMessage(CHANNEL_ID, MESSAGE_ID))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Message not found by messageId");
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "2500, retry in about 3 seconds",
+            "1000, retry in about 1 second",
+            "1, retry in about 1 second",
+            "119000, retry in about 119 seconds",
+            "120000, retry in about 2 minutes",
+            "2874000, retry in about 48 minutes"
+    })
+    @SuppressWarnings("unchecked")
+    void publishMessageReportsARateLimitWithTheRetryTime(long retryAfter, String phrase)
+            throws Exception {
+        Message message = stubAnnouncement(EnumSet.noneOf(Message.MessageFlag.class));
+        RestAction<Message> crosspost = mock(RestAction.class);
+        when(crosspost.complete(false)).thenThrow(new RateLimitedException("crosspost", retryAfter));
+        when(message.crosspost()).thenReturn(crosspost);
+
+        assertThatThrownBy(() -> messageService.publishMessage(CHANNEL_ID, MESSAGE_ID))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("Discord is rate-limiting publishing in this channel; " + phrase);
+    }
+
+    private Message stubAnnouncement(EnumSet<Message.MessageFlag> flags) {
+        Message message = mock(Message.class);
+        when(message.getFlags()).thenReturn(flags);
+        when(message.getJumpUrl()).thenReturn(JUMP_URL);
+        return stubAnnouncement(message);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Message stubAnnouncement(Message message) {
+        NewsChannel channel = mock(NewsChannel.class);
+        when(jda.getNewsChannelById(CHANNEL_ID)).thenReturn(channel);
+        RestAction<Message> retrieve = mock(RestAction.class);
+        when(retrieve.complete()).thenReturn(message);
+        when(channel.retrieveMessageById(MESSAGE_ID)).thenReturn(retrieve);
+        return message;
     }
 
     private Message.Attachment attachment(String id, String fileName, int size) {

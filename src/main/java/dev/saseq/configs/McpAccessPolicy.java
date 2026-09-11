@@ -57,9 +57,11 @@ public final class McpAccessPolicy {
                     + "(archived threads and forum posts may be absent from the channel cache)";
     private static final Set<String> EXPLICIT_ONLY_WHEN_GUILD_SCOPED = Set.of(
             "create_invite", "list_invites", "create_webhook", "list_webhooks",
-            "send_file", "download_attachment", "set_guild_scheduled_event_image");
+            "send_file", "download_attachment", "set_guild_scheduled_event_image",
+            "publish_message");
     private static final Set<String> FILESYSTEM_TOOLS = Set.of(
             "send_file", "download_attachment", "set_guild_scheduled_event_image");
+    private static final Set<String> BROADCAST_TOOLS = Set.of("publish_message");
     private static final Set<String> SCALAR_SCHEMA_TYPES = Set.of(
             "string", "number", "integer", "boolean");
     private static final Map<String, Integer> LARGE_PAYLOAD_ARGUMENT_LIMITS = Map.of(
@@ -97,6 +99,7 @@ public final class McpAccessPolicy {
             "modify_forum_post.postId",
             "move_channel.categoryId", "move_channel.channelId",
             "move_member.channelId",
+            "publish_message.channelId",
             "read_messages.channelId",
             "remove_reaction.channelId",
             "send_file.channelId",
@@ -201,6 +204,7 @@ public final class McpAccessPolicy {
             Map.entry("move_channel", Set.of(
                     "guildId", "channelId", "categoryId", "position", "reason")),
             Map.entry("move_member", Set.of("guildId", "userId", "channelId")),
+            Map.entry("publish_message", Set.of("channelId", "messageId")),
             Map.entry("read_messages", Set.of("channelId", "count", "before", "after", "around")),
             Map.entry("read_private_messages", Set.of(
                     "userId", "count", "before", "after", "around")),
@@ -357,6 +361,8 @@ public final class McpAccessPolicy {
             System.err.println("Discord guild scope is explicitly exporting " + toolName
                     + (FILESYSTEM_TOOLS.contains(toolName)
                             ? ", which can access configured host filesystem roots"
+                            : BROADCAST_TOOLS.contains(toolName)
+                            ? ", which broadcasts content to servers outside the allowed guild scope"
                             : ", which can return a durable access credential"));
         }
         SchemaProperties schema;
