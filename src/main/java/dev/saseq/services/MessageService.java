@@ -381,7 +381,7 @@ public class MessageService {
      */
     @Tool(name = "publish_message", description = "Publish (crosspost) an existing message in an "
             + "announcement channel to every server that follows the channel. Only announcement "
-            + "channels can publish. A message that is already published is reported as such. "
+            + "channels can publish; threads cannot. A message that is already published is reported as such. "
             + "Publishing cannot be undone.")
     public String publishMessage(@ToolParam(description = "Discord announcement channel ID") String channelId,
                                  @ToolParam(description = "ID of the message to publish") String messageId) {
