@@ -12,6 +12,7 @@ import net.dv8tion.jda.api.entities.channel.concrete.ThreadChannel;
 import net.dv8tion.jda.api.entities.channel.middleman.MessageChannel;
 import net.dv8tion.jda.api.entities.channel.middleman.GuildChannel;
 import net.dv8tion.jda.api.entities.emoji.Emoji;
+import net.dv8tion.jda.api.exceptions.RateLimitedException;
 import net.dv8tion.jda.api.utils.FileUpload;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
@@ -359,6 +360,55 @@ public class MessageService {
         }
         Message editedMessage = messageById.editMessage(newMessage).complete();
         return "Message edited successfully. Message link: " + editedMessage.getJumpUrl();
+    }
+
+    /**
+     * Publishes (crossposts) a message in an announcement channel to every server following it.
+     *
+     * <p>Discord only publishes from announcement channels: not from text channels, and not from
+     * threads, including threads inside an announcement channel. Publishing cannot be undone.
+     *
+     * <p>JDA's {@code crosspost()} returns an already-completed action, without calling Discord,
+     * when the message already carries the CROSSPOSTED flag. That would read as a fresh publish, so
+     * the flag is checked first and the caller is told the truth. The call uses
+     * {@code complete(false)}: Discord allows roughly ten publishes per channel per hour, and
+     * waiting out that limit would outlast the MCP client's tool timeout, so a rate limit is
+     * reported with its retry time instead.
+     *
+     * @param channelId The ID of the announcement channel containing the message.
+     * @param messageId The ID of the message to publish.
+     * @return A confirmation, or an "already published" note, with a link to the message.
+     */
+    @Tool(name = "publish_message", description = "Publish (crosspost) an existing message in an "
+            + "announcement channel to every server that follows the channel. Only announcement "
+            + "channels can publish. A message that is already published is reported as such. "
+            + "Publishing cannot be undone.")
+    public String publishMessage(@ToolParam(description = "Discord announcement channel ID") String channelId,
+                                 @ToolParam(description = "ID of the message to publish") String messageId) {
+        if (channelId == null || channelId.isBlank()) {
+            throw new IllegalArgumentException("channelId cannot be null");
+        }
+        if (messageId == null || messageId.isBlank()) {
+            throw new IllegalArgumentException("messageId cannot be null");
+        }
+
+        NewsChannel channel = jda.getNewsChannelById(channelId);
+        if (channel == null) {
+            throw new IllegalArgumentException("Channel not found or is not an announcement channel");
+        }
+        Message message = channel.retrieveMessageById(messageId).complete();
+        if (message.getFlags().contains(Message.MessageFlag.CROSSPOSTED)) {
+            return "Message was already published. Message link: " + message.getJumpUrl();
+        }
+        Message published;
+        try {
+            published = message.crosspost().complete(false);
+        } catch (RateLimitedException e) {
+            long seconds = Math.max(1, (e.getRetryAfter() + 999) / 1000);
+            throw new IllegalStateException("Discord is rate-limiting publishing in this channel; "
+                    + "retry in about " + seconds + " seconds");
+        }
+        return "Message published to following servers. Message link: " + published.getJumpUrl();
     }
 
     /**

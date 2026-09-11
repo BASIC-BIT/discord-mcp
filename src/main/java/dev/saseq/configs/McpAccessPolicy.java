@@ -97,6 +97,7 @@ public final class McpAccessPolicy {
             "modify_forum_post.postId",
             "move_channel.categoryId", "move_channel.channelId",
             "move_member.channelId",
+            "publish_message.channelId",
             "read_messages.channelId",
             "remove_reaction.channelId",
             "send_file.channelId",
@@ -201,6 +202,7 @@ public final class McpAccessPolicy {
             Map.entry("move_channel", Set.of(
                     "guildId", "channelId", "categoryId", "position", "reason")),
             Map.entry("move_member", Set.of("guildId", "userId", "channelId")),
+            Map.entry("publish_message", Set.of("channelId", "messageId")),
             Map.entry("read_messages", Set.of("channelId", "count", "before", "after", "around")),
             Map.entry("read_private_messages", Set.of(
                     "userId", "count", "before", "after", "around")),

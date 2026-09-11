@@ -717,6 +717,7 @@ mvn -Dtest=DiscordLiveIntegrationTest test
 - [`get_attachment`](): Get attachment metadata (filename, size, content type, URLs) from a specific message, without downloading
 - [`download_attachment`](): Download a message's attachments to disk and return the saved paths (max 50MB each, 100MB per call). Requires [`DISCORD_MCP_DOWNLOAD_ROOT`](#-security-notes)
 - [`edit_message`](): Edit a message from a specific channel
+- [`publish_message`](): Publish (crosspost) a message in an announcement channel to every server that follows it. Refuses text channels and threads, reports an already-published message instead of republishing, and returns Discord's retry time on a rate limit rather than waiting
 - [`delete_message`](): Delete a message from a specific channel
 - [`read_messages`](): Read message history from a specific channel (includes author IDs, attachment metadata, supports `count` 1-100 and optional cursor: `before` or `after` or `around`)
 - [`add_reaction`](): Add a reaction (emoji) to a specific message
