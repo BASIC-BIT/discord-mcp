@@ -397,6 +397,9 @@ public class MessageService {
             throw new IllegalArgumentException("Channel not found or is not an announcement channel");
         }
         Message message = channel.retrieveMessageById(messageId).complete();
+        if (message == null) {
+            throw new IllegalArgumentException("Message not found by messageId");
+        }
         if (message.getFlags().contains(Message.MessageFlag.CROSSPOSTED)) {
             return "Message was already published. Message link: " + message.getJumpUrl();
         }
@@ -404,11 +407,18 @@ public class MessageService {
         try {
             published = message.crosspost().complete(false);
         } catch (RateLimitedException e) {
-            long seconds = Math.max(1, (e.getRetryAfter() + 999) / 1000);
             throw new IllegalStateException("Discord is rate-limiting publishing in this channel; "
-                    + "retry in about " + seconds + " seconds");
+                    + retryPhrase(e.getRetryAfter()));
         }
         return "Message published to following servers. Message link: " + published.getJumpUrl();
+    }
+
+    private static String retryPhrase(long retryAfterMillis) {
+        long seconds = Math.max(1L, (retryAfterMillis + 999L) / 1000L);
+        if (seconds < 120L) {
+            return "retry in about " + seconds + (seconds == 1L ? " second" : " seconds");
+        }
+        return "retry in about " + ((seconds + 59L) / 60L) + " minutes";
     }
 
     /**

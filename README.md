@@ -231,6 +231,9 @@ Important guild-scope behavior:
 - `send_file`, `download_attachment`, and `set_guild_scheduled_event_image` are also omitted
   unless explicitly allowlisted because they read from or write to the deployment host when
   their separate root settings are enabled.
+- `publish_message` is also omitted unless explicitly allowlisted, because publishing delivers
+  the message to every server following the announcement channel, outside the allowed guild
+  scope, and cannot be undone.
 - Guild and channel IDs must be JSON strings. Every argument name and supported schema shape is
   pinned per tool. New, changed, or undeclared arguments fail closed instead of silently widening
   access.

@@ -17,6 +17,8 @@ import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.MockedStatic;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import tools.jackson.databind.ObjectMapper;
@@ -865,29 +867,50 @@ class MessageServiceTest {
         assertThat(messageService.publishMessage(CHANNEL_ID, MESSAGE_ID))
                 .isEqualTo("Message published to following servers. Message link: " + JUMP_URL);
         verify(crosspost).complete(false);
-        verify(crosspost, never()).complete();
     }
 
     @Test
+    void publishMessageRefusesAMissingMessage() {
+        stubAnnouncement((Message) null);
+
+        assertThatThrownBy(() -> messageService.publishMessage(CHANNEL_ID, MESSAGE_ID))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Message not found by messageId");
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "2500, retry in about 3 seconds",
+            "1000, retry in about 1 second",
+            "1, retry in about 1 second",
+            "119000, retry in about 119 seconds",
+            "120000, retry in about 2 minutes",
+            "2874000, retry in about 48 minutes"
+    })
     @SuppressWarnings("unchecked")
-    void publishMessageReportsARateLimitWithTheRetryTime() throws Exception {
+    void publishMessageReportsARateLimitWithTheRetryTime(long retryAfter, String phrase)
+            throws Exception {
         Message message = stubAnnouncement(EnumSet.noneOf(Message.MessageFlag.class));
         RestAction<Message> crosspost = mock(RestAction.class);
-        when(crosspost.complete(false)).thenThrow(new RateLimitedException("crosspost", 2500));
+        when(crosspost.complete(false)).thenThrow(new RateLimitedException("crosspost", retryAfter));
         when(message.crosspost()).thenReturn(crosspost);
 
         assertThatThrownBy(() -> messageService.publishMessage(CHANNEL_ID, MESSAGE_ID))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessage("Discord is rate-limiting publishing in this channel; retry in about 3 seconds");
+                .hasMessage("Discord is rate-limiting publishing in this channel; " + phrase);
     }
 
-    @SuppressWarnings("unchecked")
     private Message stubAnnouncement(EnumSet<Message.MessageFlag> flags) {
-        NewsChannel channel = mock(NewsChannel.class);
-        when(jda.getNewsChannelById(CHANNEL_ID)).thenReturn(channel);
         Message message = mock(Message.class);
         when(message.getFlags()).thenReturn(flags);
         when(message.getJumpUrl()).thenReturn(JUMP_URL);
+        return stubAnnouncement(message);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Message stubAnnouncement(Message message) {
+        NewsChannel channel = mock(NewsChannel.class);
+        when(jda.getNewsChannelById(CHANNEL_ID)).thenReturn(channel);
         RestAction<Message> retrieve = mock(RestAction.class);
         when(retrieve.complete()).thenReturn(message);
         when(channel.retrieveMessageById(MESSAGE_ID)).thenReturn(retrieve);

@@ -490,6 +490,20 @@ class McpAccessPolicyTest {
     }
 
     @Test
+    void broadcastPublishToolRequiresExplicitOptInWhenGuildScoped() {
+        ToolCallback publish = callback("publish_message", schema("channelId", "messageId"),
+                new AtomicReference<>());
+
+        assertThat(policy(mock(JDA.class), ALLOWED_GUILD, "", "")
+                .apply(ToolCallbackProvider.from(publish))
+                .getToolCallbacks()).isEmpty();
+        assertThat(policy(mock(JDA.class), ALLOWED_GUILD, "publish_message", "")
+                .apply(ToolCallbackProvider.from(publish)).getToolCallbacks())
+                .extracting(callback -> callback.getToolDefinition().name())
+                .containsExactly("publish_message");
+    }
+
+    @Test
     void filesystemToolsRequireExplicitOptInWhenGuildScoped() {
         ToolCallback sendFile = callback("send_file",
                 schema("channelId", "fileData", "fileName"), new AtomicReference<>());
@@ -907,8 +921,7 @@ class McpAccessPolicyTest {
                         "list_forum_channels", "list_forum_posts", "list_forum_tags",
                         "list_guild_scheduled_events", "list_roles",
                         "modify_forum_post", "modify_voice_state", "move_channel",
-                        "move_member", "publish_message", "read_messages", "remove_reaction",
-                        "remove_role",
+                        "move_member", "read_messages", "remove_reaction", "remove_role",
                         "remove_timeout", "search_members", "send_message",
                         "set_nickname", "timeout_member",
                         "unban_member", "upsert_member_channel_permissions",
