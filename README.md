@@ -823,3 +823,5 @@ mvn -Dtest=DiscordLiveIntegrationTest test
 <hr>
 
 A more detailed examples can be found in the [Wiki](https://github.com/SaseQ/discord-mcp/wiki).
+
+See [shared Claude review](docs/claude-review.md) for repository policy, review evidence and gated activation.
