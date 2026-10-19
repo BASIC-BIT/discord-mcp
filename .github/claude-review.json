@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "enabled": true,
+  "baseBranches": ["main"],
+  "skipLabels": ["skip-claude-review"],
+  "rerunOnUnskip": true,
+  "excludeGlobs": [],
+  "excludeDocsOnly": false,
+  "allowBotAuthors": true,
+  "allowedBotActors": ["*"],
+  "contextMode": "allowlist",
+  "contextAllowGlobs": ["**"],
+  "githubLinksOnly": false,
+  "instructionPaths": []
+}
