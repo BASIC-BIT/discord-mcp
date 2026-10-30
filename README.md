@@ -823,3 +823,5 @@ mvn -Dtest=DiscordLiveIntegrationTest test
 <hr>
 
 A more detailed examples can be found in the [Wiki](https://github.com/SaseQ/discord-mcp/wiki).
+
+<!-- Shared Claude reviewer canary; this PR is closed without merging. -->
