@@ -19,6 +19,8 @@ import dev.saseq.services.ForumService;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.JDABuilder;
 import net.dv8tion.jda.api.requests.GatewayIntent;
+import net.dv8tion.jda.api.utils.ChunkingFilter;
+import net.dv8tion.jda.api.utils.MemberCachePolicy;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import org.springframework.beans.factory.annotation.Value;
@@ -88,7 +90,8 @@ public class DiscordMcpConfig {
                    String enableMessageContent,
                    @Value("${DISCORD_MCP_ALLOWED_GUILDS:}") String allowedGuilds,
                    @Value("${DISCORD_MCP_ALLOWED_TOOLS:}") String allowedTools,
-                   @Value("${DISCORD_GUILD_ID:}") String defaultGuildId)
+                   @Value("${DISCORD_GUILD_ID:}") String defaultGuildId,
+                   @Value("${DISCORD_MCP_CACHE_ALL_MEMBERS:false}") boolean cacheAllMembers)
             throws InterruptedException {
         McpAccessPolicy.validateConfiguration(allowedGuilds, allowedTools, defaultGuildId);
         boolean messageContentEnabled;
@@ -109,10 +112,22 @@ public class DiscordMcpConfig {
             System.err.println("ERROR: " + error.getMessage());
             throw error;
         }
+        Set<String> cacheGuildIds = McpAccessPolicy.parseGuildCsv(allowedGuilds);
+        MemberCachePolicy memberCachePolicy = MemberCachePolicy.DEFAULT;
+        ChunkingFilter chunkingFilter = ChunkingFilter.NONE;
+        if (cacheAllMembers) {
+            memberCachePolicy = cacheGuildIds.isEmpty() ? MemberCachePolicy.ALL
+                    : member -> cacheGuildIds.contains(member.getGuild().getId());
+            chunkingFilter = cacheGuildIds.isEmpty() ? ChunkingFilter.ALL
+                    : ChunkingFilter.include(cacheGuildIds.stream()
+                            .mapToLong(Long::parseUnsignedLong).toArray());
+        }
         JDA jda;
         try {
             JDA built = JDABuilder.createDefault(token)
                     .enableIntents(requiredGatewayIntents(messageContentEnabled))
+                    .setMemberCachePolicy(memberCachePolicy)
+                    .setChunkingFilter(chunkingFilter)
                     .build();
             jda = awaitReady(built);
         } catch (RuntimeException e) {

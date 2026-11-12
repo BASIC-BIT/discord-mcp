@@ -143,6 +143,41 @@ class UserServiceTest {
     }
 
     @Test
+    void directUserLookupPropagatesTransportFailures() {
+        CacheRestAction<User> lookup = mock(CacheRestAction.class);
+        RuntimeException failure = new IllegalStateException("Discord unavailable");
+        when(jda.retrieveUserById("123456789012345678")).thenReturn(lookup);
+        when(lookup.complete()).thenThrow(failure);
+        assertThatThrownBy(() -> userService.sendPrivateMessage("123456789012345678", "hello"))
+                .isSameAs(failure);
+    }
+
+    @Test
+    void directUserLookupOnlyMapsUnknownUserToNotFound() {
+        CacheRestAction<User> lookup = mock(CacheRestAction.class);
+        net.dv8tion.jda.api.exceptions.ErrorResponseException failure = mock(net.dv8tion.jda.api.exceptions.ErrorResponseException.class);
+        when(jda.retrieveUserById("123456789012345678")).thenReturn(lookup);
+        when(lookup.complete()).thenThrow(failure);
+        when(failure.getErrorResponse()).thenReturn(net.dv8tion.jda.api.requests.ErrorResponse.UNKNOWN_USER);
+        assertThatThrownBy(() -> userService.sendPrivateMessage("123456789012345678", "hello"))
+                .isInstanceOf(IllegalArgumentException.class).hasMessage("User not found by userId");
+        when(failure.getErrorResponse()).thenReturn(net.dv8tion.jda.api.requests.ErrorResponse.MISSING_ACCESS);
+        assertThatThrownBy(() -> userService.sendPrivateMessage("123456789012345678", "hello"))
+                .isSameAs(failure);
+    }
+
+    @Test
+    void memberSearchDoesNotTreatAnIdSubstringAsANameMatch() {
+        Member member = member("123456789012345678", "alice", "Alice", null, "Alice");
+        MemberCacheView cache = memberCache(member);
+        when(guild.getMemberCache()).thenReturn(cache);
+        Task<List<Member>> prefix = prefixSearch();
+        when(guild.retrieveMembersByPrefix("34567", 25)).thenReturn(prefix);
+        assertThat(userService.searchMembers("34567", null, GUILD_ID))
+                .isEqualTo("No members found for query 34567");
+    }
+
+    @Test
     void searchMembersRejectsInvalidCandidateLimit() {
         assertThatThrownBy(() -> userService.searchMembers("alice", "0", GUILD_ID))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -156,12 +191,12 @@ class UserServiceTest {
         PrivateChannel privateChannel = mock(PrivateChannel.class);
         MessageHistory history = mock(MessageHistory.class);
         Message message = message("111111111111111111", "234567890123456789", "bob", "hello");
-        CacheRestAction<Member> memberLookup = memberLookup(targetMember);
         CacheRestAction<PrivateChannel> privateChannelLookup = privateChannelLookup(privateChannel);
         RestAction<List<Message>> retrievePast = restAction(List.of(message));
 
-        when(jda.getGuilds()).thenReturn(List.of(guild));
-        when(guild.retrieveMemberById("123456789012345678")).thenReturn(memberLookup);
+        CacheRestAction<User> userLookup = mock(CacheRestAction.class);
+        when(userLookup.complete()).thenReturn(targetUser);
+        when(jda.retrieveUserById("123456789012345678")).thenReturn(userLookup);
         when(targetUser.openPrivateChannel()).thenReturn(privateChannelLookup);
         when(privateChannel.getHistory()).thenReturn(history);
         when(history.retrievePast(1)).thenReturn(retrievePast);
@@ -179,12 +214,12 @@ class UserServiceTest {
         PrivateChannel privateChannel = mock(PrivateChannel.class);
         MessageHistory history = mock(MessageHistory.class);
         Message message = message("111111111111111111", "234567890123456789", "bob", "");
-        CacheRestAction<Member> memberLookup = memberLookup(targetMember);
         CacheRestAction<PrivateChannel> privateChannelLookup = privateChannelLookup(privateChannel);
         RestAction<List<Message>> retrievePast = restAction(List.of(message));
 
-        when(jda.getGuilds()).thenReturn(List.of(guild));
-        when(guild.retrieveMemberById("123456789012345678")).thenReturn(memberLookup);
+        CacheRestAction<User> userLookup = mock(CacheRestAction.class);
+        when(userLookup.complete()).thenReturn(targetUser);
+        when(jda.retrieveUserById("123456789012345678")).thenReturn(userLookup);
         when(targetUser.openPrivateChannel()).thenReturn(privateChannelLookup);
         when(privateChannel.getHistory()).thenReturn(history);
         when(history.retrievePast(1)).thenReturn(retrievePast);

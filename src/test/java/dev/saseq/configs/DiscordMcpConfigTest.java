@@ -1,6 +1,17 @@
 package dev.saseq.configs;
 
 import net.dv8tion.jda.api.JDA;
+import net.dv8tion.jda.api.JDABuilder;
+import net.dv8tion.jda.api.entities.Guild;
+import net.dv8tion.jda.api.entities.Member;
+import net.dv8tion.jda.api.entities.SelfUser;
+import net.dv8tion.jda.api.utils.MemberCachePolicy;
+import net.dv8tion.jda.api.utils.ChunkingFilter;
+import org.mockito.ArgumentCaptor;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.RETURNS_SELF;
 import net.dv8tion.jda.api.requests.GatewayIntent;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.tool.ToolCallbackProvider;
@@ -17,6 +28,52 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class DiscordMcpConfigTest {
+    @ParameterizedTest
+    @ValueSource(strings = {"", "012345678901234567"})
+    void memberCachingAndChunkingRespectGuildScope(String allowedGuilds) throws InterruptedException {
+        JDABuilder builder = mock(JDABuilder.class, RETURNS_SELF);
+        JDA jda = mock(JDA.class);
+        SelfUser bot = mock(SelfUser.class);
+        when(bot.getId()).thenReturn("32345678901234567");
+        when(jda.getSelfUser()).thenReturn(bot);
+        when(builder.build()).thenReturn(jda);
+        when(jda.awaitReady()).thenReturn(jda);
+        try (var factory = mockStatic(JDABuilder.class)) {
+            factory.when(() -> JDABuilder.createDefault("test-token")).thenReturn(builder);
+            new DiscordMcpConfig().jda("test-token", "", "false", allowedGuilds, "", "", true);
+        }
+        ArgumentCaptor<MemberCachePolicy> cache = ArgumentCaptor.forClass(MemberCachePolicy.class);
+        ArgumentCaptor<ChunkingFilter> chunking = ArgumentCaptor.forClass(ChunkingFilter.class);
+        verify(builder).setMemberCachePolicy(cache.capture());
+        verify(builder).setChunkingFilter(chunking.capture());
+        Guild guild = mock(Guild.class);
+        Member member = mock(Member.class);
+        when(member.getGuild()).thenReturn(guild);
+        when(guild.getId()).thenReturn("12345678901234567");
+        assertThat(cache.getValue().cacheMember(member)).isTrue();
+        assertThat(chunking.getValue().filter(12345678901234567L)).isTrue();
+        when(guild.getId()).thenReturn("22345678901234567");
+        assertThat(cache.getValue().cacheMember(member)).isEqualTo(allowedGuilds.isEmpty());
+        assertThat(chunking.getValue().filter(22345678901234567L)).isEqualTo(allowedGuilds.isEmpty());
+    }
+
+    @Test
+    void defaultStartupKeepsTheExistingMemberCacheProfile() throws InterruptedException {
+        JDABuilder builder = mock(JDABuilder.class, RETURNS_SELF);
+        JDA jda = mock(JDA.class);
+        SelfUser bot = mock(SelfUser.class);
+        when(bot.getId()).thenReturn("32345678901234567");
+        when(jda.getSelfUser()).thenReturn(bot);
+        when(builder.build()).thenReturn(jda);
+        when(jda.awaitReady()).thenReturn(jda);
+        try (var factory = mockStatic(JDABuilder.class)) {
+            factory.when(() -> JDABuilder.createDefault("test-token")).thenReturn(builder);
+            new DiscordMcpConfig().jda("test-token", "", "false", "", "", "", false);
+        }
+        verify(builder).setMemberCachePolicy(MemberCachePolicy.DEFAULT);
+        verify(builder).setChunkingFilter(ChunkingFilter.NONE);
+    }
+
     @Test
     void awaitReadyFailureShutsDownTheBuiltClient() throws InterruptedException {
         JDA jda = mock(JDA.class);

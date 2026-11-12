@@ -17,6 +17,8 @@ import java.util.stream.Collectors;
 @Service
 public class EmojiService {
 
+    private static final int MAX_EMOJI_BYTES = 256 * 1024;
+
     private final JDA jda;
 
     @Value("${DISCORD_GUILD_ID:}")
@@ -105,7 +107,7 @@ public class EmojiService {
 
         byte[] imageBytes = resolveImage(image, imageUrl);
 
-        if (imageBytes.length > 256 * 1024) {
+        if (imageBytes.length > MAX_EMOJI_BYTES) {
             throw new IllegalArgumentException("Image exceeds 256 KB limit (" + (imageBytes.length / 1024) + " KB). Please compress or resize the image.");
         }
 
@@ -201,11 +203,12 @@ public class EmojiService {
         return hasUrl ? downloadImage(imageUrl) : decodeDataUri(image);
     }
 
-    // Discord caps custom emoji uploads at 256 KiB; allow some headroom but bound the read.
-    private static final int MAX_IMAGE_BYTES = 8 * 1024 * 1024;
-
     private byte[] downloadImage(String url) {
-        return RemoteFetchGuard.fetch(url, MAX_IMAGE_BYTES, "image");
+        try {
+            return RemoteFetchGuard.fetch(url, MAX_EMOJI_BYTES, "image");
+        } catch (RemoteFetchGuard.TooLargeException error) {
+            throw new IllegalArgumentException("Image exceeds 256 KB limit. Please compress or resize the image.");
+        }
     }
 
     private byte[] decodeDataUri(String dataUri) {
