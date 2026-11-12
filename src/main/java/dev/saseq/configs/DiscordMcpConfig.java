@@ -19,6 +19,8 @@ import dev.saseq.services.ForumService;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.JDABuilder;
 import net.dv8tion.jda.api.requests.GatewayIntent;
+import net.dv8tion.jda.api.utils.ChunkingFilter;
+import net.dv8tion.jda.api.utils.MemberCachePolicy;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import org.springframework.beans.factory.annotation.Value;
@@ -113,6 +115,8 @@ public class DiscordMcpConfig {
         try {
             JDA built = JDABuilder.createDefault(token)
                     .enableIntents(requiredGatewayIntents(messageContentEnabled))
+                    .setMemberCachePolicy(MemberCachePolicy.ALL)
+                    .setChunkingFilter(ChunkingFilter.ALL)
                     .build();
             jda = awaitReady(built);
         } catch (RuntimeException e) {

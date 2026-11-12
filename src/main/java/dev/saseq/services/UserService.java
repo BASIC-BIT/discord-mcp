@@ -6,6 +6,8 @@ import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.Member;
 import net.dv8tion.jda.api.entities.Message;
+import net.dv8tion.jda.api.entities.MessageReference;
+import net.dv8tion.jda.api.entities.MessageType;
 import net.dv8tion.jda.api.entities.User;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
@@ -56,7 +58,7 @@ public class UserService {
      * @param guildId Optional guild/server ID; uses default if not provided
      * @return User ID string if found, or error message
      */
-    @Tool(name = "get_user_id_by_name", description = "Get a Discord user's ID by username in a guild for ping usage <@id>.")
+    @Tool(name = "get_user_id_by_name", description = "Get a Discord user's ID by exact username in a guild for ping usage <@id>. To match by nickname or global name, use search_members.")
     public String getUserIdByName(
             @ToolParam(description = "Discord username (optionally username#discriminator)") String username,
             @ToolParam(description = "Discord server ID", required = false) String guildId) {
@@ -268,7 +270,7 @@ public class UserService {
         if (messageById == null) {
             throw new IllegalArgumentException("Message not found by messageId");
         }
-        messageById.delete().queue();
+        messageById.delete().complete();
         return "Message deleted successfully";
     }
 
@@ -355,13 +357,11 @@ public class UserService {
     }
 
     private User getUserById(String userId) {
-        for (Guild guild : jda.getGuilds()) {
-            Member member = retrieveMemberById(guild, userId, true);
-            if (member != null) {
-                return member.getUser();
-            }
+        try {
+            return jda.retrieveUserById(userId).complete();
+        } catch (RuntimeException ex) {
+            return null;
         }
-        return null;
     }
 
     private Member retrieveMemberById(Guild guild, String userId, boolean refresh) {
@@ -396,8 +396,7 @@ public class UserService {
 
     private boolean memberMatches(Member member, String query) {
         String normalizedQuery = query.toLowerCase(Locale.ROOT);
-        return containsIgnoreCase(member.getId(), normalizedQuery)
-                || containsIgnoreCase(member.getUser().getName(), normalizedQuery)
+        return containsIgnoreCase(member.getUser().getName(), normalizedQuery)
                 || containsIgnoreCase(member.getUser().getGlobalName(), normalizedQuery)
                 || containsIgnoreCase(member.getNickname(), normalizedQuery)
                 || containsIgnoreCase(member.getEffectiveName(), normalizedQuery);
@@ -446,14 +445,17 @@ public class UserService {
                     // empty text rather than the guild-message availability ambiguity.
                     String content = m.getContentDisplay();
                     String msgId = m.getId();
+                    String repliedToId = getRepliedToMessageId(m);
+                    String replyInfo = repliedToId != null ? " [Reply to: " + repliedToId + "]" : "";
 
                     StringBuilder sb = new StringBuilder();
                     sb.append(String.format(
-                            "- (ID: %s) **[%s]** (Author ID: %s) `%s`: ",
+                            "- (ID: %s) **[%s]** (Author ID: %s) `%s`%s: ",
                             msgId,
                             authorName,
                             authorId,
-                            timestamp
+                            timestamp,
+                            replyInfo
                     ));
                     if (content.isEmpty()) {
                         sb.append("[no text content]");
@@ -471,6 +473,14 @@ public class UserService {
 
                     return sb.toString();
                 }).toList();
+    }
+
+    private String getRepliedToMessageId(Message message) {
+        MessageReference reference = message.getMessageReference();
+        if (message.getType() != MessageType.INLINE_REPLY || reference == null) {
+            return null;
+        }
+        return reference.getMessageId();
     }
 
     private String formatNullable(String value) {

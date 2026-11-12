@@ -256,10 +256,10 @@ startup warns when an allowlisted guild is not currently visible to the bot, and
 exported tool set so operators can verify the effective surface. A missing guild is a warning rather
 than a hard failure because the bot may legitimately be invited after startup.
 
-Guild scoping shares the delegates' existing JDA-cache constraint for channel targets. Archived
-threads and forum posts can be absent, so `modify_forum_post` may be unable to perform its
-documented unarchive action and message tools may deny those targets until Discord places them in
-cache. Disabling guild scoping does not remove that underlying delegate limitation.
+Guild scoping shares the delegates' JDA-cache constraint for channel targets. Call `list_threads`
+on an allowed parent channel to load its recent archived public threads before reading them.
+Uncached threads outside that listing remain unavailable. Both the parent listing and thread
+lookups enforce the configured guild scope.
 
 For a one-guild scoped deployment, set `DISCORD_GUILD_ID` to that guild as well as listing it in
 `DISCORD_MCP_ALLOWED_GUILDS`; otherwise callers must supply `guildId` on every tool that permits it.
@@ -268,10 +268,13 @@ The bot configuration always enables privileged `GUILD_MEMBERS` because member l
 it. Exact message content is opt-in for upgrade compatibility: set
 `DISCORD_MCP_ENABLE_MESSAGE_CONTENT=true` and enable Message Content Intent in the Discord
 Developer Portal before using content-dependent tools such as `read_messages` or `get_message`.
-The `get_message` snapshot returns raw markdown with mentions unresolved and includes
-`contentAvailable`; `content` is `null` and cannot be used for exact comparison when that field is
-false. A false value can also mean the message genuinely has no text, because Discord does not
-expose a separate withheld-content marker. Discord documents that Message Content controls data
+`get_message` now uses upstream's formatted message output, including reply context and a jump URL,
+rather than the fork's former JSON snapshot. Callers that parsed JSON must adapt. When displayed
+text differs from raw markdown, a `Raw content` line preserves unresolved mentions for exact write
+verification. Use that raw text for comparison. Empty messages whose content may be withheld are
+labeled `[no text content, or content not available to this bot]`; do not treat that as exact empty
+text. Search reports how many scanned messages had unavailable content.
+Discord documents that Message Content controls data
 across its APIs, including HTTP responses, not only Gateway events; see the
 [Message Content Intent documentation](https://docs.discord.com/developers/events/gateway#message-content-intent).
 
@@ -711,20 +714,22 @@ mvn -Dtest=DiscordLiveIntegrationTest test
 - [`send_private_message`](): Send a private message to a specific user
 - [`edit_private_message`](): Edit a private message from a specific user
 - [`delete_private_message`](): Delete a private message from a specific user
-- [`read_private_messages`](): Read private message history from a specific user (includes author IDs, attachment metadata, supports `count` 1-100 and optional cursor: `before` or `after` or `around`)
+- [`read_private_messages`](): Read private message history from a specific user (includes author IDs, reply markers, attachment metadata, supports `count` 1-100 and optional cursor: `before` or `after` or `around`)
 
 #### Message Management
 - [`send_message`](): Send a message to a specific channel
-- [`get_message`](): Get one guild message as structured JSON, including stable IDs, author, exact content availability, and jump URL
 - [`send_file`](): Send a file (attachment) to a specific channel via local path, URL, or base64, with an optional message (max 50MB, Discord-boost dependent). Local `filePath` uploads require [`DISCORD_MCP_FILE_ROOT`](#-security-notes)
 - [`get_attachment`](): Get attachment metadata (filename, size, content type, URLs) from a specific message, without downloading
 - [`download_attachment`](): Download a message's attachments to disk and return the saved paths (max 50MB each, 100MB per call). Requires [`DISCORD_MCP_DOWNLOAD_ROOT`](#-security-notes)
 - [`edit_message`](): Edit a message from a specific channel
 - [`publish_message`](): Publish (crosspost) a message in an announcement channel to every server that follows it. Refuses text channels and threads, reports an already-published message instead of republishing, and returns Discord's retry time on a rate limit rather than waiting
 - [`delete_message`](): Delete a message from a specific channel
-- [`read_messages`](): Read message history from a specific channel (includes author IDs, attachment metadata, supports `count` 1-100 and optional cursor: `before` or `after` or `around`)
+- [`read_messages`](): Read message history from a specific channel (includes author IDs, reply markers, attachment metadata, supports `count` 1-100 and optional cursor: `before` or `after` or `around`)
+- [`search_messages`](): Search the most recent messages of a channel or thread for text (case-insensitive scan of up to 1000 messages, newest first)
 - [`add_reaction`](): Add a reaction (emoji) to a specific message
 - [`remove_reaction`](): Remove a specified reaction (emoji) from a message
+- [`get_message`](): Get a single message by ID in the same format as `read_messages`; replies include the message they reply to
+- [`get_message_replies`](): Find replies to a message by scanning the messages posted after it (up to 1000)
 
 #### Channel Management
 - [`create_text_channel`](): Create a new text channel
@@ -800,6 +805,11 @@ mvn -Dtest=DiscordLiveIntegrationTest test
 - [`list_invites`](): List all active invites on the server with their statistics
 - [`delete_invite`](): Delete (revoke) an invite so the link stops working
 - [`get_invite_details`](): Get details about a specific invite (works for any public invite)
+
+#### Thread Management
+- [`list_active_threads`](): List all active threads in the server
+- [`list_threads`](): List the threads of one channel (text, news, forum or media), including recent archived public threads; a returned thread ID works as `channelId` in the message tools (archived threads become usable there only after `list_threads` has been called on their parent channel)
+- [`get_thread_info`](): Get detailed information about a thread (parent channel, owner, archived/locked state, message and member counts; archived threads need `list_threads` on the parent channel first)
 
 #### Forum Management
 - [`create_forum_channel`](): Create a new forum channel

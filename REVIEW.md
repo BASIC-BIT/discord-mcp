@@ -1,8 +1,8 @@
 # Review calibration
 
 This is a maintained fork of [`SaseQ/discord-mcp`](https://github.com/SaseQ/discord-mcp).
-Upstream has not merged to `main` since 2026-04-25, so fixes land here first and
-this fork is what gets deployed.
+Upstream changes are integrated here alongside fork additions. Prefer upstream contracts
+when functionality can be retained, and update callers when those contracts change.
 
 It runs as an MCP server driven by an LLM agent. That shapes what matters in review.
 
@@ -54,11 +54,9 @@ deployments have already decided whether that tool is allowed.
   than introducing a new pattern.
 - Tests follow the pattern in `src/test/java/dev/saseq/services/`.
 
-## Known gaps, deliberately open
+## Integration checks
 
-- **No `recurrence_rule` support for scheduled events**
-  ([#3](https://github.com/BASIC-BIT/discord-mcp/issues/3)). JDA cannot express
-  the field. Editing a recurring event changes one occurrence while the series
-  re-anchors, so the tool reports success for a change that did not take.
-- Upstream PR `#37` overlaps this fork's member reconciliation work. Track it
-  rather than duplicating it.
+- Scheduled-event recurrence uses REST alongside JDA. Preserve validation and honest partial-edit reporting.
+- Member reconciliation is already upstream. Avoid duplicate tools.
+- Message readback follows upstream formatted output. Preserve unavailable-content labels and raw text when display formatting changes it.
+- New tools require argument and target review in `McpAccessPolicy`, with cross-guild tests.

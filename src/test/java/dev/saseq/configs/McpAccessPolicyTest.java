@@ -770,6 +770,27 @@ class McpAccessPolicyTest {
     }
 
     @Test
+    void incomingReadToolsValidateChannelAndThreadGuildsBeforeDelegating() {
+        for (String name : new String[]{"search_messages", "get_message_replies", "list_threads", "get_thread_info"}) {
+            String field = name.equals("get_thread_info") ? "threadId" : "channelId";
+            JDA jda = mock(JDA.class);
+            ThreadChannel thread = mock(ThreadChannel.class);
+            Guild guild = mock(Guild.class);
+            when(jda.getThreadChannelById(CHANNEL)).thenReturn(thread);
+            when(thread.getGuild()).thenReturn(guild);
+            when(guild.getId()).thenReturn(ALLOWED_GUILD);
+            AtomicInteger calls = new AtomicInteger();
+            ToolCallback tool = only(policy(jda, ALLOWED_GUILD, name, "")
+                    .apply(ToolCallbackProvider.from(countingCallback(name, schema(field), calls))));
+            String arguments = "{\"" + field + "\":\"" + CHANNEL + "\"}";
+            assertThat(tool.call(arguments)).isEqualTo("called");
+            when(guild.getId()).thenReturn(DENIED_GUILD);
+            assertThatThrownBy(() -> tool.call(arguments)).isInstanceOf(SecurityException.class);
+            assertThat(calls.get()).isEqualTo(1);
+        }
+    }
+
+    @Test
     void futureChannelShapedArgumentsFailStartupReviewClosed() {
         assertThatThrownBy(() -> policy(mock(JDA.class), ALLOWED_GUILD,
                 "future_forum_tool", "").apply(ToolCallbackProvider.from(
@@ -914,15 +935,15 @@ class McpAccessPolicyTest {
                         "edit_role", "edit_text_channel", "edit_voice_channel", "find_category",
                         "find_channel", "get_attachment", "get_bans", "get_bot_info", "get_channel_info",
                         "get_emoji_details", "get_forum_channel_info",
-                        "get_guild_scheduled_event_users", "get_member_by_id", "get_message",
-                        "get_server_info", "get_user_id_by_name", "kick_member",
+                        "get_guild_scheduled_event_users", "get_member_by_id", "get_message", "get_message_replies",
+                        "get_server_info", "get_thread_info", "get_user_id_by_name", "kick_member",
                         "list_active_threads", "list_channel_permission_overwrites",
                         "list_channels", "list_channels_in_category", "list_emojis",
                         "list_forum_channels", "list_forum_posts", "list_forum_tags",
-                        "list_guild_scheduled_events", "list_roles",
+                        "list_guild_scheduled_events", "list_roles", "list_threads",
                         "modify_forum_post", "modify_voice_state", "move_channel",
                         "move_member", "read_messages", "remove_reaction", "remove_role",
-                        "remove_timeout", "search_members", "send_message",
+                        "remove_timeout", "search_members", "search_messages", "send_message",
                         "set_nickname", "timeout_member",
                         "unban_member", "upsert_member_channel_permissions",
                         "upsert_role_channel_permissions");
