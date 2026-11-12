@@ -44,6 +44,16 @@ class UserServiceTest {
     }
 
     @Test
+    void exactUsernameCacheMissExplainsTheCacheAndLiveSearchFallback() {
+        MemberCacheView cache = memberCache();
+        when(guild.getMemberCache()).thenReturn(cache);
+        assertThatThrownBy(() -> userService.getUserIdByName("alice", GUILD_ID))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("member cache")
+                .hasMessageContaining("search_members");
+    }
+
+    @Test
     void getMemberByIdRetrievesFreshMemberDetails() {
         Member member = member("123456789012345678", "alice", "Alice", "Ali", "Ali");
         CacheRestAction<Member> lookup = memberLookup(member);

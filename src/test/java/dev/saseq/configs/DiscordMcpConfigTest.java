@@ -40,7 +40,7 @@ class DiscordMcpConfigTest {
         when(jda.awaitReady()).thenReturn(jda);
         try (var factory = mockStatic(JDABuilder.class)) {
             factory.when(() -> JDABuilder.createDefault("test-token")).thenReturn(builder);
-            new DiscordMcpConfig().jda("test-token", "", "false", allowedGuilds, "", "", true);
+            new DiscordMcpConfig().jda("test-token", "", "false", allowedGuilds, "", "", "true");
         }
         ArgumentCaptor<MemberCachePolicy> cache = ArgumentCaptor.forClass(MemberCachePolicy.class);
         ArgumentCaptor<ChunkingFilter> chunking = ArgumentCaptor.forClass(ChunkingFilter.class);
@@ -68,10 +68,37 @@ class DiscordMcpConfigTest {
         when(jda.awaitReady()).thenReturn(jda);
         try (var factory = mockStatic(JDABuilder.class)) {
             factory.when(() -> JDABuilder.createDefault("test-token")).thenReturn(builder);
-            new DiscordMcpConfig().jda("test-token", "", "false", "", "", "", false);
+            new DiscordMcpConfig().jda("test-token", "", "false", "", "", "", "false");
         }
         verify(builder).setMemberCachePolicy(MemberCachePolicy.DEFAULT);
         verify(builder).setChunkingFilter(ChunkingFilter.NONE);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"yes", "on", "1", "ture"})
+    void invalidCacheOptInReportsTheNamedErrorOnStderrBeforeConnecting(String value) {
+        PrintStream original = System.err;
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        try {
+            System.setErr(new PrintStream(output, true, StandardCharsets.UTF_8));
+            assertThatThrownBy(() -> new DiscordMcpConfig().jda("", "", "false", "", "", "", value))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("DISCORD_MCP_CACHE_ALL_MEMBERS must be true, false, or empty");
+        } finally {
+            System.setErr(original);
+        }
+        assertThat(output.toString(StandardCharsets.UTF_8))
+                .contains("ERROR: DISCORD_MCP_CACHE_ALL_MEMBERS must be true, false, or empty");
+    }
+
+    @Test
+    void cacheOptInRetainsFalseDefaultsAndLiteralTrueSupport() {
+        String name = "DISCORD_MCP_CACHE_ALL_MEMBERS";
+        assertThat(DiscordMcpConfig.parseBooleanOptIn(null, name)).isFalse();
+        assertThat(DiscordMcpConfig.parseBooleanOptIn("", name)).isFalse();
+        assertThat(DiscordMcpConfig.parseBooleanOptIn("  ", name)).isFalse();
+        assertThat(DiscordMcpConfig.parseBooleanOptIn(" FALSE ", name)).isFalse();
+        assertThat(DiscordMcpConfig.parseBooleanOptIn(" TrUe ", name)).isTrue();
     }
 
     @Test
@@ -152,11 +179,11 @@ class DiscordMcpConfigTest {
 
     @Test
     void gatewayIntentsStayAtTheCapabilitiesTheServerUses() {
-        assertThat(DiscordMcpConfig.parseMessageContentOptIn(null)).isFalse();
-        assertThat(DiscordMcpConfig.parseMessageContentOptIn("   ")).isFalse();
-        assertThat(DiscordMcpConfig.parseMessageContentOptIn("FALSE")).isFalse();
-        assertThat(DiscordMcpConfig.parseMessageContentOptIn(" True ")).isTrue();
-        assertThatThrownBy(() -> DiscordMcpConfig.parseMessageContentOptIn("yes"))
+        assertThat(DiscordMcpConfig.parseBooleanOptIn(null, "DISCORD_MCP_ENABLE_MESSAGE_CONTENT")).isFalse();
+        assertThat(DiscordMcpConfig.parseBooleanOptIn("   ", "DISCORD_MCP_ENABLE_MESSAGE_CONTENT")).isFalse();
+        assertThat(DiscordMcpConfig.parseBooleanOptIn("FALSE", "DISCORD_MCP_ENABLE_MESSAGE_CONTENT")).isFalse();
+        assertThat(DiscordMcpConfig.parseBooleanOptIn(" True ", "DISCORD_MCP_ENABLE_MESSAGE_CONTENT")).isTrue();
+        assertThatThrownBy(() -> DiscordMcpConfig.parseBooleanOptIn("yes", "DISCORD_MCP_ENABLE_MESSAGE_CONTENT"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("true, false, or empty");
 

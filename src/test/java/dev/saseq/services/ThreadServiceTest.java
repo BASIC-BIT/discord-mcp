@@ -21,6 +21,14 @@ class ThreadServiceTest {
     private static final String THREAD = "456789012345678901";
 
     @Test
+    void threadInfoReportsAnUnavailableParentWithoutFailing() {
+        ThreadChannel thread = thread(THREAD, true);
+        when(thread.getType()).thenReturn(ChannelType.GUILD_PUBLIC_THREAD);
+        when(jda.getThreadChannelById(THREAD)).thenReturn(thread);
+        assertThat(service.getThreadInfo(THREAD)).contains("Parent channel: unknown");
+    }
+
+    @Test
     void listsActiveAndArchivedPublicThreadsOnceAndBoundsArchivedLookup() {
         TextChannel parent = parent();
         ThreadChannel active = thread("111111111111111111", false);

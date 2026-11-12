@@ -107,6 +107,7 @@ public class ThreadService {
             throw new IllegalArgumentException("Thread not found by threadId. If it is archived, call list_threads on its parent channel first");
         }
 
+        var parent = thread.getParentChannel();
         String owner = thread.getOwner() != null
                 ? thread.getOwner().getUser().getName() + " (ID: " + thread.getOwnerId() + ")"
                 : "unknown (ID: " + thread.getOwnerId() + ")";
@@ -114,7 +115,7 @@ public class ThreadService {
         return String.format(
                 "Thread: **%s** (ID: %s)\n" +
                         "• Type: %s\n" +
-                        "• Parent channel: #%s (ID: %s)\n" +
+                        "• Parent channel: %s\n" +
                         "• Owner: %s\n" +
                         "• Created: %s\n" +
                         "• Archived: %s\n" +
@@ -125,8 +126,7 @@ public class ThreadService {
                 thread.getName(),
                 thread.getId(),
                 thread.getType().name(),
-                thread.getParentChannel().getName(),
-                thread.getParentChannel().getId(),
+                parent == null ? "unknown" : "#" + parent.getName() + " (ID: " + parent.getId() + ")",
                 owner,
                 thread.getTimeCreated(),
                 thread.isArchived(),
