@@ -8,6 +8,19 @@ import static org.mockito.Mockito.*;
 
 class EmojiServiceTest {
     @Test
+    void oversizeRemoteEmojiReportsTheActualLimit() {
+        JDA jda = mock(JDA.class);
+        Guild guild = mock(Guild.class);
+        when(jda.getGuildById("123456789012345678")).thenReturn(guild);
+        try (var guard = mockStatic(RemoteFetchGuard.class)) {
+            guard.when(() -> RemoteFetchGuard.fetch("https://example.com/emoji.png", 256 * 1024, "image"))
+                    .thenThrow(new RemoteFetchGuard.TooLargeException("image exceeds the maximum allowed size"));
+            assertThatThrownBy(() -> new EmojiService(jda).createEmoji("123456789012345678", "emoji", null, "https://example.com/emoji.png", null))
+                    .hasMessageContaining("256 KB limit");
+        }
+    }
+
+    @Test
     void remoteEmojiUsesSharedGuardWithActualDiscordByteLimit() {
         JDA jda = mock(JDA.class);
         when(jda.getGuildById("123456789012345678")).thenReturn(mock(Guild.class));

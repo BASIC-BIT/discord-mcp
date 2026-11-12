@@ -204,7 +204,11 @@ public class EmojiService {
     }
 
     private byte[] downloadImage(String url) {
-        return RemoteFetchGuard.fetch(url, MAX_EMOJI_BYTES, "image");
+        try {
+            return RemoteFetchGuard.fetch(url, MAX_EMOJI_BYTES, "image");
+        } catch (RemoteFetchGuard.TooLargeException error) {
+            throw new IllegalArgumentException("Image exceeds 256 KB limit. Please compress or resize the image.");
+        }
     }
 
     private byte[] decodeDataUri(String dataUri) {

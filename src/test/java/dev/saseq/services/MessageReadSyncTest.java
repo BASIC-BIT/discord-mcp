@@ -108,6 +108,40 @@ class MessageReadSyncTest {
     }
 
     @Test
+    void searchCapsRenderedMatchesWithoutLosingScanCoverage() {
+        Message match = message(TARGET, "match");
+        List<Message> firstPage = java.util.Collections.nCopies(100, match);
+        doReturn(action(firstPage)).when(history).retrievePast(100);
+        doReturn(action(List.of(message("456789012345678902", "match omitted"))), action(List.of()))
+                .when(history).retrievePast(1);
+        assertThat(service.searchMessages(CHANNEL, "match", "101"))
+                .contains("Found 101 messages", "scanned 101 messages", "the whole history was scanned",
+                        "Showing first 100 of 101 matches.")
+                .doesNotContain("match omitted");
+        verify(history, times(2)).retrievePast(1);
+    }
+
+    @Test
+    void repliesAdvancePastOnePageAndCapRenderedMatches() {
+        Message reply = message(TARGET, "reply");
+        repliesTo(reply, TARGET);
+        Message last = message("456789012345678902", "omitted reply");
+        repliesTo(last, TARGET);
+        when(last.getIdLong()).thenReturn(1L);
+        doReturn(action(message(TARGET, "original"))).when(channel).retrieveMessageById(TARGET);
+        MessageHistory.MessageRetrieveAction retrieve = mock(MessageHistory.MessageRetrieveAction.class);
+        when(retrieve.complete()).thenReturn(history);
+        when(channel.getHistoryAfter(TARGET, 100)).thenReturn(retrieve);
+        when(history.getRetrievedHistory()).thenReturn(java.util.Collections.nCopies(100, reply));
+        doReturn(action(List.of(last)), action(List.of())).when(history).retrieveFuture(1);
+        assertThat(service.getMessageReplies(CHANNEL, TARGET, "101"))
+                .contains("Found 101 replies", "scanned 101 messages", "up to the latest message",
+                        "Showing first 100 of 101 matches.")
+                .doesNotContain("omitted reply");
+        verify(history, times(2)).retrieveFuture(1);
+    }
+
+    @Test
     void deleteFailureReachesCallerBeforeSuccess() {
         Message message = message(TARGET, "text");
         doReturn(action(message)).when(channel).retrieveMessageById(TARGET);

@@ -111,12 +111,16 @@ public class DiscordMcpConfig {
             System.err.println("ERROR: " + error.getMessage());
             throw error;
         }
+        Set<String> cacheGuildIds = McpAccessPolicy.parseGuildCsv(allowedGuilds);
         JDA jda;
         try {
             JDA built = JDABuilder.createDefault(token)
                     .enableIntents(requiredGatewayIntents(messageContentEnabled))
-                    .setMemberCachePolicy(MemberCachePolicy.ALL)
-                    .setChunkingFilter(ChunkingFilter.ALL)
+                    .setMemberCachePolicy(cacheGuildIds.isEmpty() ? MemberCachePolicy.ALL
+                            : member -> cacheGuildIds.contains(member.getGuild().getId()))
+                    .setChunkingFilter(cacheGuildIds.isEmpty() ? ChunkingFilter.ALL
+                            : ChunkingFilter.include(cacheGuildIds.stream()
+                                    .mapToLong(Long::parseUnsignedLong).toArray()))
                     .build();
             jda = awaitReady(built);
         } catch (RuntimeException e) {

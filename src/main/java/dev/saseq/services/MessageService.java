@@ -607,7 +607,14 @@ public class MessageService {
                     searchText, scanned, coverage);
         }
         return String.format("**Found %d messages containing \"%s\" (scanned %d messages, %s):**\n%s",
-                matches.size(), searchText, scanned, coverage, String.join("\n", formatMessages(matches)));
+                matches.size(), searchText, scanned, coverage, formatScanResults(matches));
+    }
+
+    private String formatScanResults(List<Message> matches) {
+        String output = String.join("\n", formatMessages(matches.subList(0, Math.min(100, matches.size()))));
+        return matches.size() > 100
+                ? output + "\nShowing first 100 of " + matches.size() + " matches."
+                : output;
     }
 
     private int parseScanLimit(String maxMessages) {
@@ -1285,7 +1292,7 @@ public class MessageService {
                     messageId, scanned, coverage);
         }
         return String.format("**Found %d replies to message %s (scanned %d messages after it, %s):**\n%s",
-                replies.size(), messageId, scanned, coverage, String.join("\n", formatMessages(replies)));
+                replies.size(), messageId, scanned, coverage, formatScanResults(replies));
     }
 
     /**

@@ -219,7 +219,8 @@ export DISCORD_MCP_ALLOWED_TOOLS=get_server_info,list_channels,read_messages
 Important guild-scope behavior:
 
 - Malformed, uncached, or out-of-scope targets fail closed. Archived threads and forum posts may
-  be absent from JDA's cache, so they can be denied even when they belong to an allowed guild.
+  be absent from JDA's cache. Call `list_threads` on an allowed parent to discover recent archived
+  public threads; discovery also makes them available to already-granted write tools in that guild.
 - Tools without a guild-resolvable target are omitted. This includes direct-message tools,
   invite-by-ID tools, `delete_webhook`, and `send_webhook_message`. Explicitly naming one of these
   tools in `DISCORD_MCP_ALLOWED_TOOLS` while guild scoping is enabled hard-fails startup instead of
@@ -265,7 +266,12 @@ For a one-guild scoped deployment, set `DISCORD_GUILD_ID` to that guild as well 
 `DISCORD_MCP_ALLOWED_GUILDS`; otherwise callers must supply `guildId` on every tool that permits it.
 
 The bot configuration always enables privileged `GUILD_MEMBERS` because member lookup depends on
-it. Exact message content is opt-in for upgrade compatibility: set
+it. Like upstream, it caches and chunks all members for name lookups. When guild scoping is enabled,
+the cache policy and startup chunking are restricted to the allowed guilds. Full member caching can
+increase startup time and heap use substantially on large guilds; size the deployment before upgrading.
+Without guild scoping, all joined guilds use upstream's full member cache behavior.
+
+Exact message content is opt-in for upgrade compatibility: set
 `DISCORD_MCP_ENABLE_MESSAGE_CONTENT=true` and enable Message Content Intent in the Discord
 Developer Portal before using content-dependent tools such as `read_messages` or `get_message`.
 `get_message` now uses upstream's formatted message output, including reply context and a jump URL,
@@ -273,7 +279,8 @@ rather than the fork's former JSON snapshot. Callers that parsed JSON must adapt
 text differs from raw markdown, a `Raw content` line preserves unresolved mentions for exact write
 verification. Use that raw text for comparison. Empty messages whose content may be withheld are
 labeled `[no text content, or content not available to this bot]`; do not treat that as exact empty
-text. Search reports how many scanned messages had unavailable content.
+text. Search reports how many scanned messages had unavailable content. Search and reply scans
+report the total match count but render at most 100 matches, explicitly noting omitted results.
 Discord documents that Message Content controls data
 across its APIs, including HTTP responses, not only Gateway events; see the
 [Message Content Intent documentation](https://docs.discord.com/developers/events/gateway#message-content-intent).
@@ -708,6 +715,13 @@ mvn -Dtest=DiscordLiveIntegrationTest test
   deployments additionally require that anchor to be in `DISCORD_MCP_ALLOWED_GUILDS`.
 
 #### User Management
+
+Upgrade note: DM tools now resolve user IDs directly through Discord, as upstream does, rather than
+requiring membership in a guild the bot has joined. This supports existing DM conversations after a
+user leaves a shared guild. Discord still controls whether the bot may message that user. In unscoped
+deployments, do not grant DM tools if that broader target set is unwanted; use an exact
+`DISCORD_MCP_ALLOWED_TOOLS` list. Guild-scoped deployments continue to omit all DM tools.
+
 - [`get_user_id_by_name`](): Get a Discord user's ID by username in a guild for ping usage `<@id>`
 - [`get_member_by_id`](): Get a Discord guild member by stable user ID, including username, global name, nickname, effective name, bot flag, join time, and roles
 - [`search_members`](): Search Discord guild members by ID, username, global name, nickname, or effective name and return identity candidates with stable user IDs

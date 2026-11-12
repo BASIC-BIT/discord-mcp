@@ -855,7 +855,7 @@ public final class McpAccessPolicy {
         return DiscordSnowflake.canonicalize(value.text());
     }
 
-    private static Set<String> parseGuildCsv(String raw) {
+    static Set<String> parseGuildCsv(String raw) {
         return parseCsv(raw, "DISCORD_MCP_ALLOWED_GUILDS").stream()
                 .map(value -> {
                     requireSnowflake(value, "DISCORD_MCP_ALLOWED_GUILDS entries");
