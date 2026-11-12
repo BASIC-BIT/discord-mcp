@@ -90,7 +90,8 @@ public class DiscordMcpConfig {
                    String enableMessageContent,
                    @Value("${DISCORD_MCP_ALLOWED_GUILDS:}") String allowedGuilds,
                    @Value("${DISCORD_MCP_ALLOWED_TOOLS:}") String allowedTools,
-                   @Value("${DISCORD_GUILD_ID:}") String defaultGuildId)
+                   @Value("${DISCORD_GUILD_ID:}") String defaultGuildId,
+                   @Value("${DISCORD_MCP_CACHE_ALL_MEMBERS:false}") boolean cacheAllMembers)
             throws InterruptedException {
         McpAccessPolicy.validateConfiguration(allowedGuilds, allowedTools, defaultGuildId);
         boolean messageContentEnabled;
@@ -112,15 +113,21 @@ public class DiscordMcpConfig {
             throw error;
         }
         Set<String> cacheGuildIds = McpAccessPolicy.parseGuildCsv(allowedGuilds);
+        MemberCachePolicy memberCachePolicy = MemberCachePolicy.DEFAULT;
+        ChunkingFilter chunkingFilter = ChunkingFilter.NONE;
+        if (cacheAllMembers) {
+            memberCachePolicy = cacheGuildIds.isEmpty() ? MemberCachePolicy.ALL
+                    : member -> cacheGuildIds.contains(member.getGuild().getId());
+            chunkingFilter = cacheGuildIds.isEmpty() ? ChunkingFilter.ALL
+                    : ChunkingFilter.include(cacheGuildIds.stream()
+                            .mapToLong(Long::parseUnsignedLong).toArray());
+        }
         JDA jda;
         try {
             JDA built = JDABuilder.createDefault(token)
                     .enableIntents(requiredGatewayIntents(messageContentEnabled))
-                    .setMemberCachePolicy(cacheGuildIds.isEmpty() ? MemberCachePolicy.ALL
-                            : member -> cacheGuildIds.contains(member.getGuild().getId()))
-                    .setChunkingFilter(cacheGuildIds.isEmpty() ? ChunkingFilter.ALL
-                            : ChunkingFilter.include(cacheGuildIds.stream()
-                                    .mapToLong(Long::parseUnsignedLong).toArray()))
+                    .setMemberCachePolicy(memberCachePolicy)
+                    .setChunkingFilter(chunkingFilter)
                     .build();
             jda = awaitReady(built);
         } catch (RuntimeException e) {

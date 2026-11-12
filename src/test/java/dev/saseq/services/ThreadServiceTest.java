@@ -59,6 +59,24 @@ class ThreadServiceTest {
     }
 
     @Test
+    void capsActiveThreadOutputAndReportsTheTotal() {
+        TextChannel parent = parent();
+        ThreadChannel active = thread(THREAD, false);
+        ThreadChannel last = thread("556789012345678901", false);
+        when(last.getName()).thenReturn("omitted thread");
+        java.util.ArrayList<ThreadChannel> threads = new java.util.ArrayList<>(java.util.Collections.nCopies(100, active));
+        threads.add(last);
+        when(parent.getThreadChannels()).thenReturn(threads);
+        ThreadChannelPaginationAction lookup = mock(ThreadChannelPaginationAction.class);
+        when(parent.retrieveArchivedPublicThreadChannels()).thenReturn(lookup);
+        when(lookup.limit(100)).thenReturn(lookup);
+        when(lookup.complete()).thenReturn(List.of());
+        assertThat(service.listThreads(CHANNEL))
+                .contains("Retrieved 101 threads", "Showing first 100 of 101 threads.")
+                .doesNotContain("omitted thread");
+    }
+
+    @Test
     void missingArchivedThreadExplainsDiscoveryStep() {
         assertThatThrownBy(() -> service.getThreadInfo(THREAD)).hasMessageContaining("call list_threads on its parent channel first");
         assertThatThrownBy(() -> service.listThreads(CHANNEL)).isInstanceOf(IllegalArgumentException.class);

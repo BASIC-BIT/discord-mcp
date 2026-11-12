@@ -3,6 +3,8 @@ package dev.saseq.services;
 import dev.saseq.DiscordSnowflake;
 
 import net.dv8tion.jda.api.JDA;
+import net.dv8tion.jda.api.exceptions.ErrorResponseException;
+import net.dv8tion.jda.api.requests.ErrorResponse;
 import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.Member;
 import net.dv8tion.jda.api.entities.Message;
@@ -359,8 +361,11 @@ public class UserService {
     private User getUserById(String userId) {
         try {
             return jda.retrieveUserById(userId).complete();
-        } catch (RuntimeException ex) {
-            return null;
+        } catch (ErrorResponseException error) {
+            if (error.getErrorResponse() == ErrorResponse.UNKNOWN_USER) {
+                return null;
+            }
+            throw error;
         }
     }
 

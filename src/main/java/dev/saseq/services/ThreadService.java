@@ -68,8 +68,11 @@ public class ThreadService {
             return "No threads found in channel " + guildChannel.getName() + " (ID: " + channelId + ")." + archivedNote;
         }
 
+        String omitted = threads.size() > 100
+                ? "\nShowing first 100 of " + threads.size() + " threads." : "";
         return "Retrieved " + threads.size() + " threads in #" + guildChannel.getName() + ":\n" +
                 threads.stream()
+                        .limit(100)
                         .map(t -> String.format(
                                 "- **%s** (ID: %s)\n" +
                                         "  • Archived: %s\n" +
@@ -84,7 +87,7 @@ public class ThreadService {
                                 t.getTimeCreated(),
                                 t.getMessageCount(),
                                 t.getJumpUrl()))
-                        .collect(Collectors.joining("\n")) + archivedNote;
+                        .collect(Collectors.joining("\n")) + archivedNote + omitted;
     }
 
     /**

@@ -266,10 +266,13 @@ For a one-guild scoped deployment, set `DISCORD_GUILD_ID` to that guild as well 
 `DISCORD_MCP_ALLOWED_GUILDS`; otherwise callers must supply `guildId` on every tool that permits it.
 
 The bot configuration always enables privileged `GUILD_MEMBERS` because member lookup depends on
-it. Like upstream, it caches and chunks all members for name lookups. When guild scoping is enabled,
-the cache policy and startup chunking are restricted to the allowed guilds. Full member caching can
-increase startup time and heap use substantially on large guilds; size the deployment before upgrading.
-Without guild scoping, all joined guilds use upstream's full member cache behavior.
+it. Full member caching is opt-in: set `DISCORD_MCP_CACHE_ALL_MEMBERS=true` to use upstream's
+complete member-cache behavior for name lookups. The default is `false`, preserving JDA's prior
+`DEFAULT` member policy and `NONE` startup chunking so upgrades do not pull full rosters before
+initialization. When enabled with guild scoping, full caching and chunking are limited to allowed
+guilds; without scoping, they cover all joined guilds. Full caching can substantially increase startup
+time and heap use on large guilds. With it disabled, name searches use the existing partial cache and
+live prefix fallback, which may miss nickname/global-name matches absent from that cache.
 
 Exact message content is opt-in for upgrade compatibility: set
 `DISCORD_MCP_ENABLE_MESSAGE_CONTENT=true` and enable Message Content Intent in the Discord
@@ -277,10 +280,15 @@ Developer Portal before using content-dependent tools such as `read_messages` or
 `get_message` now uses upstream's formatted message output, including reply context and a jump URL,
 rather than the fork's former JSON snapshot. Callers that parsed JSON must adapt. When displayed
 text differs from raw markdown, a `Raw content` line preserves unresolved mentions for exact write
-verification. Use that raw text for comparison. Empty messages whose content may be withheld are
+verification. Use that raw text for comparison, or the displayed content when no raw line is needed.
+Messages containing code fences use a longer backtick delimiter, preserving the original text
+inside the fence. An `Edited` timestamp is included when present. Empty messages whose content may be withheld are
 labeled `[no text content, or content not available to this bot]`; do not treat that as exact empty
 text. Search reports how many scanned messages had unavailable content. Search and reply scans
 report the total match count but render at most 100 matches, explicitly noting omitted results.
+At the default scan window, search uses up to six history requests and replies add one target lookup.
+At the maximum window these cost up to 11 and 12 requests respectively. Prefer smaller windows
+when possible; JDA handles Discord rate-limit waits.
 Discord documents that Message Content controls data
 across its APIs, including HTTP responses, not only Gateway events; see the
 [Message Content Intent documentation](https://docs.discord.com/developers/events/gateway#message-content-intent).
@@ -822,7 +830,7 @@ deployments, do not grant DM tools if that broader target set is unwanted; use a
 
 #### Thread Management
 - [`list_active_threads`](): List all active threads in the server
-- [`list_threads`](): List the threads of one channel (text, news, forum or media), including recent archived public threads; a returned thread ID works as `channelId` in the message tools (archived threads become usable there only after `list_threads` has been called on their parent channel)
+- [`list_threads`](): List the threads of one channel (text, news, forum or media), including recent archived public threads, rendering at most 100 threads with an explicit omission notice; a returned thread ID works as `channelId` in the message tools (archived threads become usable there only after `list_threads` has been called on their parent channel)
 - [`get_thread_info`](): Get detailed information about a thread (parent channel, owner, archived/locked state, message and member counts; archived threads need `list_threads` on the parent channel first)
 
 #### Forum Management

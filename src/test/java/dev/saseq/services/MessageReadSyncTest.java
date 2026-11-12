@@ -108,6 +108,19 @@ class MessageReadSyncTest {
     }
 
     @Test
+    void codeFenceContentRemainsUnambiguousAndIncludesEditTime() {
+        String raw = "before\n```java\ncode\n```\n````\nafter";
+        Message message = message(TARGET, raw);
+        when(message.getTimeEdited()).thenReturn(OffsetDateTime.parse("2026-11-12T01:00:00Z"));
+        doReturn(action(message)).when(channel).retrieveMessageById(TARGET);
+        assertThat(service.getMessage(CHANNEL, TARGET))
+                .contains("\n`````\n" + raw + "\n`````", "Edited: 2026-11-12T01:00Z");
+        when(message.getContentDisplay()).thenReturn("display changed");
+        assertThat(service.getMessage(CHANNEL, TARGET))
+                .contains("Raw content: \n`````\n" + raw + "\n`````");
+    }
+
+    @Test
     void searchCapsRenderedMatchesWithoutLosingScanCoverage() {
         Message match = message(TARGET, "match");
         List<Message> firstPage = java.util.Collections.nCopies(100, match);

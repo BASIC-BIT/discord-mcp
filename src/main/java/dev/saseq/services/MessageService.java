@@ -32,6 +32,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.regex.Pattern;
 
 @Service
 public class MessageService {
@@ -550,7 +551,7 @@ public class MessageService {
      * @param maxMessages Optional maximum number of recent messages to scan (1-1000, default 500).
      * @return A formatted string with the matching messages and how many messages were scanned.
      */
-    @Tool(name = "search_messages", description = "Search the most recent messages of a channel or thread for text (case-insensitive). Scans up to maxMessages messages from newest to oldest (default 500, max 1000); it is not a server-side search")
+    @Tool(name = "search_messages", description = "Search the most recent messages of a channel or thread for text (case-insensitive). Scans up to maxMessages messages from newest to oldest (default 500, max 1000); it is not a server-side search. Costs up to 11 history requests; prefer a smaller maxMessages when possible")
     public String searchMessages(@ToolParam(description = "Discord channel or thread ID") String channelId,
                                  @ToolParam(description = "Text to search for (case-insensitive)") String searchText,
                                  @ToolParam(description = "Maximum number of recent messages to scan (1-1000, default 500)", required = false) String maxMessages) {
@@ -1208,11 +1209,14 @@ public class MessageService {
 
         StringBuilder sb = new StringBuilder(formatMessages(List.of(message)).get(0));
         sb.append("\n  Jump URL: ").append(message.getJumpUrl());
+        if (message.getTimeEdited() != null) {
+            sb.append("\n  Edited: ").append(message.getTimeEdited());
+        }
         String rawContent = message.getContentRaw();
         if (isMessageContentAvailable(message, rawContent)
                 && !rawContent.equals(message.getContentDisplay())) {
             // Display content resolves mentions, so retain raw text for exact write readback.
-            sb.append("\n  Raw content: ```").append(rawContent).append("```");
+            sb.append("\n  Raw content: ").append(formattedContent(rawContent));
         }
 
         String repliedToId = getRepliedToMessageId(message);
@@ -1237,7 +1241,7 @@ public class MessageService {
      * @param maxMessages Optional maximum number of messages after the target to scan (1-1000, default 500).
      * @return A formatted string with the replies in chronological order and how far the scan went.
      */
-    @Tool(name = "get_message_replies", description = "Find replies to a message by scanning the messages posted after it (up to maxMessages, default 500, max 1000). Discord has no replies lookup, so replies outside the scanned window are not found")
+    @Tool(name = "get_message_replies", description = "Find replies to a message by scanning the messages posted after it (up to maxMessages, default 500, max 1000). Discord has no replies lookup, so replies outside the scanned window are not found. Costs up to 11 history requests plus a target lookup; prefer a smaller maxMessages when possible")
     public String getMessageReplies(@ToolParam(description = "Discord channel or thread ID") String channelId,
                                     @ToolParam(description = "ID of the message to find replies for") String messageId,
                                     @ToolParam(description = "Maximum number of messages after the target to scan (1-1000, default 500)", required = false) String maxMessages) {
@@ -1308,6 +1312,16 @@ public class MessageService {
         return reference.getMessageId();
     }
 
+    private static String formattedContent(String content) {
+        if (!content.contains("```")) {
+            return "```" + content + "```";
+        }
+        int longestRun = Pattern.compile("`+").matcher(content).results()
+                .mapToInt(match -> match.end() - match.start()).max().orElse(0);
+        String fence = "`".repeat(longestRun + 1);
+        return "\n" + fence + "\n" + content + "\n" + fence;
+    }
+
     private List<String> formatMessages(List<Message> messages) {
         return messages.stream()
                 .map(m -> {
@@ -1335,7 +1349,7 @@ public class MessageService {
                             authorId,
                             timestamp, replyInfo));
                     if (contentAvailable && !content.isEmpty()) {
-                        sb.append("```").append(content).append("```");
+                        sb.append(formattedContent(content));
                     } else if (contentAvailable) {
                         sb.append("[no text content]");
                     } else {

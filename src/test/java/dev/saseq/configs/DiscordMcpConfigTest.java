@@ -40,7 +40,7 @@ class DiscordMcpConfigTest {
         when(jda.awaitReady()).thenReturn(jda);
         try (var factory = mockStatic(JDABuilder.class)) {
             factory.when(() -> JDABuilder.createDefault("test-token")).thenReturn(builder);
-            new DiscordMcpConfig().jda("test-token", "", "false", allowedGuilds, "", "");
+            new DiscordMcpConfig().jda("test-token", "", "false", allowedGuilds, "", "", true);
         }
         ArgumentCaptor<MemberCachePolicy> cache = ArgumentCaptor.forClass(MemberCachePolicy.class);
         ArgumentCaptor<ChunkingFilter> chunking = ArgumentCaptor.forClass(ChunkingFilter.class);
@@ -55,6 +55,23 @@ class DiscordMcpConfigTest {
         when(guild.getId()).thenReturn("22345678901234567");
         assertThat(cache.getValue().cacheMember(member)).isEqualTo(allowedGuilds.isEmpty());
         assertThat(chunking.getValue().filter(22345678901234567L)).isEqualTo(allowedGuilds.isEmpty());
+    }
+
+    @Test
+    void defaultStartupKeepsTheExistingMemberCacheProfile() throws InterruptedException {
+        JDABuilder builder = mock(JDABuilder.class, RETURNS_SELF);
+        JDA jda = mock(JDA.class);
+        SelfUser bot = mock(SelfUser.class);
+        when(bot.getId()).thenReturn("32345678901234567");
+        when(jda.getSelfUser()).thenReturn(bot);
+        when(builder.build()).thenReturn(jda);
+        when(jda.awaitReady()).thenReturn(jda);
+        try (var factory = mockStatic(JDABuilder.class)) {
+            factory.when(() -> JDABuilder.createDefault("test-token")).thenReturn(builder);
+            new DiscordMcpConfig().jda("test-token", "", "false", "", "", "", false);
+        }
+        verify(builder).setMemberCachePolicy(MemberCachePolicy.DEFAULT);
+        verify(builder).setChunkingFilter(ChunkingFilter.NONE);
     }
 
     @Test

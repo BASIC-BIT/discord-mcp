@@ -143,6 +143,30 @@ class UserServiceTest {
     }
 
     @Test
+    void directUserLookupPropagatesTransportFailures() {
+        CacheRestAction<User> lookup = mock(CacheRestAction.class);
+        RuntimeException failure = new IllegalStateException("Discord unavailable");
+        when(jda.retrieveUserById("123456789012345678")).thenReturn(lookup);
+        when(lookup.complete()).thenThrow(failure);
+        assertThatThrownBy(() -> userService.sendPrivateMessage("123456789012345678", "hello"))
+                .isSameAs(failure);
+    }
+
+    @Test
+    void directUserLookupOnlyMapsUnknownUserToNotFound() {
+        CacheRestAction<User> lookup = mock(CacheRestAction.class);
+        net.dv8tion.jda.api.exceptions.ErrorResponseException failure = mock(net.dv8tion.jda.api.exceptions.ErrorResponseException.class);
+        when(jda.retrieveUserById("123456789012345678")).thenReturn(lookup);
+        when(lookup.complete()).thenThrow(failure);
+        when(failure.getErrorResponse()).thenReturn(net.dv8tion.jda.api.requests.ErrorResponse.UNKNOWN_USER);
+        assertThatThrownBy(() -> userService.sendPrivateMessage("123456789012345678", "hello"))
+                .isInstanceOf(IllegalArgumentException.class).hasMessage("User not found by userId");
+        when(failure.getErrorResponse()).thenReturn(net.dv8tion.jda.api.requests.ErrorResponse.MISSING_ACCESS);
+        assertThatThrownBy(() -> userService.sendPrivateMessage("123456789012345678", "hello"))
+                .isSameAs(failure);
+    }
+
+    @Test
     void memberSearchDoesNotTreatAnIdSubstringAsANameMatch() {
         Member member = member("123456789012345678", "alice", "Alice", null, "Alice");
         MemberCacheView cache = memberCache(member);
