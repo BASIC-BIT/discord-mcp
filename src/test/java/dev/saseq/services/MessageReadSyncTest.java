@@ -107,6 +107,13 @@ class MessageReadSyncTest {
                 .doesNotContain("```forward```");
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"`", "``", "`inline`", "one\ntwo", "one\r\ntwo"})
+    void readbackSeparatesDelimitersFromBackticksAndLineBreaks(String raw) {
+        doReturn(action(message(TARGET, raw))).when(channel).retrieveMessageById(TARGET);
+        assertThat(service.getMessage(CHANNEL, TARGET)).contains("\n```\n" + raw + "\n```");
+    }
+
     @Test
     void codeFenceContentRemainsUnambiguousAndIncludesEditTime() {
         String raw = "before\n```java\ncode\n```\n````\nafter";

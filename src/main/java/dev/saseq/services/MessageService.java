@@ -1313,12 +1313,12 @@ public class MessageService {
     }
 
     private static String formattedContent(String content) {
-        if (!content.contains("```")) {
+        if (!content.contains("`") && !content.contains("\n") && !content.contains("\r")) {
             return "```" + content + "```";
         }
         int longestRun = Pattern.compile("`+").matcher(content).results()
                 .mapToInt(match -> match.end() - match.start()).max().orElse(0);
-        String fence = "`".repeat(longestRun + 1);
+        String fence = "`".repeat(Math.max(3, longestRun + 1));
         return "\n" + fence + "\n" + content + "\n" + fence;
     }
 
