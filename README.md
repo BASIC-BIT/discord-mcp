@@ -278,6 +278,9 @@ Nickname/global-name searches still depend on cached members and may miss uncach
 Both `DISCORD_MCP_CACHE_ALL_MEMBERS` and `DISCORD_MCP_ENABLE_MESSAGE_CONTENT` accept only
 `true`, `false`, or an empty value, ignoring surrounding whitespace and letter case. Empty means
 false. Other values fail startup with a named error on stderr; `yes`, `on`, and `1` do not enable them.
+Upgrade note: `DISCORD_MCP_CACHE_ALL_MEMBERS` previously accepted Spring's relaxed boolean
+values. Before upgrading, replace `1`/`yes`/`on` with `true` and `0`/`no`/`off` with `false`;
+those previously accepted values now fail startup.
 
 Exact message content is opt-in for upgrade compatibility: set
 `DISCORD_MCP_ENABLE_MESSAGE_CONTENT=true` and enable Message Content Intent in the Discord

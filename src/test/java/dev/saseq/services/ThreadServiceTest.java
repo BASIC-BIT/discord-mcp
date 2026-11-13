@@ -2,6 +2,10 @@ package dev.saseq.services;
 
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.Permission;
+import net.dv8tion.jda.api.entities.channel.attribute.IThreadContainer;
+import net.dv8tion.jda.internal.JDAImpl;
+import net.dv8tion.jda.internal.entities.GuildImpl;
+import net.dv8tion.jda.internal.entities.channel.concrete.ThreadChannelImpl;
 import net.dv8tion.jda.api.entities.channel.ChannelType;
 import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
 import net.dv8tion.jda.api.entities.channel.concrete.ThreadChannel;
@@ -19,6 +23,25 @@ class ThreadServiceTest {
     private final ThreadService service = new ThreadService(jda);
     private static final String CHANNEL = "345678901234567890";
     private static final String THREAD = "456789012345678901";
+
+    @Test
+    void pinnedJdaRetainsTheParentWhenTheGuildCacheMisses() {
+        JDAImpl gateway = mock(JDAImpl.class);
+        GuildImpl guild = mock(GuildImpl.class);
+        when(guild.getJDA()).thenReturn(gateway);
+        when(guild.getChannelById(IThreadContainer.class, Long.parseLong(CHANNEL))).thenReturn(null);
+        IThreadContainerUnion parent = mock(IThreadContainerUnion.class);
+        when(parent.getIdLong()).thenReturn(Long.parseLong(CHANNEL));
+        when(parent.getId()).thenReturn(CHANNEL);
+        when(parent.getName()).thenReturn("general");
+        ThreadChannelImpl thread = new ThreadChannelImpl(Long.parseLong(THREAD), guild, ChannelType.GUILD_PUBLIC_THREAD)
+                .setParentChannel(parent).setName("discussion");
+        when(jda.getThreadChannelById(THREAD)).thenReturn(thread);
+
+        assertThat(thread.getParentChannel()).isSameAs(parent);
+        assertThat(service.getThreadInfo(THREAD)).contains("Parent channel: #general (ID: " + CHANNEL + ")");
+        verify(guild, atLeastOnce()).getChannelById(IThreadContainer.class, Long.parseLong(CHANNEL));
+    }
 
     @Test
     void threadInfoReportsAnUnavailableParentWithoutFailing() {
