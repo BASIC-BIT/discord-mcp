@@ -271,8 +271,16 @@ complete member-cache behavior for name lookups. The default is `false`, preserv
 `DEFAULT` member policy and `NONE` startup chunking so upgrades do not pull full rosters before
 initialization. When enabled with guild scoping, full caching and chunking are limited to allowed
 guilds; without scoping, they cover all joined guilds. Full caching can substantially increase startup
-time and heap use on large guilds. With it disabled, name searches use the existing partial cache and
-live prefix fallback, which may miss nickname/global-name matches absent from that cache.
+time and heap use on large guilds. `get_user_id_by_name` is cache-only, so it can miss a correct exact
+username when full caching is disabled. Use `search_members` for a live username-prefix fallback.
+Nickname/global-name searches still depend on cached members and may miss uncached matches.
+
+Both `DISCORD_MCP_CACHE_ALL_MEMBERS` and `DISCORD_MCP_ENABLE_MESSAGE_CONTENT` accept only
+`true`, `false`, or an empty value, ignoring surrounding whitespace and letter case. Empty means
+false. Other values fail startup with a named error on stderr; `yes`, `on`, and `1` do not enable them.
+Upgrade note: `DISCORD_MCP_CACHE_ALL_MEMBERS` previously accepted Spring's relaxed boolean
+values. Before upgrading, replace `1`/`yes`/`on` with `true` and `0`/`no`/`off` with `false`;
+those previously accepted values now fail startup.
 
 Exact message content is opt-in for upgrade compatibility: set
 `DISCORD_MCP_ENABLE_MESSAGE_CONTENT=true` and enable Message Content Intent in the Discord
@@ -730,7 +738,7 @@ user leaves a shared guild. Discord still controls whether the bot may message t
 deployments, do not grant DM tools if that broader target set is unwanted; use an exact
 `DISCORD_MCP_ALLOWED_TOOLS` list. Guild-scoped deployments continue to omit all DM tools.
 
-- [`get_user_id_by_name`](): Get a Discord user's ID by username in a guild for ping usage `<@id>`
+- [`get_user_id_by_name`](): Look up an exact username in the guild member cache for ping usage `<@id>`; a cache miss may need `search_members` for live prefix lookup
 - [`get_member_by_id`](): Get a Discord guild member by stable user ID, including username, global name, nickname, effective name, bot flag, join time, and roles
 - [`search_members`](): Search Discord guild members by ID, username, global name, nickname, or effective name and return identity candidates with stable user IDs
 - [`send_private_message`](): Send a private message to a specific user

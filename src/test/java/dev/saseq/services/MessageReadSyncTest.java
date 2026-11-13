@@ -31,6 +31,18 @@ class MessageReadSyncTest {
         when(channel.getHistory()).thenReturn(history);
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"UNKNOWN_MESSAGE", "MISSING_ACCESS"})
+    void replyLookupPreservesProviderFailuresWithoutScanning(String errorName) {
+        var failure = mock(net.dv8tion.jda.api.exceptions.ErrorResponseException.class);
+        when(failure.getErrorResponse()).thenReturn(net.dv8tion.jda.api.requests.ErrorResponse.valueOf(errorName));
+        RestAction<Message> lookup = action(null);
+        when(lookup.complete()).thenThrow(failure);
+        when(channel.retrieveMessageById(TARGET)).thenReturn(lookup);
+        assertThatThrownBy(() -> service.getMessageReplies(CHANNEL, TARGET, "1")).isSameAs(failure);
+        verify(channel, never()).getHistoryAfter(anyString(), anyInt());
+    }
+
     @Test
     void singleMessageUsesUpstreamFormatAndPreservesRawMentionsForVerification() {
         Message message = message(TARGET, "hello <@123456789012345678>");

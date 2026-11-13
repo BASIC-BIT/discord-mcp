@@ -91,12 +91,14 @@ public class DiscordMcpConfig {
                    @Value("${DISCORD_MCP_ALLOWED_GUILDS:}") String allowedGuilds,
                    @Value("${DISCORD_MCP_ALLOWED_TOOLS:}") String allowedTools,
                    @Value("${DISCORD_GUILD_ID:}") String defaultGuildId,
-                   @Value("${DISCORD_MCP_CACHE_ALL_MEMBERS:false}") boolean cacheAllMembers)
+                   @Value("${DISCORD_MCP_CACHE_ALL_MEMBERS:}") String cacheAllMembersValue)
             throws InterruptedException {
         McpAccessPolicy.validateConfiguration(allowedGuilds, allowedTools, defaultGuildId);
         boolean messageContentEnabled;
+        boolean cacheAllMembers;
         try {
-            messageContentEnabled = parseMessageContentOptIn(enableMessageContent);
+            messageContentEnabled = parseBooleanOptIn(enableMessageContent, "DISCORD_MCP_ENABLE_MESSAGE_CONTENT");
+            cacheAllMembers = parseBooleanOptIn(cacheAllMembersValue, "DISCORD_MCP_CACHE_ALL_MEMBERS");
         } catch (IllegalArgumentException error) {
             System.err.println("ERROR: " + error.getMessage());
             throw error;
@@ -212,14 +214,14 @@ public class DiscordMcpConfig {
         return Set.copyOf(intents);
     }
 
-    static boolean parseMessageContentOptIn(String value) {
+    static boolean parseBooleanOptIn(String value, String variableName) {
         if (value == null || value.isBlank() || "false".equalsIgnoreCase(value.trim())) {
             return false;
         }
         if ("true".equalsIgnoreCase(value.trim())) {
             return true;
         }
-        String message = "DISCORD_MCP_ENABLE_MESSAGE_CONTENT must be true, false, or empty";
+        String message = variableName + " must be true, false, or empty";
         throw new IllegalArgumentException(message);
     }
 }

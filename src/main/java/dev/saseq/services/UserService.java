@@ -60,7 +60,7 @@ public class UserService {
      * @param guildId Optional guild/server ID; uses default if not provided
      * @return User ID string if found, or error message
      */
-    @Tool(name = "get_user_id_by_name", description = "Get a Discord user's ID by exact username in a guild for ping usage <@id>. To match by nickname or global name, use search_members.")
+    @Tool(name = "get_user_id_by_name", description = "Get a Discord user's ID by exact username from the guild member cache for ping usage <@id>. A cache miss does not prove absence; use search_members for live prefix lookup and additional cached nickname/global-name matches.")
     public String getUserIdByName(
             @ToolParam(description = "Discord username (optionally username#discriminator)") String username,
             @ToolParam(description = "Discord server ID", required = false) String guildId) {
@@ -90,7 +90,8 @@ public class UserService {
                     .toList();
         }
         if (members.isEmpty()) {
-            throw new IllegalArgumentException("No user found with username " + username);
+            throw new IllegalArgumentException("No cached user found with username " + username
+                    + "; the member cache may be incomplete. Try search_members for a live prefix lookup.");
         }
         if (members.size() > 1) {
             String userList = members.stream()
