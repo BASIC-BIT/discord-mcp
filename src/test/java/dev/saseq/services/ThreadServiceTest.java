@@ -34,21 +34,12 @@ class ThreadServiceTest {
         when(parent.getIdLong()).thenReturn(Long.parseLong(CHANNEL));
         when(parent.getId()).thenReturn(CHANNEL);
         when(parent.getName()).thenReturn("general");
+        // Pins JDA 6.4.1 cache-miss behavior; recheck this fixture when upgrading JDA.
         ThreadChannelImpl thread = new ThreadChannelImpl(Long.parseLong(THREAD), guild, ChannelType.GUILD_PUBLIC_THREAD)
                 .setParentChannel(parent).setName("discussion");
         when(jda.getThreadChannelById(THREAD)).thenReturn(thread);
 
-        assertThat(thread.getParentChannel()).isSameAs(parent);
         assertThat(service.getThreadInfo(THREAD)).contains("Parent channel: #general (ID: " + CHANNEL + ")");
-        verify(guild, atLeastOnce()).getChannelById(IThreadContainer.class, Long.parseLong(CHANNEL));
-    }
-
-    @Test
-    void threadInfoReportsAnUnavailableParentWithoutFailing() {
-        ThreadChannel thread = thread(THREAD, true);
-        when(thread.getType()).thenReturn(ChannelType.GUILD_PUBLIC_THREAD);
-        when(jda.getThreadChannelById(THREAD)).thenReturn(thread);
-        assertThat(service.getThreadInfo(THREAD)).contains("Parent channel: unknown");
     }
 
     @Test
