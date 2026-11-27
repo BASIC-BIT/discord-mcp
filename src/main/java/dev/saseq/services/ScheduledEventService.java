@@ -1546,15 +1546,18 @@ public class ScheduledEventService {
         WeeklyOccurrences weekly = weeklyOccurrences(rule);
         DataArray exceptions = occurrenceExceptions(event);
         Set<Instant> overridden = new HashSet<>();
+        Set<Instant> displayed = new HashSet<>();
         List<Occurrence> matches = new ArrayList<>();
         for (int i = 0; i < exceptions.length(); i++) {
             DataObject exception = exceptions.getObject(i);
             Instant original = checkedOriginalOccurrenceStart(event, exception);
-            if (!overridden.add(original)) {
-                throw new IllegalStateException("Discord returned duplicate exceptions for an occurrence");
-            }
             Instant effective = effectiveOccurrenceStart(exception, original);
-            if (!effective.isBefore(first) && effective.isBefore(last)) {
+            boolean withinWindow = !effective.isBefore(first) && effective.isBefore(last);
+            if (!overridden.add(original) && (withinWindow || displayed.contains(original))) {
+                throw new IllegalStateException("Discord returned conflicting exceptions for an occurrence in this window");
+            }
+            if (withinWindow) {
+                displayed.add(original);
                 matches.add(new Occurrence(original, effective, exception.getBoolean("is_canceled"),
                         weekly.contains(original)));
             }
