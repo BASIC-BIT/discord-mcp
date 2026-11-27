@@ -30,14 +30,43 @@ class ScheduledEventOccurrenceTest {
             transport.replies.add("{}");
             transport.replies.add(series(exception(true, null)));
 
-            assertThat(DataObject.fromJson(service.cancelScheduledEventOccurrence("123", "234", TARGET))
-                    .getString("status")).isEqualTo("canceled");
+            var result = DataObject.fromJson(service.cancelScheduledEventOccurrence("123", "234", TARGET));
+            assertThat(result.getString("status")).isEqualTo("canceled");
+            assertThat(result.getBoolean("seriesConfirmedUnchanged")).isTrue();
+            assertThat(result.hasKey("seriesWarning")).isFalse();
             assertThat(transport.requests).extracting(Request::method).containsExactly("GET", "POST", "GET");
             assertThat(transport.requests.get(1).url().encodedPath()).endsWith("/123/scheduled-events/234/exceptions");
             var sent = DataObject.fromJson(transport.bodies.get(1));
             assertThat(sent.keys()).containsExactlyInAnyOrder("original_scheduled_start_time", "is_canceled");
             assertThat(sent.getString("original_scheduled_start_time")).isEqualTo(TARGET);
             assertThat(sent.getBoolean("is_canceled")).isTrue();
+        }
+    }
+
+    @Test
+    void reportsCancellationButWarnsWhenReadbackCannotConfirmTheSeries() {
+        try (var transport = new OccurrenceTransport()) {
+            var service = service(transport);
+            var saved = series(exception(true, null));
+
+            for (String readback : List.of(
+                    saved.replace("\"recurrence_rule\":{\"frequency\":2,\"interval\":1,\"start\":\"" + ANCHOR + "\"},", ""),
+                    saved.replace("\"recurrence_rule\":{\"frequency\":2,\"interval\":1,\"start\":\"" + ANCHOR + "\"}",
+                            "\"recurrence_rule\":\"unreadable\""),
+                    saved.replace("\"interval\":1", "\"interval\":2"),
+                    saved.replace("\"status\":1", "\"status\":4"))) {
+                transport.replies.add(series("[]"));
+                transport.replies.add("{}");
+                transport.replies.add(readback);
+
+                var result = DataObject.fromJson(service.cancelScheduledEventOccurrence("123", "234", TARGET));
+                assertThat(result.getString("status")).isEqualTo("canceled");
+                assertThat(result.getBoolean("seriesConfirmedUnchanged")).isFalse();
+                assertThat(result.getString("seriesWarning")).contains("still scheduled with the same recurrence rule");
+            }
+            assertThat(transport.requests).extracting(Request::method)
+                    .containsExactly("GET", "POST", "GET", "GET", "POST", "GET", "GET", "POST", "GET",
+                            "GET", "POST", "GET");
         }
     }
 
