@@ -814,6 +814,7 @@ deployments, do not grant DM tools if that broader target set is unwanted; use a
 - [`cancel_guild_scheduled_event_occurrence`](): Cancel one weekly occurrence or an existing recurrence exception by its original start
 - [`set_guild_scheduled_event_image`](): Replace an event's cover image from a direct `imageUrl` or a local `filePath` (max 5MB, no animation; covers display at 5:2, so crop first). `imageUrl` needs no filesystem access; `filePath` requires [`DISCORD_MCP_FILE_ROOT`](#-security-notes). Separate from `edit_guild_scheduled_event` so a deployment can allow event edits without granting a local-file read
 - [`delete_guild_scheduled_event`](): Permanently delete a scheduled event
+- [`list_guild_scheduled_event_occurrences`](): List weekly occurrences by displayed start, including their original starts and cancellation status
 - [`list_guild_scheduled_events`](): List all active and scheduled events on the server, showing which ones recur and their cover image URL. Spends one API call per invocation, including on a server with no events — an empty cache is not evidence there are none
 
 > **Recurring events.** JDA has no representation for Discord's `recurrence_rule`, so these tools

@@ -29,6 +29,8 @@ import java.time.ZoneOffset;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -1528,6 +1530,61 @@ public class ScheduledEventService {
         return allowSharedRoot != null && allowSharedRoot.trim().equalsIgnoreCase("true");
     }
 
+    @Tool(name = "list_guild_scheduled_event_occurrences",
+            description = "List weekly series occurrences by their displayed start, including reschedules and cancellations. Use the original start to target a write. If multiple dates match, ask which occurrence to use.")
+    public String listScheduledEventOccurrences(
+            @ToolParam(description = "Discord server ID", required = false) String guildId,
+            @ToolParam(description = "Recurring scheduled event ID") String eventId,
+            @ToolParam(description = "Inclusive window start, ISO 8601 with an offset") String from,
+            @ToolParam(description = "Exclusive window end, ISO 8601 with an offset, up to 31 days after the start") String to) {
+        if (from == null || to == null) {
+            throw new IllegalArgumentException("Both from and to are required");
+        }
+        Instant first = parseTime(from).toInstant();
+        Instant last = parseTime(to).toInstant();
+        if (!last.isAfter(first) || Duration.between(first, last).compareTo(Duration.ofDays(31)) > 0) {
+            throw new IllegalArgumentException("Occurrence window must be positive and no longer than 31 days");
+        }
+
+        String guild = getGuild(guildId).getId();
+        DataObject event = fetchOccurrenceEvent(guild, eventId);
+        DataObject rule = RecurrenceRule.of(event);
+        if (rule == null) {
+            throw new IllegalArgumentException("Scheduled event is not recurring");
+        }
+        WeeklyOccurrences weekly = weeklyOccurrences(rule);
+        Map<Instant, DataObject> exceptions = occurrenceExceptions(event);
+        List<Occurrence> matches = new ArrayList<>();
+
+        long firstIndex = Math.max(0, Duration.between(weekly.anchor(), first).getSeconds() / weekly.periodSeconds());
+        for (Instant start = weekly.anchor().plusSeconds(firstIndex * weekly.periodSeconds());
+                start.isBefore(last) && weekly.contains(start); start = start.plusSeconds(weekly.periodSeconds())) {
+            if (!start.isBefore(first) && !exceptions.containsKey(start)) {
+                matches.add(new Occurrence(start, start, false));
+            }
+        }
+        exceptions.forEach((original, exception) -> {
+            Instant effective = effectiveOccurrenceStart(exception, original);
+            if (!effective.isBefore(first) && effective.isBefore(last)) {
+                if (!weekly.contains(original)) {
+                    throw new IllegalStateException("Discord returned an occurrence in the window that does not match the current recurrence rule");
+                }
+                matches.add(new Occurrence(original, effective, exception.getBoolean("is_canceled")));
+            }
+        });
+
+        DataArray occurrences = DataArray.empty();
+        matches.stream().sorted(Comparator.comparing(Occurrence::effective).thenComparing(Occurrence::original))
+                .forEach(match -> occurrences.add(DataObject.empty()
+                        .put("originalScheduledStartTime", match.original().toString())
+                        .put("effectiveScheduledStartTime", match.effective().toString())
+                        .put("canceled", match.canceled())));
+        return DataObject.empty().put("guildId", guild).put("eventId", eventId)
+                .put("occurrences", occurrences).toString();
+    }
+
+    private record Occurrence(Instant original, Instant effective, boolean canceled) {}
+
     @Tool(name = "cancel_guild_scheduled_event_occurrence",
             description = "Cancel one weekly occurrence, or a date with an existing recurrence exception")
     public String cancelScheduledEventOccurrence(
@@ -1599,25 +1656,26 @@ public class ScheduledEventService {
     }
 
     private DataObject findOccurrenceException(DataObject event, Instant start) {
-        if (!event.hasKey("guild_scheduled_event_exceptions") || event.isNull("guild_scheduled_event_exceptions")) {
+        return occurrenceExceptions(event).get(start);
+    }
+
+    private Map<Instant, DataObject> occurrenceExceptions(DataObject event) {
+        if (!event.isType("guild_scheduled_event_exceptions", DataType.ARRAY)) {
             throw new IllegalStateException("Discord did not return the event's occurrence exceptions");
         }
         DataArray exceptions = event.getArray("guild_scheduled_event_exceptions");
-        DataObject match = null;
+        Map<Instant, DataObject> byOriginalStart = new HashMap<>();
         for (int i = 0; i < exceptions.length(); i++) {
             DataObject exception = exceptions.getObject(i);
             if (!event.getString("id").equals(exception.getString("event_id"))) {
                 throw new IllegalStateException("Discord returned an exception for a different scheduled event");
             }
             Instant original = originalOccurrenceStart(exception);
-            if (original.equals(start)) {
-                if (match != null) {
-                    throw new IllegalStateException("Discord returned duplicate exceptions for this occurrence");
-                }
-                match = exception;
+            if (byOriginalStart.putIfAbsent(original, exception) != null) {
+                throw new IllegalStateException("Discord returned duplicate exceptions for this occurrence");
             }
         }
-        return match;
+        return byOriginalStart;
     }
 
     private Instant originalOccurrenceStart(DataObject exception) {
@@ -1636,11 +1694,18 @@ public class ScheduledEventService {
     }
 
     private void validateWeeklyOccurrence(DataObject rule, Instant start) {
+        if (!weeklyOccurrences(rule).contains(start)) {
+            throw new IllegalArgumentException("originalScheduledStartTime does not match the weekly recurrence."
+                    + " For a rescheduled occurrence, use its original start before it was moved.");
+        }
+    }
+
+    private WeeklyOccurrences weeklyOccurrences(DataObject rule) {
         int interval = rule.getInt("interval", 1);
         if (rule.getInt("frequency") != RecurrenceRule.WEEKLY || interval < 1 || interval > 2
                 || List.of("by_n_weekday", "by_month", "by_month_day", "by_year_day").stream()
                         .anyMatch(key -> rule.hasKey(key) && !rule.isNull(key) && rule.getArray(key).length() > 0)) {
-            throw new IllegalArgumentException("Without an existing exception, only weekly occurrences are supported");
+            throw new IllegalArgumentException("Only weekly occurrences are supported without an existing exception");
         }
         Instant anchor = parseTime(rule.getString("start")).toInstant();
         if (rule.hasKey("by_weekday") && !rule.isNull("by_weekday")) {
@@ -1651,15 +1716,18 @@ public class ScheduledEventService {
             }
         }
 
-        Duration elapsed = Duration.between(anchor, start);
-        long period = Duration.ofDays(7L * interval).getSeconds();
         String end = rule.getString("end", null);
-        if (elapsed.isNegative() || elapsed.getNano() != 0 || elapsed.getSeconds() % period != 0
-                || (end != null && start.isAfter(parseTime(end).toInstant()))
-                || (rule.hasKey("count") && !rule.isNull("count")
-                    && elapsed.getSeconds() / period >= rule.getInt("count"))) {
-            throw new IllegalArgumentException("originalScheduledStartTime does not match the weekly recurrence."
-                    + " For a rescheduled occurrence, use its original start before it was moved.");
+        return new WeeklyOccurrences(anchor, Duration.ofDays(7L * interval).getSeconds(),
+                end == null ? null : parseTime(end).toInstant(),
+                rule.hasKey("count") && !rule.isNull("count") ? rule.getInt("count") : null);
+    }
+
+    private record WeeklyOccurrences(Instant anchor, long periodSeconds, Instant end, Integer count) {
+        boolean contains(Instant start) {
+            Duration elapsed = Duration.between(anchor, start);
+            return !elapsed.isNegative() && elapsed.getNano() == 0 && elapsed.getSeconds() % periodSeconds == 0
+                    && (end == null || !start.isAfter(end))
+                    && (count == null || elapsed.getSeconds() / periodSeconds < count);
         }
     }
 
