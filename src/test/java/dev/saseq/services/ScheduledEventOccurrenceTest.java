@@ -380,6 +380,36 @@ class ScheduledEventOccurrenceTest {
     }
 
     @Test
+    void doesNotWarnForConflictingOriginalsOutsideTheCurrentRule() {
+        try (var transport = new OccurrenceTransport()) {
+            var service = service(transport);
+            var outsideA = exception(false, "2090-01-10T20:00:00Z");
+            var outsideB = exception(false, "2090-01-11T20:00:00Z");
+            transport.replies.add(series(outsideA.substring(0, outsideA.length() - 1) + "," + outsideB.substring(1))
+                    .replace("\"interval\":1", "\"interval\":2"));
+            var result = DataObject.fromJson(service.listScheduledEvents("123", null, "234",
+                    "2090-01-09T00:00:00Z", "2090-01-10T00:00:00Z"));
+            assertThat(result.getArray("occurrences").length()).isZero();
+            assertThat(result.hasKey("conflictingOriginalStartTimes")).isFalse();
+        }
+    }
+
+    @Test
+    void identifiesTheOriginalDateWhenAnExceptionHasAnUnreadableDisplayedStart() {
+        try (var transport = new OccurrenceTransport()) {
+            var service = service(transport);
+            var outside = exception(false, "2090-01-11T20:00:00Z");
+            var unreadable = exception(false, "invalid");
+            transport.replies.add(series(outside.substring(0, outside.length() - 1) + "," + unreadable.substring(1)));
+            assertThatThrownBy(() -> service.listScheduledEvents("123", null, "234",
+                    "2090-01-16T00:00:00Z", "2090-01-23T00:00:00Z"))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("unreadable displayed start for original start " + TARGET);
+            assertThat(transport.requests).extracting(Request::method).containsExactly("GET");
+        }
+    }
+
+    @Test
     void refusesAConflictingExceptionWhenEitherVersionIsDisplayedInTheWindow() {
         try (var transport = new OccurrenceTransport()) {
             var service = service(transport);
