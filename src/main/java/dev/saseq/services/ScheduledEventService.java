@@ -34,6 +34,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
@@ -1546,15 +1547,32 @@ public class ScheduledEventService {
         WeeklyOccurrences weekly = weeklyOccurrences(rule);
         DataArray exceptions = occurrenceExceptions(event);
         Set<Instant> overridden = new HashSet<>();
+        Set<Instant> displayed = new HashSet<>();
+        Set<Instant> conflictingOriginalStarts = new TreeSet<>();
         List<Occurrence> matches = new ArrayList<>();
         for (int i = 0; i < exceptions.length(); i++) {
             DataObject exception = exceptions.getObject(i);
             Instant original = checkedOriginalOccurrenceStart(event, exception);
-            if (!overridden.add(original)) {
-                throw new IllegalStateException("Discord returned duplicate exceptions for an occurrence");
+            Instant effective;
+            try {
+                effective = effectiveOccurrenceStart(exception, original);
+            } catch (ParsingException | IllegalArgumentException unreadable) {
+                throw new IllegalStateException("Discord returned an unreadable displayed start for original start "
+                        + original + "; could not place the exception in the lookup window", unreadable);
             }
-            Instant effective = effectiveOccurrenceStart(exception, original);
-            if (!effective.isBefore(first) && effective.isBefore(last)) {
+            boolean withinWindow = !effective.isBefore(first) && effective.isBefore(last);
+            if (!overridden.add(original)) {
+                // Either entry appearing in the window makes the match ambiguous, in either order.
+                if (withinWindow || displayed.contains(original)) {
+                    throw new IllegalStateException("Discord returned conflicting exceptions for original start " + original
+                            + " in lookup window [" + first + ", " + last + ")");
+                }
+                if (!original.isBefore(first) && original.isBefore(last) && weekly.contains(original)) {
+                    conflictingOriginalStarts.add(original);
+                }
+            }
+            if (withinWindow) {
+                displayed.add(original);
                 matches.add(new Occurrence(original, effective, exception.getBoolean("is_canceled"),
                         weekly.contains(original)));
             }
@@ -1579,6 +1597,13 @@ public class ScheduledEventService {
         DataObject result = DataObject.empty().put("guildId", guild).put("eventId", eventId)
                 .put("seriesScheduled", event.getInt("status", -1) == 1)
                 .put("occurrences", occurrences);
+        if (!conflictingOriginalStarts.isEmpty()) {
+            DataArray starts = DataArray.empty();
+            conflictingOriginalStarts.stream().map(Instant::toString).forEach(starts::add);
+            result.put("conflictingOriginalStartTimes", starts);
+            result.put("occurrenceConflictWarning", "Conflicting exceptions move these original starts out of the window. "
+                    + "Resolve the duplicate exceptions in Discord before canceling any of these dates.");
+        }
         if (matches.size() > maxResults) {
             result.put("omittedOccurrenceCount", matches.size() - maxResults);
         }
@@ -1802,7 +1827,7 @@ public class ScheduledEventService {
         return "Successfully deleted scheduled event: " + eventName + " (ID: " + eventId + ")";
     }
 
-    @Tool(name = "list_guild_scheduled_events", description = "List active and scheduled events with recurrence and covers. Supply eventId, from, and to together to list one weekly series by displayed start, including moved and canceled dates. Use the original start to target a write. If matches are ambiguous or omitted, or an exception is outside the current recurrence, clarify before writing.")
+    @Tool(name = "list_guild_scheduled_events", description = "List active and scheduled events with recurrence and covers. Supply eventId, from, and to together to list one weekly series by displayed start, including moved and canceled dates. Use the original start to target a write. Clarify ambiguous, omitted, or off-rule matches before writing. Dates in conflictingOriginalStartTimes cannot be canceled until their duplicate exceptions are resolved.")
     public String listScheduledEvents(
             @ToolParam(description = "Discord server ID", required = false) String guildId,
             @ToolParam(description = "Whether to include interested user count in the server-wide list (default true)", required = false) String withUserCount,
