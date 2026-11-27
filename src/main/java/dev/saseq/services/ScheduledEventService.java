@@ -29,6 +29,8 @@ import java.time.ZoneOffset;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -1528,6 +1530,63 @@ public class ScheduledEventService {
         return allowSharedRoot != null && allowSharedRoot.trim().equalsIgnoreCase("true");
     }
 
+    private String listOccurrences(String guildId, String eventId, String from, String to) {
+        Instant first = parseTime(from).toInstant();
+        Instant last = parseTime(to).toInstant();
+        if (!last.isAfter(first) || Duration.between(first, last).compareTo(Duration.ofDays(31)) > 0) {
+            throw new IllegalArgumentException("Occurrence window must be positive and no longer than 31 days");
+        }
+
+        String guild = getGuild(guildId).getId();
+        DataObject event = fetchOccurrenceEvent(guild, eventId);
+        DataObject rule = RecurrenceRule.of(event);
+        if (rule == null) {
+            throw new IllegalArgumentException("Scheduled event is not recurring");
+        }
+        WeeklyOccurrences weekly = weeklyOccurrences(rule);
+        DataArray exceptions = occurrenceExceptions(event);
+        Set<Instant> overridden = new HashSet<>();
+        List<Occurrence> matches = new ArrayList<>();
+        for (int i = 0; i < exceptions.length(); i++) {
+            DataObject exception = exceptions.getObject(i);
+            Instant original = checkedOriginalOccurrenceStart(event, exception);
+            if (!overridden.add(original)) {
+                throw new IllegalStateException("Discord returned duplicate exceptions for an occurrence");
+            }
+            Instant effective = effectiveOccurrenceStart(exception, original);
+            if (!effective.isBefore(first) && effective.isBefore(last)) {
+                matches.add(new Occurrence(original, effective, exception.getBoolean("is_canceled"),
+                        weekly.contains(original)));
+            }
+        }
+
+        long firstIndex = Math.max(0, Duration.between(weekly.anchor(), first).getSeconds() / weekly.periodSeconds());
+        for (Instant start = weekly.anchor().plusSeconds(firstIndex * weekly.periodSeconds());
+                start.isBefore(last) && weekly.contains(start); start = start.plusSeconds(weekly.periodSeconds())) {
+            if (!start.isBefore(first) && !overridden.contains(start)) {
+                matches.add(new Occurrence(start, start, false, true));
+            }
+        }
+        DataArray occurrences = DataArray.empty();
+        int maxResults = 31;
+        matches.stream().sorted(Comparator.comparing(Occurrence::effective).thenComparing(Occurrence::original))
+                .limit(maxResults)
+                .forEach(match -> occurrences.add(DataObject.empty()
+                        .put("originalScheduledStartTime", match.original().toString())
+                        .put("effectiveScheduledStartTime", match.effective().toString())
+                        .put("canceled", match.canceled())
+                        .put("matchesCurrentRecurrence", match.matchesCurrentRecurrence())));
+        DataObject result = DataObject.empty().put("guildId", guild).put("eventId", eventId)
+                .put("seriesScheduled", event.getInt("status", -1) == 1)
+                .put("occurrences", occurrences);
+        if (matches.size() > maxResults) {
+            result.put("omittedOccurrenceCount", matches.size() - maxResults);
+        }
+        return result.toString();
+    }
+
+    private record Occurrence(Instant original, Instant effective, boolean canceled, boolean matchesCurrentRecurrence) {}
+
     @Tool(name = "cancel_guild_scheduled_event_occurrence",
             description = "Cancel one weekly occurrence, or a date with an existing recurrence exception")
     public String cancelScheduledEventOccurrence(
@@ -1599,18 +1658,11 @@ public class ScheduledEventService {
     }
 
     private DataObject findOccurrenceException(DataObject event, Instant start) {
-        if (!event.hasKey("guild_scheduled_event_exceptions") || event.isNull("guild_scheduled_event_exceptions")) {
-            throw new IllegalStateException("Discord did not return the event's occurrence exceptions");
-        }
-        DataArray exceptions = event.getArray("guild_scheduled_event_exceptions");
+        DataArray exceptions = occurrenceExceptions(event);
         DataObject match = null;
         for (int i = 0; i < exceptions.length(); i++) {
             DataObject exception = exceptions.getObject(i);
-            if (!event.getString("id").equals(exception.getString("event_id"))) {
-                throw new IllegalStateException("Discord returned an exception for a different scheduled event");
-            }
-            Instant original = originalOccurrenceStart(exception);
-            if (original.equals(start)) {
+            if (checkedOriginalOccurrenceStart(event, exception).equals(start)) {
                 if (match != null) {
                     throw new IllegalStateException("Discord returned duplicate exceptions for this occurrence");
                 }
@@ -1618,6 +1670,20 @@ public class ScheduledEventService {
             }
         }
         return match;
+    }
+
+    private DataArray occurrenceExceptions(DataObject event) {
+        if (!event.isType("guild_scheduled_event_exceptions", DataType.ARRAY)) {
+            throw new IllegalStateException("Discord did not return the event's occurrence exceptions");
+        }
+        return event.getArray("guild_scheduled_event_exceptions");
+    }
+
+    private Instant checkedOriginalOccurrenceStart(DataObject event, DataObject exception) {
+        if (!event.getString("id").equals(exception.getString("event_id"))) {
+            throw new IllegalStateException("Discord returned an exception for a different scheduled event");
+        }
+        return originalOccurrenceStart(exception);
     }
 
     private Instant originalOccurrenceStart(DataObject exception) {
@@ -1636,11 +1702,18 @@ public class ScheduledEventService {
     }
 
     private void validateWeeklyOccurrence(DataObject rule, Instant start) {
+        if (!weeklyOccurrences(rule).contains(start)) {
+            throw new IllegalArgumentException("originalScheduledStartTime does not match the weekly recurrence."
+                    + " For a rescheduled occurrence, use its original start before it was moved.");
+        }
+    }
+
+    private WeeklyOccurrences weeklyOccurrences(DataObject rule) {
         int interval = rule.getInt("interval", 1);
         if (rule.getInt("frequency") != RecurrenceRule.WEEKLY || interval < 1 || interval > 2
                 || List.of("by_n_weekday", "by_month", "by_month_day", "by_year_day").stream()
                         .anyMatch(key -> rule.hasKey(key) && !rule.isNull(key) && rule.getArray(key).length() > 0)) {
-            throw new IllegalArgumentException("Without an existing exception, only weekly occurrences are supported");
+            throw new IllegalArgumentException("This occurrence lookup only supports weekly series");
         }
         Instant anchor = parseTime(rule.getString("start")).toInstant();
         if (rule.hasKey("by_weekday") && !rule.isNull("by_weekday")) {
@@ -1651,15 +1724,18 @@ public class ScheduledEventService {
             }
         }
 
-        Duration elapsed = Duration.between(anchor, start);
-        long period = Duration.ofDays(7L * interval).getSeconds();
         String end = rule.getString("end", null);
-        if (elapsed.isNegative() || elapsed.getNano() != 0 || elapsed.getSeconds() % period != 0
-                || (end != null && start.isAfter(parseTime(end).toInstant()))
-                || (rule.hasKey("count") && !rule.isNull("count")
-                    && elapsed.getSeconds() / period >= rule.getInt("count"))) {
-            throw new IllegalArgumentException("originalScheduledStartTime does not match the weekly recurrence."
-                    + " For a rescheduled occurrence, use its original start before it was moved.");
+        return new WeeklyOccurrences(anchor, Duration.ofDays(7L * interval).getSeconds(),
+                end == null ? null : parseTime(end).toInstant(),
+                rule.hasKey("count") && !rule.isNull("count") ? rule.getInt("count") : null);
+    }
+
+    private record WeeklyOccurrences(Instant anchor, long periodSeconds, Instant end, Integer count) {
+        boolean contains(Instant start) {
+            Duration elapsed = Duration.between(anchor, start);
+            return !elapsed.isNegative() && elapsed.getNano() == 0 && elapsed.getSeconds() % periodSeconds == 0
+                    && (end == null || !start.isAfter(end))
+                    && (count == null || elapsed.getSeconds() / periodSeconds < count);
         }
     }
 
@@ -1726,10 +1802,19 @@ public class ScheduledEventService {
         return "Successfully deleted scheduled event: " + eventName + " (ID: " + eventId + ")";
     }
 
-    @Tool(name = "list_guild_scheduled_events", description = "List all active and scheduled events on the server, with each one's recurrence and cover image URL. A header line says how many have no cover, and flags anything the live read could not account for.")
+    @Tool(name = "list_guild_scheduled_events", description = "List active and scheduled events with recurrence and covers. Supply eventId, from, and to together to list one weekly series by displayed start, including moved and canceled dates. Use the original start to target a write. If matches are ambiguous or omitted, or an exception is outside the current recurrence, clarify before writing.")
     public String listScheduledEvents(
             @ToolParam(description = "Discord server ID", required = false) String guildId,
-            @ToolParam(description = "Whether to include interested user count (default true)", required = false) String withUserCount) {
+            @ToolParam(description = "Whether to include interested user count in the server-wide list (default true)", required = false) String withUserCount,
+            @ToolParam(description = "Recurring event ID for the occurrence view", required = false) String eventId,
+            @ToolParam(description = "Occurrence window start, inclusive, as ISO 8601 with an offset", required = false) String from,
+            @ToolParam(description = "Occurrence window end, exclusive, as ISO 8601 with an offset, up to 31 days after the start", required = false) String to) {
+        if (eventId != null || from != null || to != null) {
+            if (eventId == null || eventId.isBlank() || from == null || from.isBlank() || to == null || to.isBlank()) {
+                throw new IllegalArgumentException("Supply eventId, from, and to together for the occurrence view");
+            }
+            return listOccurrences(guildId, eventId, from, to);
+        }
 
         Guild guild = getGuild(guildId);
         List<ScheduledEvent> events = guild.getScheduledEvents();

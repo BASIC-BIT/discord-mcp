@@ -265,6 +265,85 @@ class ScheduledEventOccurrenceTest {
         }
     }
 
+    @Test
+    void findsAnOccurrenceMovedIntoTheWindowAndOmitsItFromItsOriginalWindow() {
+        try (var transport = new OccurrenceTransport()) {
+            var service = service(transport);
+            String moved = "2090-01-17T20:00:00Z";
+            String response = series(exception(false, moved));
+            transport.replies.add(response);
+            transport.replies.add(response);
+
+            var originalWeek = DataObject.fromJson(service.listScheduledEvents("123", null, "234",
+                    "2090-01-09T00:00:00Z", "2090-01-16T00:00:00Z"));
+            assertThat(originalWeek.getArray("occurrences").length()).isZero();
+            var movedWeek = DataObject.fromJson(service.listScheduledEvents("123", null, "234",
+                    "2090-01-16T00:00:00Z", "2090-01-23T00:00:00Z"));
+            var matches = movedWeek.getArray("occurrences");
+            assertThat(matches.length()).isEqualTo(2);
+            var rescheduled = matches.getObject(1);
+            assertThat(rescheduled.getString("originalScheduledStartTime")).isEqualTo(TARGET);
+            assertThat(rescheduled.getString("effectiveScheduledStartTime")).isEqualTo(moved);
+            assertThat(rescheduled.getBoolean("canceled")).isFalse();
+            assertThat(transport.requests).extracting(Request::method).containsExactly("GET", "GET");
+        }
+    }
+
+    @Test
+    void preservesBothOccurrenceIdentitiesWhenTheirDisplayedStartsCoincide() {
+        try (var transport = new OccurrenceTransport()) {
+            var service = service(transport);
+            String displayed = "2090-01-16T20:00:00Z";
+            transport.replies.add(series(exception(true, displayed)));
+
+            var result = DataObject.fromJson(service.listScheduledEvents("123", null, "234",
+                    displayed, "2090-01-23T20:00:00Z"));
+            var matches = result.getArray("occurrences");
+            assertThat(matches.length()).isEqualTo(2);
+            assertThat(matches.getObject(0).getString("originalScheduledStartTime")).isEqualTo(TARGET);
+            assertThat(matches.getObject(0).getBoolean("canceled")).isTrue();
+            assertThat(matches.getObject(1).getString("originalScheduledStartTime")).isEqualTo(displayed);
+            assertThat(matches.getObject(1).getBoolean("canceled")).isFalse();
+            assertThat(transport.requests).extracting(Request::method).containsExactly("GET");
+        }
+    }
+
+    @Test
+    void refusesAnUnboundedWindowAndDoesNotTreatMissingExceptionsAsEmpty() {
+        try (var transport = new OccurrenceTransport()) {
+            var service = service(transport);
+            assertThatThrownBy(() -> service.listScheduledEvents("123", null, "234",
+                    "2090-01-01T00:00:00Z", "2090-02-02T00:00:00Z")).hasMessageContaining("31 days");
+            assertThatThrownBy(() -> service.listScheduledEvents("123", null, "234", null, null))
+                    .hasMessageContaining("eventId, from, and to together");
+            assertThat(transport.requests).isEmpty();
+
+            transport.replies.add(series("null"));
+            assertThatThrownBy(() -> service.listScheduledEvents("123", null, "234",
+                    "2090-01-01T00:00:00Z", "2090-02-01T00:00:00Z")).hasMessageContaining("occurrence exceptions");
+            assertThat(transport.requests).extracting(Request::method).containsExactly("GET");
+        }
+    }
+
+    @Test
+    void flagsAnExceptionFromAnOldScheduleAndKeepsCurrentOccurrences() {
+        try (var transport = new OccurrenceTransport()) {
+            var service = service(transport);
+            String moved = "2090-01-17T20:00:00Z";
+            transport.replies.add(series(exception(false, moved)).replace("\"interval\":1", "\"interval\":2"));
+
+            var result = DataObject.fromJson(service.listScheduledEvents("123", null, "234",
+                    "2090-01-16T00:00:00Z", "2090-01-23T00:00:00Z"));
+            assertThat(result.getBoolean("seriesScheduled")).isTrue();
+            var matches = result.getArray("occurrences");
+            assertThat(matches.length()).isEqualTo(2);
+            assertThat(matches.getObject(0).getBoolean("matchesCurrentRecurrence")).isTrue();
+            assertThat(matches.getObject(1).getString("originalScheduledStartTime")).isEqualTo(TARGET);
+            assertThat(matches.getObject(1).getBoolean("matchesCurrentRecurrence")).isFalse();
+            assertThat(transport.requests).extracting(Request::method).containsExactly("GET");
+        }
+    }
+
     private ScheduledEventService service(OccurrenceTransport transport) {
         Guild guild = mock(Guild.class);
         when(guild.getId()).thenReturn("123");

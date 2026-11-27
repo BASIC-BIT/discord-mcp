@@ -745,7 +745,7 @@ class ScheduledEventServiceTest {
 
         // The failed live read degrades the same way it does with a warm cache — one policy, not
         // two — and "no scheduled events" is withheld because nothing established it.
-        String result = service.listScheduledEvents(GUILD, "false");
+        String result = service.listScheduledEvents(GUILD, "false", null, null, null);
 
         assertThat(result)
                 .contains("could not be read")
@@ -1087,7 +1087,7 @@ class ScheduledEventServiceTest {
         ScheduledEvent chess = liveEvent("22", "Chess Club");
         when(guild.getScheduledEvents()).thenReturn(java.util.List.of(night, chess));
 
-        String result = service.listScheduledEvents(GUILD, "false");
+        String result = service.listScheduledEvents(GUILD, "false", null, null, null);
 
         assertThat(result)
                 .contains("Community Night")
