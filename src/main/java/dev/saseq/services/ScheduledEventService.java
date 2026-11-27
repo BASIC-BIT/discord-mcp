@@ -181,6 +181,8 @@ public class ScheduledEventService {
                 .compile(requireSnowflake(guildId, "guildId"), requireSnowflake(eventId, "eventId"));
         var parseFailure = new AtomicReference<RuntimeException>();
         DataObject event = new RestActionImpl<DataObject>(jda, route, (response, request) -> {
+            // JDA can throw while decoding an HTTP response. Throwing out of its callback
+            // leaves the waiting action unfinished, so report the parse failure after completion.
             try {
                 return response.getObject();
             } catch (RuntimeException e) {
@@ -190,7 +192,7 @@ public class ScheduledEventService {
         }).complete();
         if (event == null) {
             RuntimeException cause = parseFailure.get();
-            throw new IllegalStateException("Discord scheduled event response is unreadable"
+            throw new ParsingException("Discord scheduled event response is unreadable"
                     + (cause == null ? "" : reason(cause)), cause);
         }
         return event;
@@ -1555,7 +1557,10 @@ public class ScheduledEventService {
         if (exception == null) {
             validateWeeklyOccurrence(rule, start);
         }
-        int status = before.getInt("status");
+        int status = before.getInt("status", -1);
+        if (status == -1) {
+            throw new IllegalStateException("Discord did not return a readable scheduled event status");
+        }
         // The exception write has only been verified against a scheduled series.
         if (status != 1) {
             throw new IllegalArgumentException("The series must be scheduled (status 1). Discord returned status " + status);

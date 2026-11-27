@@ -194,6 +194,48 @@ class ScheduledEventOccurrenceTest {
         }
     }
 
+    @Test
+    void coverReadDistinguishesMalformedDiscordDataFromAnUnreachableServer() {
+        try (var transport = new OccurrenceTransport()) {
+            var service = service(transport);
+            transport.replies.add("not-json");
+            assertThatThrownBy(() -> service.setScheduledEventImage("123", "234", "https://example.com/cover.png", null))
+                    .hasMessageContaining("Discord returned that event but the response could not be read");
+            assertThat(transport.requests).extracting(Request::method).containsExactly("GET");
+        }
+    }
+
+    @Test
+    void usesExplicitOriginalStartWhenDiscordSuppliesIt() {
+        try (var transport = new OccurrenceTransport()) {
+            var service = service(transport);
+            String saved = DataObject.empty().put("event_id", "234").put("event_exception_id", "435")
+                    .put("original_scheduled_start_time", TARGET).put("is_canceled", true).toString();
+            transport.replies.add(series("[" + saved + "]"));
+            var result = DataObject.fromJson(service.cancelScheduledEventOccurrence("123", "234", TARGET));
+            assertThat(result.getString("status")).isEqualTo("already_canceled");
+            assertThat(transport.requests).extracting(Request::method).containsExactly("GET");
+        }
+    }
+
+    @Test
+    void rejectsMissingStatusAndConflictingExceptionIdentitiesWithoutWriting() {
+        try (var transport = new OccurrenceTransport()) {
+            var service = service(transport);
+            String saved = exception(false, null);
+            transport.replies.add(series("[]").replace("\"status\":1,", ""));
+            transport.replies.add(series(saved.replace("\"event_id\":\"234\"", "\"event_id\":\"998\"")));
+            transport.replies.add(series(saved.substring(0, saved.length() - 1) + "," + saved.substring(1)));
+            assertThatThrownBy(() -> service.cancelScheduledEventOccurrence("123", "234", TARGET))
+                    .hasMessageContaining("readable scheduled event status");
+            assertThatThrownBy(() -> service.cancelScheduledEventOccurrence("123", "234", TARGET))
+                    .hasMessageContaining("different scheduled event");
+            assertThatThrownBy(() -> service.cancelScheduledEventOccurrence("123", "234", TARGET))
+                    .hasMessageContaining("duplicate exceptions");
+            assertThat(transport.requests).extracting(Request::method).containsExactly("GET", "GET", "GET");
+        }
+    }
+
     private ScheduledEventService service(OccurrenceTransport transport) {
         Guild guild = mock(Guild.class);
         when(guild.getId()).thenReturn("123");
