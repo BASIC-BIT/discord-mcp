@@ -366,15 +366,20 @@ class ScheduledEventOccurrenceTest {
     void warnsWhenAConflictingExceptionMovesAnOriginalDateOutOfTheWindow() {
         try (var transport = new OccurrenceTransport()) {
             var service = service(transport);
-            var outsideA = exception(false, "2090-01-10T20:00:00Z");
-            var outsideB = exception(false, "2090-01-11T20:00:00Z");
+            var outsideA = exception(false, "2090-01-24T20:00:00Z");
+            var outsideB = exception(false, "2090-01-25T20:00:00Z");
             transport.replies.add(series(outsideA.substring(0, outsideA.length() - 1) + "," + outsideB.substring(1)));
 
             var result = DataObject.fromJson(service.listScheduledEvents("123", null, "234",
-                    "2090-01-09T00:00:00Z", "2090-01-10T00:00:00Z"));
-            assertThat(result.getArray("occurrences").length()).isZero();
-            assertThat(result.getArray("conflictingOriginalStartTimes").getString(0)).isEqualTo(TARGET);
-            assertThat(result.getString("occurrenceConflictWarning")).contains("Clarify the intended date");
+                    "2090-01-02T00:00:00Z", "2090-01-23T00:00:00Z"));
+            var dates = result.getArray("occurrences");
+            assertThat(dates.length()).isEqualTo(2);
+            assertThat(dates.getObject(0).getString("originalScheduledStartTime")).isEqualTo(ANCHOR);
+            assertThat(dates.getObject(1).getString("originalScheduledStartTime")).isEqualTo("2090-01-16T20:00:00Z");
+            var conflicts = result.getArray("conflictingOriginalStartTimes");
+            assertThat(conflicts.length()).isEqualTo(1);
+            assertThat(conflicts.getString(0)).isEqualTo(TARGET);
+            assertThat(result.getString("occurrenceConflictWarning")).contains("Resolve the duplicate exceptions in Discord");
             assertThat(transport.requests).extracting(Request::method).containsExactly("GET");
         }
     }

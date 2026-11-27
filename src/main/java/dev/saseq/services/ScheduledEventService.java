@@ -1602,7 +1602,7 @@ public class ScheduledEventService {
             conflictingOriginalStarts.stream().map(Instant::toString).forEach(starts::add);
             result.put("conflictingOriginalStartTimes", starts);
             result.put("occurrenceConflictWarning", "Conflicting exceptions move these original starts out of the window. "
-                    + "Clarify the intended date before writing.");
+                    + "Resolve the duplicate exceptions in Discord before canceling any of these dates.");
         }
         if (matches.size() > maxResults) {
             result.put("omittedOccurrenceCount", matches.size() - maxResults);
@@ -1827,7 +1827,7 @@ public class ScheduledEventService {
         return "Successfully deleted scheduled event: " + eventName + " (ID: " + eventId + ")";
     }
 
-    @Tool(name = "list_guild_scheduled_events", description = "List active and scheduled events with recurrence and covers. Supply eventId, from, and to together to list one weekly series by displayed start, including moved and canceled dates. Use the original start to target a write. If matches are ambiguous or omitted, an exception is outside the current recurrence, or conflictingOriginalStartTimes lists dates with conflicting exceptions, clarify before writing.")
+    @Tool(name = "list_guild_scheduled_events", description = "List active and scheduled events with recurrence and covers. Supply eventId, from, and to together to list one weekly series by displayed start, including moved and canceled dates. Use the original start to target a write. Clarify ambiguous, omitted, or off-rule matches before writing. Dates in conflictingOriginalStartTimes cannot be canceled until their duplicate exceptions are resolved.")
     public String listScheduledEvents(
             @ToolParam(description = "Discord server ID", required = false) String guildId,
             @ToolParam(description = "Whether to include interested user count in the server-wide list (default true)", required = false) String withUserCount,
