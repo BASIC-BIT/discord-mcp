@@ -34,6 +34,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
@@ -1547,7 +1548,7 @@ public class ScheduledEventService {
         DataArray exceptions = occurrenceExceptions(event);
         Set<Instant> overridden = new HashSet<>();
         Set<Instant> displayed = new HashSet<>();
-        boolean originalInWindowHasConflict = false;
+        Set<Instant> conflictingOriginalStarts = new TreeSet<>();
         List<Occurrence> matches = new ArrayList<>();
         for (int i = 0; i < exceptions.length(); i++) {
             DataObject exception = exceptions.getObject(i);
@@ -1557,9 +1558,12 @@ public class ScheduledEventService {
             if (!overridden.add(original)) {
                 // Either entry appearing in the window makes the match ambiguous, in either order.
                 if (withinWindow || displayed.contains(original)) {
-                    throw new IllegalStateException("Discord returned conflicting exceptions for an occurrence in this window");
+                    throw new IllegalStateException("Discord returned conflicting exceptions for original start " + original
+                            + " in lookup window [" + first + ", " + last + ")");
                 }
-                originalInWindowHasConflict |= !original.isBefore(first) && original.isBefore(last);
+                if (!original.isBefore(first) && original.isBefore(last)) {
+                    conflictingOriginalStarts.add(original);
+                }
             }
             if (withinWindow) {
                 displayed.add(original);
@@ -1587,9 +1591,15 @@ public class ScheduledEventService {
         DataObject result = DataObject.empty().put("guildId", guild).put("eventId", eventId)
                 .put("seriesScheduled", event.getInt("status", -1) == 1)
                 .put("occurrences", occurrences);
-        if (originalInWindowHasConflict) {
-            result.put("warning", "Conflicting exceptions move an occurrence originally in this window out of it. "
+        if (!conflictingOriginalStarts.isEmpty()) {
+            DataArray starts = DataArray.empty();
+            conflictingOriginalStarts.stream().limit(maxResults).map(Instant::toString).forEach(starts::add);
+            result.put("conflictingOriginalStartTimes", starts);
+            result.put("occurrenceConflictWarning", "Conflicting exceptions move these original starts out of the window. "
                     + "Clarify the intended date before writing.");
+            if (conflictingOriginalStarts.size() > maxResults) {
+                result.put("omittedConflictCount", conflictingOriginalStarts.size() - maxResults);
+            }
         }
         if (matches.size() > maxResults) {
             result.put("omittedOccurrenceCount", matches.size() - maxResults);
@@ -1814,7 +1824,7 @@ public class ScheduledEventService {
         return "Successfully deleted scheduled event: " + eventName + " (ID: " + eventId + ")";
     }
 
-    @Tool(name = "list_guild_scheduled_events", description = "List active and scheduled events with recurrence and covers. Supply eventId, from, and to together to list one weekly series by displayed start, including moved and canceled dates. Use the original start to target a write. If matches are ambiguous or omitted, or an exception is outside the current recurrence, clarify before writing.")
+    @Tool(name = "list_guild_scheduled_events", description = "List active and scheduled events with recurrence and covers. Supply eventId, from, and to together to list one weekly series by displayed start, including moved and canceled dates. Use the original start to target a write. If matches are ambiguous or omitted, an exception is outside the current recurrence, or occurrenceConflictWarning is present, clarify before writing.")
     public String listScheduledEvents(
             @ToolParam(description = "Discord server ID", required = false) String guildId,
             @ToolParam(description = "Whether to include interested user count in the server-wide list (default true)", required = false) String withUserCount,

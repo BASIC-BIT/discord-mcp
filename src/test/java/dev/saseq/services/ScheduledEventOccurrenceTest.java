@@ -357,7 +357,7 @@ class ScheduledEventOccurrenceTest {
             var occurrences = result.getArray("occurrences");
             assertThat(occurrences.length()).isEqualTo(1);
             assertThat(occurrences.getObject(0).getString("originalScheduledStartTime")).isEqualTo("2090-01-16T20:00:00Z");
-            assertThat(result.hasKey("warning")).isFalse();
+            assertThat(result.hasKey("occurrenceConflictWarning")).isFalse();
             assertThat(transport.requests).extracting(Request::method).containsExactly("GET");
         }
     }
@@ -373,7 +373,8 @@ class ScheduledEventOccurrenceTest {
             var result = DataObject.fromJson(service.listScheduledEvents("123", null, "234",
                     "2090-01-09T00:00:00Z", "2090-01-10T00:00:00Z"));
             assertThat(result.getArray("occurrences").length()).isZero();
-            assertThat(result.getString("warning")).contains("originally in this window");
+            assertThat(result.getArray("conflictingOriginalStartTimes").getString(0)).isEqualTo(TARGET);
+            assertThat(result.getString("occurrenceConflictWarning")).contains("Clarify the intended date");
             assertThat(transport.requests).extracting(Request::method).containsExactly("GET");
         }
     }
@@ -394,7 +395,8 @@ class ScheduledEventOccurrenceTest {
                 assertThatThrownBy(() -> service.listScheduledEvents("123", null, "234",
                         "2090-01-16T00:00:00Z", "2090-01-23T00:00:00Z"))
                         .isInstanceOf(IllegalStateException.class)
-                        .hasMessageContaining("conflicting exceptions for an occurrence in this window");
+                        .hasMessageContaining("conflicting exceptions for original start " + TARGET)
+                        .hasMessageContaining("2090-01-16T00:00:00Z");
             }
             assertThat(transport.requests).extracting(Request::method).containsExactly("GET", "GET", "GET");
         }
