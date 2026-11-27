@@ -86,7 +86,7 @@ class ScheduledEventOccurrenceTest {
             transport.replies.add("{}");
             transport.replies.add(series("[]"));
             assertThatThrownBy(() -> service.cancelScheduledEventOccurrence("123", "234", TARGET))
-                    .hasMessageContaining("could not be verified");
+                    .hasMessageContaining("accepted the write but readback did not show");
             assertThat(transport.requests).extracting(Request::method).containsExactly("GET", "POST", "GET");
         }
     }
@@ -102,6 +102,80 @@ class ScheduledEventOccurrenceTest {
             assertThat(DataObject.fromJson(service.cancelScheduledEventOccurrence("123", "234", TARGET))
                     .getString("status")).isEqualTo("canceled");
             assertThat(transport.requests).extracting(Request::method).containsExactly("GET", "POST", "GET");
+        }
+    }
+
+    @Test
+    void includesProviderRefusalWhenReadbackShowsNoCancellation() {
+        try (var transport = new OccurrenceTransport()) {
+            var service = service(transport);
+            transport.writeStatus = 403;
+            transport.replies.add(series("[]"));
+            transport.replies.add("{\"code\":50013,\"message\":\"Missing Permissions\"}");
+            transport.replies.add(series("[]"));
+            assertThatThrownBy(() -> service.cancelScheduledEventOccurrence("123", "234", TARGET))
+                    .hasMessageContaining("readback shows the occurrence was not canceled")
+                    .hasMessageContaining("Missing Permissions");
+        }
+    }
+
+    @Test
+    void distinguishesUnavailableReadbackFromAConfirmedNonCancellation() {
+        try (var transport = new OccurrenceTransport()) {
+            var service = service(transport);
+            transport.replies.add(series("[]"));
+            transport.replies.add("{}");
+            transport.replies.add("not-json");
+            assertThatThrownBy(() -> service.cancelScheduledEventOccurrence("123", "234", TARGET))
+                    .hasMessageContaining("Could not verify occurrence cancellation")
+                    .hasMessageContaining("response is unreadable");
+        }
+    }
+
+    @Test
+    void warnsWhenAnUncanceledExceptionStillOccupiesTheSameTime() {
+        try (var transport = new OccurrenceTransport()) {
+            var service = service(transport);
+            String moved = DataObject.empty().put("event_id", "234").put("event_exception_id", "435")
+                    .put("original_scheduled_start_time", ANCHOR)
+                    .put("scheduled_start_time", TARGET).put("is_canceled", false).toString();
+            transport.replies.add(series("[" + moved + "]"));
+            transport.replies.add("{}");
+            transport.replies.add(series(exception(true, null).replace("]", "," + moved + "]")));
+            var result = DataObject.fromJson(service.cancelScheduledEventOccurrence("123", "234", TARGET));
+            assertThat(result.getString("warning")).isEqualTo("Another occurrence is still scheduled at " + TARGET);
+        }
+    }
+
+    @Test
+    void rejectsUnsupportedRulesAndDatesBeyondTheRuleBounds() {
+        try (var transport = new OccurrenceTransport()) {
+            var service = service(transport);
+            var base = series("[]");
+            for (var invalid : List.of(base.replace("\"frequency\":2", "\"frequency\":3"),
+                    base.replace("\"interval\":1", "\"interval\":2"),
+                    base.replace("\"interval\":1", "\"interval\":1,\"by_weekday\":[9]"),
+                    base.replace("\"interval\":1", "\"interval\":1,\"count\":1"),
+                    base.replace("\"interval\":1", "\"interval\":1,\"end\":\"" + ANCHOR + "\""))) {
+                transport.replies.add(invalid);
+                assertThatThrownBy(() -> service.cancelScheduledEventOccurrence("123", "234", TARGET))
+                        .isInstanceOf(IllegalArgumentException.class);
+            }
+            assertThat(transport.requests).hasSize(5).allMatch(request -> request.method().equals("GET"));
+        }
+    }
+
+    @Test
+    void rejectsAnActiveSeriesAndPastDatesWithDifferentMessages() {
+        try (var transport = new OccurrenceTransport()) {
+            var service = service(transport);
+            transport.replies.add(series("[]").replace("\"status\":1", "\"status\":2"));
+            transport.replies.add(series("[]").replace("2090-", "2020-"));
+            assertThatThrownBy(() -> service.cancelScheduledEventOccurrence("123", "234", TARGET))
+                    .hasMessageContaining("Discord returned status 2");
+            assertThatThrownBy(() -> service.cancelScheduledEventOccurrence("123", "234", TARGET.replace("2090-", "2020-")))
+                    .hasMessageContaining("Only future occurrences");
+            assertThat(transport.requests).extracting(Request::method).containsExactly("GET", "GET");
         }
     }
 
