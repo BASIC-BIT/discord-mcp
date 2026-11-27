@@ -13,6 +13,7 @@ import net.dv8tion.jda.api.exceptions.ParsingException;
 import net.dv8tion.jda.api.requests.ErrorResponse;
 import net.dv8tion.jda.api.requests.Method;
 import net.dv8tion.jda.api.requests.Route;
+import net.dv8tion.jda.api.utils.TimeUtil;
 import net.dv8tion.jda.api.utils.data.DataArray;
 import net.dv8tion.jda.api.utils.data.DataObject;
 import net.dv8tion.jda.api.utils.data.DataType;
@@ -23,6 +24,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
@@ -175,8 +178,17 @@ public class ScheduledEventService {
     private DataObject fetchRaw(String guildId, String eventId) {
         Route.CompiledRoute route = Route.custom(Method.GET, "guilds/{guild_id}/scheduled-events/{event_id}")
                 .compile(requireSnowflake(guildId, "guildId"), requireSnowflake(eventId, "eventId"));
-        return new RestActionImpl<DataObject>(jda, route,
-                (response, request) -> response.getObject()).complete();
+        DataObject event = new RestActionImpl<DataObject>(jda, route, (response, request) -> {
+            try {
+                return response.getObject();
+            } catch (RuntimeException e) {
+                return null;
+            }
+        }).complete();
+        if (event == null) {
+            throw new IllegalStateException("Discord scheduled event response is unreadable");
+        }
+        return event;
     }
 
     /** The guild's scheduled events as raw JSON, for the fields JDA's entities do not carry. */
@@ -1507,6 +1519,144 @@ public class ScheduledEventService {
      */
     private boolean sharedRootAllowed() {
         return allowSharedRoot != null && allowSharedRoot.trim().equalsIgnoreCase("true");
+    }
+
+    @Tool(name = "cancel_guild_scheduled_event_occurrence",
+            description = "Cancel one occurrence of a recurring event")
+    public String cancelScheduledEventOccurrence(
+            @ToolParam(description = "Discord server ID") String guildId,
+            @ToolParam(description = "Recurring scheduled event ID") String eventId,
+            @ToolParam(description = "Original start of this occurrence, before any reschedule, as ISO 8601 with an offset")
+            String originalScheduledStartTime) {
+        String guild = getGuild(requireSnowflake(guildId, "guildId")).getId();
+        requireSnowflake(eventId, "eventId");
+        if (originalScheduledStartTime == null) {
+            throw new IllegalArgumentException("originalScheduledStartTime is required");
+        }
+        Instant start = parseTime(originalScheduledStartTime).toInstant();
+        if (start.getNano() % 1_000_000 != 0) {
+            throw new IllegalArgumentException("Occurrence start must have millisecond precision or less");
+        }
+
+        DataObject before = fetchOccurrenceEvent(guild, eventId);
+        DataObject rule = RecurrenceRule.of(before);
+        if (rule == null) {
+            throw new IllegalArgumentException("Scheduled event is not recurring");
+        }
+        DataObject exception = findOccurrenceException(before, start);
+        if (exception != null && exception.getBoolean("is_canceled")) {
+            return occurrenceResult("already_canceled", eventId, start);
+        }
+        if (exception == null) {
+            validateWeeklyOccurrence(rule, start);
+        }
+        if (before.getInt("status") != 1 || (exception == null
+                ? start : effectiveOccurrenceStart(exception, start)).compareTo(Instant.now()) <= 0) {
+            throw new IllegalArgumentException("Only future occurrences of a scheduled series can be canceled");
+        }
+
+        DataObject body = DataObject.empty().put("is_canceled", true);
+        String path = "guilds/{guild_id}/scheduled-events/{event_id}/exceptions";
+        Route.CompiledRoute route = exception == null
+                ? Route.custom(Method.POST, path).compile(guild, eventId)
+                : Route.custom(Method.PATCH, path + "/{exception_id}").compile(
+                        guild, eventId, requireSnowflake(exception.getString("event_exception_id"), "exceptionId"));
+        if (exception == null) {
+            body.put("original_scheduled_start_time", start.toString());
+        }
+
+        try {
+            new RestActionImpl<Void>(jda, route, body, (response, request) -> null).complete();
+        } catch (RuntimeException writeFailure) {
+            // Discord may have saved the exception before the connection failed.
+            return verifyOccurrenceCancellation(guild, eventId, start, writeFailure);
+        }
+        return verifyOccurrenceCancellation(guild, eventId, start, null);
+    }
+
+    private DataObject fetchOccurrenceEvent(String guildId, String eventId) {
+        DataObject event = fetchRaw(guildId, eventId);
+        if (!eventId.equals(event.getString("id", null))
+                || !guildId.equals(event.getString("guild_id", null))) {
+            throw new IllegalStateException("Could not read the requested scheduled event");
+        }
+        return event;
+    }
+
+    private DataObject findOccurrenceException(DataObject event, Instant start) {
+        if (!event.hasKey("guild_scheduled_event_exceptions") || event.isNull("guild_scheduled_event_exceptions")) {
+            throw new IllegalStateException("Discord did not return the event's occurrence exceptions");
+        }
+        DataArray exceptions = event.getArray("guild_scheduled_event_exceptions");
+        DataObject match = null;
+        for (int i = 0; i < exceptions.length(); i++) {
+            DataObject exception = exceptions.getObject(i);
+            if (!event.getString("id").equals(exception.getString("event_id"))) {
+                throw new IllegalStateException("Discord returned an exception for a different scheduled event");
+            }
+            String id = requireSnowflake(exception.getString("event_exception_id"), "exceptionId");
+            Instant original = TimeUtil.getTimeCreated(Long.parseUnsignedLong(id)).toInstant();
+            if (original.equals(start)) {
+                if (match != null) {
+                    throw new IllegalStateException("Discord returned duplicate exceptions for this occurrence");
+                }
+                match = exception;
+            }
+        }
+        return match;
+    }
+
+    private Instant effectiveOccurrenceStart(DataObject exception, Instant originalStart) {
+        String effective = exception.getString("scheduled_start_time", null);
+        return effective == null ? originalStart : parseTime(effective).toInstant();
+    }
+
+    private void validateWeeklyOccurrence(DataObject rule, Instant start) {
+        int interval = rule.getInt("interval", 1);
+        if (rule.getInt("frequency") != RecurrenceRule.WEEKLY || interval < 1 || interval > 2
+                || List.of("by_n_weekday", "by_month", "by_month_day", "by_year_day").stream()
+                        .anyMatch(key -> rule.hasKey(key) && !rule.isNull(key) && rule.getArray(key).length() > 0)) {
+            throw new IllegalArgumentException("Without an existing exception, only weekly occurrences are supported");
+        }
+        Instant anchor = parseTime(rule.getString("start")).toInstant();
+        if (rule.hasKey("by_weekday") && !rule.isNull("by_weekday")) {
+            DataArray weekdays = rule.getArray("by_weekday");
+            if (weekdays.length() > 0 && (weekdays.length() != 1
+                    || weekdays.getInt(0) != anchor.atOffset(ZoneOffset.UTC).getDayOfWeek().getValue() - 1)) {
+                throw new IllegalArgumentException("Unsupported weekly recurrence weekday");
+            }
+        }
+
+        Duration elapsed = Duration.between(anchor, start);
+        long period = Duration.ofDays(7L * interval).getSeconds();
+        String end = rule.getString("end", null);
+        if (elapsed.isNegative() || elapsed.getNano() != 0 || elapsed.getSeconds() % period != 0
+                || (end != null && start.isAfter(parseTime(end).toInstant()))
+                || (rule.hasKey("count") && !rule.isNull("count")
+                    && elapsed.getSeconds() / period >= rule.getInt("count"))) {
+            throw new IllegalArgumentException("originalScheduledStartTime does not match the weekly recurrence");
+        }
+    }
+
+    private String verifyOccurrenceCancellation(String guildId, String eventId, Instant start, RuntimeException failure) {
+        try {
+            DataObject saved = findOccurrenceException(fetchOccurrenceEvent(guildId, eventId), start);
+            if (saved != null && saved.getBoolean("is_canceled")) {
+                return occurrenceResult("canceled", eventId, start);
+            }
+        } catch (RuntimeException readFailure) {
+            if (failure != null) {
+                readFailure.addSuppressed(failure);
+            }
+            failure = readFailure;
+        }
+        throw new IllegalStateException("Occurrence cancellation could not be verified. Recheck the same original start before retrying.",
+                failure);
+    }
+
+    private String occurrenceResult(String status, String eventId, Instant start) {
+        return DataObject.empty().put("status", status).put("eventId", eventId)
+                .put("originalScheduledStartTime", start.toString()).toString();
     }
 
     @Tool(name = "delete_guild_scheduled_event", description = "Permanently delete a scheduled event")
