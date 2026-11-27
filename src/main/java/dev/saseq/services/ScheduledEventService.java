@@ -1547,14 +1547,19 @@ public class ScheduledEventService {
         DataArray exceptions = occurrenceExceptions(event);
         Set<Instant> overridden = new HashSet<>();
         Set<Instant> displayed = new HashSet<>();
+        boolean originalInWindowHasConflict = false;
         List<Occurrence> matches = new ArrayList<>();
         for (int i = 0; i < exceptions.length(); i++) {
             DataObject exception = exceptions.getObject(i);
             Instant original = checkedOriginalOccurrenceStart(event, exception);
             Instant effective = effectiveOccurrenceStart(exception, original);
             boolean withinWindow = !effective.isBefore(first) && effective.isBefore(last);
-            if (!overridden.add(original) && (withinWindow || displayed.contains(original))) {
-                throw new IllegalStateException("Discord returned conflicting exceptions for an occurrence in this window");
+            if (!overridden.add(original)) {
+                // Either entry appearing in the window makes the match ambiguous, in either order.
+                if (withinWindow || displayed.contains(original)) {
+                    throw new IllegalStateException("Discord returned conflicting exceptions for an occurrence in this window");
+                }
+                originalInWindowHasConflict |= !original.isBefore(first) && original.isBefore(last);
             }
             if (withinWindow) {
                 displayed.add(original);
@@ -1582,6 +1587,10 @@ public class ScheduledEventService {
         DataObject result = DataObject.empty().put("guildId", guild).put("eventId", eventId)
                 .put("seriesScheduled", event.getInt("status", -1) == 1)
                 .put("occurrences", occurrences);
+        if (originalInWindowHasConflict) {
+            result.put("warning", "Conflicting exceptions move an occurrence originally in this window out of it. "
+                    + "Clarify the intended date before writing.");
+        }
         if (matches.size() > maxResults) {
             result.put("omittedOccurrenceCount", matches.size() - maxResults);
         }
