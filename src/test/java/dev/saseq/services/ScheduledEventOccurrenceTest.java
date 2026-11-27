@@ -56,6 +56,8 @@ class ScheduledEventOccurrenceTest {
 
             assertThat(DataObject.fromJson(first).getString("status")).isEqualTo("canceled");
             assertThat(DataObject.fromJson(repeat).getString("status")).isEqualTo("already_canceled");
+            assertThat(DataObject.fromJson(first).getString("effectiveScheduledStartTime")).isEqualTo(moved);
+            assertThat(DataObject.fromJson(repeat).getString("effectiveScheduledStartTime")).isEqualTo(moved);
             assertThat(transport.requests).extracting(Request::method).containsExactly("GET", "PATCH", "GET", "GET");
             assertThat(transport.requests.get(1).url().encodedPath()).endsWith("/exceptions/" + EXCEPTION_ID);
             var sent = DataObject.fromJson(transport.bodies.get(1));
@@ -99,8 +101,9 @@ class ScheduledEventOccurrenceTest {
             transport.replies.add(series("[]"));
             transport.replies.add("{}");
             transport.replies.add(series(exception(true, null)));
-            assertThat(DataObject.fromJson(service.cancelScheduledEventOccurrence("123", "234", TARGET))
-                    .getString("status")).isEqualTo("canceled");
+            var result = DataObject.fromJson(service.cancelScheduledEventOccurrence("123", "234", TARGET));
+            assertThat(result.getString("status")).isEqualTo("canceled");
+            assertThat(result.getBoolean("writeConfirmed")).isFalse();
             assertThat(transport.requests).extracting(Request::method).containsExactly("GET", "POST", "GET");
         }
     }
@@ -155,13 +158,14 @@ class ScheduledEventOccurrenceTest {
             for (var invalid : List.of(base.replace("\"frequency\":2", "\"frequency\":3"),
                     base.replace("\"interval\":1", "\"interval\":2"),
                     base.replace("\"interval\":1", "\"interval\":1,\"by_weekday\":[9]"),
+                    base.replace("\"interval\":1", "\"interval\":1,\"by_month\":[1]"),
                     base.replace("\"interval\":1", "\"interval\":1,\"count\":1"),
                     base.replace("\"interval\":1", "\"interval\":1,\"end\":\"" + ANCHOR + "\""))) {
                 transport.replies.add(invalid);
                 assertThatThrownBy(() -> service.cancelScheduledEventOccurrence("123", "234", TARGET))
                         .isInstanceOf(IllegalArgumentException.class);
             }
-            assertThat(transport.requests).hasSize(5).allMatch(request -> request.method().equals("GET"));
+            assertThat(transport.requests).hasSize(6).allMatch(request -> request.method().equals("GET"));
         }
     }
 
@@ -176,6 +180,17 @@ class ScheduledEventOccurrenceTest {
             assertThatThrownBy(() -> service.cancelScheduledEventOccurrence("123", "234", TARGET.replace("2090-", "2020-")))
                     .hasMessageContaining("Only future occurrences");
             assertThat(transport.requests).extracting(Request::method).containsExactly("GET", "GET");
+        }
+    }
+
+    @Test
+    void doesNotWriteIfDiscordReturnsTheEventUnderADifferentGuild() {
+        try (var transport = new OccurrenceTransport()) {
+            var service = service(transport);
+            transport.replies.add(series("[]").replace("\"guild_id\":\"123\"", "\"guild_id\":\"999\""));
+            assertThatThrownBy(() -> service.cancelScheduledEventOccurrence("123", "234", TARGET))
+                    .hasMessageContaining("Could not read the requested scheduled event");
+            assertThat(transport.requests).extracting(Request::method).containsExactly("GET");
         }
     }
 

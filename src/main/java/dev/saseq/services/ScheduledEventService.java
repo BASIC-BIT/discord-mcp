@@ -32,6 +32,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
@@ -178,15 +179,19 @@ public class ScheduledEventService {
     private DataObject fetchRaw(String guildId, String eventId) {
         Route.CompiledRoute route = Route.custom(Method.GET, "guilds/{guild_id}/scheduled-events/{event_id}")
                 .compile(requireSnowflake(guildId, "guildId"), requireSnowflake(eventId, "eventId"));
+        var parseFailure = new AtomicReference<RuntimeException>();
         DataObject event = new RestActionImpl<DataObject>(jda, route, (response, request) -> {
             try {
                 return response.getObject();
             } catch (RuntimeException e) {
+                parseFailure.set(e);
                 return null;
             }
         }).complete();
         if (event == null) {
-            throw new IllegalStateException("Discord scheduled event response is unreadable");
+            RuntimeException cause = parseFailure.get();
+            throw new IllegalStateException("Discord scheduled event response is unreadable"
+                    + (cause == null ? "" : reason(cause)), cause);
         }
         return event;
     }
@@ -1545,12 +1550,13 @@ public class ScheduledEventService {
         }
         DataObject exception = findOccurrenceException(before, start);
         if (exception != null && exception.getBoolean("is_canceled")) {
-            return occurrenceResult("already_canceled", before, exception, start);
+            return occurrenceResult("already_canceled", before, exception, start).toString();
         }
         if (exception == null) {
             validateWeeklyOccurrence(rule, start);
         }
         int status = before.getInt("status");
+        // The exception write has only been verified against a scheduled series.
         if (status != 1) {
             throw new IllegalArgumentException("The series must be scheduled (status 1). Discord returned status " + status);
         }
@@ -1647,7 +1653,8 @@ public class ScheduledEventService {
                 || (end != null && start.isAfter(parseTime(end).toInstant()))
                 || (rule.hasKey("count") && !rule.isNull("count")
                     && elapsed.getSeconds() / period >= rule.getInt("count"))) {
-            throw new IllegalArgumentException("originalScheduledStartTime does not match the weekly recurrence");
+            throw new IllegalArgumentException("originalScheduledStartTime does not match the weekly recurrence."
+                    + " For a rescheduled occurrence, use its original start before it was moved.");
         }
     }
 
@@ -1656,7 +1663,11 @@ public class ScheduledEventService {
             DataObject event = fetchOccurrenceEvent(guildId, eventId);
             DataObject saved = findOccurrenceException(event, start);
             if (saved != null && saved.getBoolean("is_canceled")) {
-                return occurrenceResult("canceled", event, saved, start);
+                DataObject result = occurrenceResult("canceled", event, saved, start);
+                if (failure != null) {
+                    result.put("writeConfirmed", false);
+                }
+                return result.toString();
             }
         } catch (RuntimeException readFailure) {
             String writeReason = failure == null ? "" : " Write error" + reason(failure) + ".";
@@ -1670,10 +1681,13 @@ public class ScheduledEventService {
         throw new IllegalStateException("Discord accepted the write but readback did not show the occurrence canceled.");
     }
 
-    private String occurrenceResult(String status, DataObject event, DataObject canceled, Instant start) {
+    private DataObject occurrenceResult(String status, DataObject event, DataObject canceled, Instant start) {
         Instant effective = effectiveOccurrenceStart(canceled, start);
         DataObject result = DataObject.empty().put("status", status).put("eventId", event.getString("id"))
                 .put("originalScheduledStartTime", start.toString());
+        if (!effective.equals(start)) {
+            result.put("effectiveScheduledStartTime", effective.toString());
+        }
         DataArray exceptions = event.getArray("guild_scheduled_event_exceptions");
         for (int i = 0; i < exceptions.length(); i++) {
             DataObject other = exceptions.getObject(i);
@@ -1683,7 +1697,7 @@ public class ScheduledEventService {
                 break;
             }
         }
-        return result.toString();
+        return result;
     }
 
     @Tool(name = "delete_guild_scheduled_event", description = "Permanently delete a scheduled event")
