@@ -118,6 +118,8 @@ public final class McpAccessPolicy {
             Map.entry("assign_role", Set.of("guildId", "userId", "roleId")),
             Map.entry("ban_member", Set.of(
                     "guildId", "userId", "deleteMessageSeconds", "reason")),
+            Map.entry("cancel_guild_scheduled_event_occurrence", Set.of(
+                    "guildId", "eventId", "originalScheduledStartTime")),
             Map.entry("create_category", Set.of("guildId", "name")),
             Map.entry("create_emoji", Set.of(
                     "guildId", "name", "image", "imageUrl", "roles")),

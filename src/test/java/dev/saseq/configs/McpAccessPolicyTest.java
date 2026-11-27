@@ -923,7 +923,8 @@ class McpAccessPolicyTest {
         assertThat(Arrays.stream(scoped.getToolCallbacks())
                 .map(callback -> callback.getToolDefinition().name()).sorted().toList())
                 .containsExactly(
-                        "add_reaction", "assign_role", "ban_member", "create_category",
+                        "add_reaction", "assign_role", "ban_member",
+                        "cancel_guild_scheduled_event_occurrence", "create_category",
                         "create_emoji", "create_forum_channel", "create_forum_post",
                         "create_guild_scheduled_event", "create_role",
                         "create_stage_channel", "create_text_channel", "create_voice_channel",
