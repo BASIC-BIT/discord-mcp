@@ -1584,9 +1584,9 @@ public class ScheduledEventService {
             new RestActionImpl<Void>(jda, route, body, (response, request) -> null).complete();
         } catch (RuntimeException writeFailure) {
             // Discord may have saved the exception before the connection failed.
-            return verifyOccurrenceCancellation(guild, eventId, start, writeFailure);
+            return verifyOccurrenceCancellation(guild, eventId, start, rule, writeFailure);
         }
-        return verifyOccurrenceCancellation(guild, eventId, start, null);
+        return verifyOccurrenceCancellation(guild, eventId, start, rule, null);
     }
 
     private DataObject fetchOccurrenceEvent(String guildId, String eventId) {
@@ -1663,12 +1663,21 @@ public class ScheduledEventService {
         }
     }
 
-    private String verifyOccurrenceCancellation(String guildId, String eventId, Instant start, RuntimeException failure) {
+    private String verifyOccurrenceCancellation(String guildId, String eventId, Instant start,
+                                                DataObject originalRule, RuntimeException failure) {
         try {
             DataObject event = fetchOccurrenceEvent(guildId, eventId);
             DataObject saved = findOccurrenceException(event, start);
             if (saved != null && saved.getBoolean("is_canceled")) {
                 DataObject result = occurrenceResult("canceled", event, saved, start);
+                boolean seriesConfirmed = event.getInt("status", -1) == 1
+                        && event.isType("recurrence_rule", DataType.OBJECT)
+                        && event.getObject("recurrence_rule").toMap().equals(originalRule.toMap());
+                result.put("seriesConfirmedUnchanged", seriesConfirmed);
+                if (!seriesConfirmed) {
+                    result.put("seriesWarning", "The occurrence is canceled, but Discord did not confirm "
+                            + "that the series is still scheduled with the same recurrence rule.");
+                }
                 if (failure != null) {
                     result.put("writeConfirmed", false);
                 }
